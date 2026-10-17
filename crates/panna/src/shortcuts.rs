@@ -4,13 +4,18 @@
 use iced::keyboard::{self, Key, key::Named};
 
 use crate::Message;
+use crate::find::Event;
 
 pub fn map(event: keyboard::Event) -> Option<Message> {
     let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
         return None;
     };
+    if modifiers.shift() && !modifiers.command() && key == Key::Named(Named::F3) {
+        return Some(Message::Find(Event::Prev));
+    }
     if modifiers.command() && modifiers.shift() {
         return match key.as_ref() {
+            Key::Character("g" | "G") => Some(Message::Find(Event::Prev)),
             Key::Character("=" | "+") => Some(Message::RotateCw),
             Key::Character("-" | "_") => Some(Message::RotateCcw),
             _ => None,
@@ -25,6 +30,9 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("0") => Some(Message::FitPage),
             Key::Character("1") => Some(Message::ZoomReset),
             Key::Character("2") => Some(Message::FitWidth),
+            Key::Character("f") => Some(Message::Find(Event::Open)),
+            Key::Character("g") => Some(Message::Find(Event::Next)),
+            Key::Character("c") => Some(Message::Copy),
             _ => None,
         };
     }
@@ -33,6 +41,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         Key::Named(Named::PageUp) => Some(Message::PrevPage),
         Key::Named(Named::Escape) => Some(Message::CloseOverlays),
         // F4 shows or hides the navigation pane, as in Acrobat.
+        Key::Named(Named::F3) => Some(Message::Find(Event::Next)),
         Key::Named(Named::F4) => Some(Message::Sidebar(crate::sidebar::Event::Toggle)),
         _ => None,
     }

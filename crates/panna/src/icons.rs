@@ -31,6 +31,11 @@ pub enum Icon {
     Bookmarks,
     SwapSide,
     Close,
+    Search,
+    FindPrev,
+    FindNext,
+    MatchCase,
+    WholeWord,
 }
 
 impl Icon {
@@ -59,6 +64,11 @@ impl Icon {
             Icon::Bookmarks => include_bytes!("../icons/bookmark.svg"),
             Icon::SwapSide => include_bytes!("../icons/arrow-left-right.svg"),
             Icon::Close => include_bytes!("../icons/x.svg"),
+            Icon::Search => include_bytes!("../icons/search.svg"),
+            Icon::FindPrev => include_bytes!("../icons/chevron-up.svg"),
+            Icon::FindNext => include_bytes!("../icons/chevron-down.svg"),
+            Icon::MatchCase => include_bytes!("../icons/case-sensitive.svg"),
+            Icon::WholeWord => include_bytes!("../icons/whole-word.svg"),
         }
     }
 }
@@ -85,6 +95,25 @@ pub fn glyph<'a, M: 'a>(icon: Icon, enabled: bool) -> Element<'a, M> {
 
 /// An icon button with a hover tooltip. `on_press: None` shows it disabled.
 pub fn button<'a, M: Clone + 'a>(icon: Icon, tip: impl Into<String>, on_press: Option<M>) -> Element<'a, M> {
+    styled(icon, tip, on_press, false)
+}
+
+/// An on/off icon button, shown pressed in while `active`.
+pub fn toggle<'a, M: Clone + 'a>(
+    icon: Icon,
+    tip: impl Into<String>,
+    active: bool,
+    on_press: M,
+) -> Element<'a, M> {
+    styled(icon, tip, Some(on_press), active)
+}
+
+fn styled<'a, M: Clone + 'a>(
+    icon: Icon,
+    tip: impl Into<String>,
+    on_press: Option<M>,
+    active: bool,
+) -> Element<'a, M> {
     let enabled = on_press.is_some();
     let button = widget::button(glyph(icon, enabled))
         .padding(6)
@@ -95,6 +124,7 @@ pub fn button<'a, M: Clone + 'a>(icon: Icon, tip: impl Into<String>, on_press: O
             let background = match status {
                 Status::Hovered if enabled => Some(palette.background.weak.color.into()),
                 Status::Pressed if enabled => Some(palette.background.strong.color.into()),
+                _ if active => Some(palette.primary.weak.color.into()),
                 _ => None,
             };
             widget::button::Style {
@@ -135,7 +165,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 23] = [
+    const ALL: [Icon; 28] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -159,6 +189,11 @@ mod tests {
         Icon::Bookmarks,
         Icon::SwapSide,
         Icon::Close,
+        Icon::Search,
+        Icon::FindPrev,
+        Icon::FindNext,
+        Icon::MatchCase,
+        Icon::WholeWord,
     ];
 
     #[test]

@@ -262,6 +262,14 @@ impl Document {
         .map_err(|_| OpenError::EngineCrashed)
     }
 
+    /// The text of page `index`, for search and copy.
+    pub fn page_text(&self, index: usize) -> Result<crate::PageText, RenderError> {
+        let pages = self.pdf.pages();
+        let page = pages.get(index).ok_or(RenderError::NoSuchPage(index))?;
+        catch_unwind(AssertUnwindSafe(|| crate::text::extract(page, &self.settings)))
+            .map_err(|_| RenderError::EngineCrashed)
+    }
+
     /// A render cache tied to this document. Reuse it across pages for speed.
     pub fn new_cache(&self) -> RenderCache<'_> {
         RenderCache::new()

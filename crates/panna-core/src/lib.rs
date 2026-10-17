@@ -8,9 +8,11 @@
 mod document;
 mod limits;
 mod outline;
+mod text;
 mod worker;
 
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use limits::Limits;
 pub use outline::OutlineItem;
+pub use text::{FindOptions, PageText, TextBox};
 pub use worker::RenderWorker;

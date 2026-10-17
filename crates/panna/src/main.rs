@@ -4,25 +4,31 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod find;
 mod icons;
 mod layout;
+mod selection;
 mod settings;
 mod shortcuts;
 mod sidebar;
 mod toolbar;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
     button, center, column, container, image, mouse_area, opaque, operation, pin, row, scrollable, space,
     stack, text, text_input,
 };
-use iced::{Center, Element, Fill, Length, Size, Subscription, Task, event, mouse, window};
-use panna_core::{DocumentInfo, Limits, OpenError, PageSize, RenderError, RenderWorker, RenderedPage};
+use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
+use panna_core::{
+    DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker, RenderedPage,
+};
 
 use icons::Icon;
 use layout::{PAGE_GAP, PageLayout};
+use selection::{Caret, PageMap, Selection, TextSlot};
 use settings::Settings;
 use sidebar::{Sidebar, ThumbLayout};
 use toolbar::{Dock, Toolbar};
@@ -103,6 +109,17 @@ enum Message {
         rotation: u8,
         result: Result<RenderedPage, RenderError>,
     },
+    TextExtracted {
+        doc: u64,
+        index: usize,
+        result: Result<Arc<PageText>, RenderError>,
+    },
+    Find(find::Event),
+    PagePointer(usize, Point),
+    PagePress(usize),
+    PageDoubleClick(usize),
+    PointerReleased,
+    Copy,
     Ignore,
 }
 
@@ -121,6 +138,12 @@ struct App {
     sidebar: Sidebar,
     window_size: Size,
     show_properties: bool,
+    find: find::Find,
+    selection: Option<Selection>,
+    /// The page under the pointer and the pointer's position on it, in view pixels.
+    hover: Option<(usize, Point)>,
+    /// A drag-selection is in progress.
+    selecting: bool,
 }
 
 enum Status {
@@ -145,6 +168,7 @@ struct OpenDoc {
     pages: Vec<Slot>,
     thumb_layout: ThumbLayout,
     thumbs: Vec<Thumb>,
+    texts: Vec<TextSlot>,
 }
 
 #[derive(Default)]
@@ -164,6 +188,7 @@ struct Slot {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct ViewportState {
+    offset_x: f32,
     offset_y: f32,
     width: f32,
     height: f32,
@@ -219,6 +244,7 @@ impl App {
             rotation: 0,
             scale_factor: 1.0,
             viewport: ViewportState {
+                offset_x: 0.0,
                 offset_y: 0.0,
                 width: 1000.0,
                 height: 800.0,
@@ -229,6 +255,10 @@ impl App {
             settings,
             window_size: INITIAL_SIZE,
             show_properties: false,
+            find: find::Find::default(),
+            selection: None,
+            hover: None,
+            selecting: false,
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -263,8 +293,18 @@ impl App {
             iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
             _ => None,
         });
+        let mut subs = vec![base];
+        if self.selecting {
+            // Finish a text selection even when the button is released outside the page.
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                    Some(Message::PointerReleased)
+                }
+                _ => None,
+            }));
+        }
         if !self.toolbar.dragging() {
-            return base;
+            return Subscription::batch(subs);
         }
         // Follow the cursor anywhere in the window while a toolbar is being dragged.
         let drag = event::listen_with(|event, _status, _window| match event {
@@ -276,7 +316,8 @@ impl App {
             ) => Some(Message::Toolbar(toolbar::Event::Released)),
             _ => None,
         });
-        Subscription::batch([base, drag])
+        subs.push(drag);
+        Subscription::batch(subs)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -307,7 +348,11 @@ impl App {
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
                         doc.thumb_layout = ThumbLayout::new(&info.pages);
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
+                        doc.texts = info.pages.iter().map(|_| TextSlot::default()).collect();
                         doc.info = info;
+                        self.selection = None;
+                        self.hover = None;
+                        self.find.rescan(&doc.texts);
                         self.status = Status::Idle;
                         self.zoom = 1.0;
                         self.viewport.offset_y = 0.0;
@@ -315,6 +360,7 @@ impl App {
                             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y: 0.0 }),
                             self.request_visible(),
                             self.request_thumbnails(),
+                            self.request_search_text(),
                         ])
                     }
                     Err(OpenError::PasswordRequired) => {
@@ -370,6 +416,7 @@ impl App {
             Message::Scrolled(viewport) => {
                 let bounds = viewport.bounds();
                 self.viewport = ViewportState {
+                    offset_x: viewport.absolute_offset().x,
                     offset_y: viewport.absolute_offset().y,
                     width: bounds.width,
                     height: bounds.height,
@@ -456,7 +503,14 @@ impl App {
                 Task::none()
             }
             Message::CloseOverlays => {
-                self.show_properties = false;
+                if self.show_properties {
+                    self.show_properties = false;
+                } else if self.find.open {
+                    self.find.open = false;
+                    self.find.rescan(&[]);
+                } else {
+                    self.selection = None;
+                }
                 Task::none()
             }
             Message::Sidebar(event) => {
@@ -489,7 +543,276 @@ impl App {
                 }
                 Task::none()
             }
+            Message::TextExtracted { doc, index, result } => {
+                let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
+                    return Task::none();
+                };
+                let Some(slot) = open.texts.get_mut(index) else {
+                    return Task::none();
+                };
+                slot.pending = false;
+                // A page whose text can't be read is treated as having none.
+                let text = result.unwrap_or_default();
+                self.find.add_page(index, &text);
+                slot.text = Some(text);
+                if self.find.needs_first() {
+                    return self.step_find(true);
+                }
+                Task::none()
+            }
+            Message::Find(event) => self.find_event(event),
+            Message::PagePointer(page, position) => {
+                self.hover = Some((page, position));
+                if self.selecting
+                    && let Some(caret) = self.caret_at(page, position)
+                    && let Some(selection) = &mut self.selection
+                {
+                    selection.focus = caret;
+                }
+                Task::none()
+            }
+            Message::PagePress(page) => {
+                self.selecting = false;
+                let caret = self
+                    .hover
+                    .filter(|(p, _)| *p == page)
+                    .and_then(|(_, position)| self.caret_at(page, position));
+                self.selection = caret.map(Selection::at);
+                self.selecting = caret.is_some();
+                Task::none()
+            }
+            Message::PageDoubleClick(page) => {
+                let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) else {
+                    return Task::none();
+                };
+                let Some(text) = self.page_text(page) else {
+                    return Task::none();
+                };
+                let map = self.page_map(page);
+                let (x, y) = map.to_page(position);
+                let Some(index) = text.char_at(x, y) else {
+                    return Task::none();
+                };
+                let word = selection::word_at(text, index);
+                self.selecting = false;
+                self.selection = Some(Selection {
+                    anchor: Caret {
+                        page,
+                        index: word.start,
+                    },
+                    focus: Caret {
+                        page,
+                        index: word.end,
+                    },
+                });
+                self.copy_primary()
+            }
+            Message::PointerReleased => {
+                if !self.selecting {
+                    return Task::none();
+                }
+                self.selecting = false;
+                if self.selection.is_some_and(|s| s.is_empty()) {
+                    self.selection = None;
+                }
+                self.copy_primary()
+            }
+            Message::Copy => match self.selected_text() {
+                Some(text) => iced::clipboard::write(text),
+                None => Task::none(),
+            },
         }
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let doc = self.doc.as_ref()?;
+        let text = self.selection.filter(|s| !s.is_empty())?.text(&doc.texts);
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// On Linux, selected text also goes to the primary selection for middle-click paste.
+    fn copy_primary(&self) -> Task<Message> {
+        match self.selected_text() {
+            Some(text) if cfg!(target_os = "linux") => iced::clipboard::write_primary(text),
+            _ => Task::none(),
+        }
+    }
+
+    fn page_text(&self, page: usize) -> Option<&PageText> {
+        self.doc.as_ref()?.texts.get(page)?.text.as_deref()
+    }
+
+    fn page_map(&self, page: usize) -> PageMap {
+        let size = self
+            .doc
+            .as_ref()
+            .and_then(|d| d.info.pages.get(page).copied())
+            .unwrap_or(PageSize {
+                width: 1.0,
+                height: 1.0,
+            });
+        PageMap {
+            size,
+            rotation: self.rotation,
+            zoom: self.zoom,
+        }
+    }
+
+    fn caret_at(&self, page: usize, position: Point) -> Option<Caret> {
+        let (x, y) = self.page_map(page).to_page(position);
+        let index = self.page_text(page)?.caret_at(x, y)?;
+        Some(Caret { page, index })
+    }
+
+    fn find_event(&mut self, event: find::Event) -> Task<Message> {
+        match event {
+            find::Event::Open => {
+                self.find.open = true;
+                // Start with the selected word, as most viewers do.
+                if let Some(text) = self
+                    .selected_text()
+                    .filter(|t| !t.contains('\n') && t.len() < 100)
+                {
+                    self.find.query = text;
+                }
+                self.rescan_find();
+                Task::batch([
+                    operation::focus(find::input_id()),
+                    operation::select_all(find::input_id()),
+                    self.request_search_text(),
+                    self.step_find(true),
+                ])
+            }
+            find::Event::Close => {
+                self.find.open = false;
+                self.rescan_find();
+                Task::none()
+            }
+            find::Event::Query(query) => {
+                self.find.query = query;
+                self.rescan_find();
+                Task::batch([self.request_search_text(), self.step_find(true)])
+            }
+            find::Event::MatchCase | find::Event::WholeWord => {
+                self.find.update_options(&event);
+                self.rescan_find();
+                self.step_find(true)
+            }
+            find::Event::Next => {
+                if !self.find.open {
+                    return self.find_event(find::Event::Open);
+                }
+                self.step_find(true)
+            }
+            find::Event::Prev => {
+                if !self.find.open {
+                    return self.find_event(find::Event::Open);
+                }
+                self.step_find(false)
+            }
+        }
+    }
+
+    fn rescan_find(&mut self) {
+        match &self.doc {
+            Some(doc) => self.find.rescan(&doc.texts),
+            None => self.find.rescan(&[]),
+        }
+    }
+
+    /// Moves to the next or previous match and scrolls it into view.
+    fn step_find(&mut self, forward: bool) -> Task<Message> {
+        let from = self.current_page();
+        let Some(hit) = self.find.step(forward, from).cloned() else {
+            return Task::none();
+        };
+        let Some(text) = self.page_text(hit.page) else {
+            return Task::none();
+        };
+        let Some(first) = text.rects(hit.range.clone()).first().copied() else {
+            return self.go_to_page(hit.page);
+        };
+        let Some(doc) = &self.doc else { return Task::none() };
+        let (x, y, _, _) = self.page_map(hit.page).rect(&first);
+        let page_w = doc
+            .layout
+            .sizes()
+            .get(hit.page)
+            .map_or(0.0, |s| s.width * self.zoom);
+        let content_w = (doc.layout.max_width() * self.zoom + 2.0 * PAGE_GAP).max(self.viewport.width);
+        let page_left = (content_w - page_w) / 2.0;
+        let top = doc.layout.page_top(hit.page, self.zoom) + PAGE_GAP + y;
+        // Leave the match where it is if it is already comfortably on screen.
+        let on_screen = top > self.viewport.offset_y + 40.0
+            && top < self.viewport.offset_y + self.viewport.height - 60.0
+            && page_left + x > self.viewport.offset_x
+            && page_left + x < self.viewport.offset_x + self.viewport.width - 40.0;
+        if on_screen {
+            return Task::none();
+        }
+        let target_y = (top - self.viewport.height / 3.0).max(0.0);
+        let target_x = (page_left + x - self.viewport.width / 3.0).max(0.0);
+        let target_x = if content_w <= self.viewport.width {
+            0.0
+        } else {
+            target_x
+        };
+        self.viewport.offset_y = target_y;
+        self.viewport.offset_x = target_x;
+        Task::batch([
+            operation::scroll_to(
+                scroll_id(),
+                AbsoluteOffset {
+                    x: target_x,
+                    y: target_y,
+                },
+            ),
+            self.request_visible(),
+        ])
+    }
+
+    /// Requests text for every page not yet extracted, while the find bar has a query.
+    fn request_search_text(&mut self) -> Task<Message> {
+        if !self.find.active() {
+            return Task::none();
+        }
+        let count = self.doc.as_ref().map_or(0, |d| d.texts.len());
+        self.request_text(0..count)
+    }
+
+    fn request_text(&mut self, pages: std::ops::Range<usize>) -> Task<Message> {
+        let Some(doc) = &mut self.doc else {
+            return Task::none();
+        };
+        let mut tasks = Vec::new();
+        for index in pages {
+            let Some(slot) = doc.texts.get_mut(index) else {
+                break;
+            };
+            if slot.text.is_some() || slot.pending {
+                continue;
+            }
+            slot.pending = true;
+            let (tx, rx) = futures_channel::oneshot::channel();
+            doc.worker.extract_text(index, move |result| {
+                let _ = tx.send(result);
+            });
+            let doc_id = doc.id;
+            tasks.push(Task::perform(rx, move |result| match result {
+                Ok(result) => Message::TextExtracted {
+                    doc: doc_id,
+                    index,
+                    result: result.map(Arc::new),
+                },
+                // Dropped unanswered (superseded); allow a retry.
+                Err(_) => Message::TextExtracted {
+                    doc: doc_id,
+                    index,
+                    result: Err(RenderError::EngineCrashed),
+                },
+            }));
+        }
+        Task::batch(tasks)
     }
 
     fn open(&mut self, path: PathBuf, password: Option<String>) -> Task<Message> {
@@ -523,6 +846,7 @@ impl App {
             pages: Vec::new(),
             thumb_layout: ThumbLayout::default(),
             thumbs: Vec::new(),
+            texts: Vec::new(),
         });
         Task::perform(rx, move |result| {
             Message::Opened(id, result.unwrap_or(Err(OpenError::EngineCrashed)))
@@ -614,6 +938,7 @@ impl App {
         let keep_end = (visible.end + KEEP_MARGIN).min(doc.pages.len());
         let scale = self.zoom * self.scale_factor;
         let mut tasks = Vec::new();
+        let text_range = visible.clone();
 
         for (index, slot) in doc.pages.iter_mut().enumerate() {
             if index < keep_start || index >= keep_end {
@@ -645,6 +970,8 @@ impl App {
                 Err(_) => Message::Ignore,
             }));
         }
+        // Visible pages get their text too, so it's ready to select.
+        tasks.push(self.request_text(text_range));
         Task::batch(tasks)
     }
 
@@ -740,6 +1067,12 @@ impl App {
             icons::button(Icon::RotateCw, "Rotate right", on(Message::RotateCw)),
             gap(),
             icons::button(
+                Icon::Search,
+                format!("Find ({m}F)"),
+                on(Message::Find(find::Event::Open)),
+            ),
+            gap(),
+            icons::button(
                 Icon::Properties,
                 format!("Document properties ({m}D)"),
                 on(Message::ToggleProperties),
@@ -785,7 +1118,24 @@ impl App {
                 .align_x(Center),
             )
             .into(),
-            (Status::Idle, Some(doc)) if has_doc => self.with_sidebar(doc, self.pages_view(doc)),
+            (Status::Idle, Some(doc)) if has_doc => {
+                let pages = self.pages_view(doc);
+                let pages = if self.find.open {
+                    let total = doc.texts.len();
+                    let searched = doc.texts.iter().filter(|t| t.text.is_some()).count();
+                    stack![
+                        pages,
+                        container(opaque(self.find.view(searched, total)))
+                            .width(Fill)
+                            .align_x(iced::Right)
+                            .padding([10, 28]),
+                    ]
+                    .into()
+                } else {
+                    pages
+                };
+                self.with_sidebar(doc, pages)
+            }
             _ => self.welcome_view(),
         };
         let body = match (&self.doc, self.show_properties) {
@@ -848,29 +1198,105 @@ impl App {
         }
     }
 
+    /// Search-match and selection highlights for one page, as positioned layers.
+    fn text_marks<'a>(&self, doc: &'a OpenDoc, index: usize) -> Vec<Element<'a, Message>> {
+        let Some(text) = doc.texts.get(index).and_then(|t| t.text.as_ref()) else {
+            return Vec::new();
+        };
+        let map = self.page_map(index);
+        let mut out = Vec::new();
+        let mut mark = |range: std::ops::Range<usize>, color: iced::Color| {
+            for b in text.rects(range) {
+                let (x, y, w, h) = map.rect(&b);
+                out.push(
+                    pin(container(space())
+                        .width(w.max(1.0))
+                        .height(h.max(1.0))
+                        .style(move |_| container::Style::default().background(color)))
+                    .x(x)
+                    .y(y)
+                    .into(),
+                );
+            }
+        };
+        if self.find.active() {
+            let (hits, current) = self.find.hits_on(index);
+            for (i, hit) in hits.iter().enumerate() {
+                let color = if Some(i) == current {
+                    iced::Color::from_rgba(1.0, 0.55, 0.0, 0.5)
+                } else {
+                    iced::Color::from_rgba(1.0, 0.85, 0.0, 0.4)
+                };
+                mark(hit.range.clone(), color);
+            }
+        }
+        if let Some(range) = self.selection.and_then(|s| s.range_on(index, text.len())) {
+            mark(range, iced::Color::from_rgba(0.2, 0.45, 0.95, 0.35));
+        }
+        out
+    }
+
     fn pages_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {
-        let pages = doc.layout.sizes().iter().zip(&doc.pages).map(|(size, slot)| {
-            let width = Length::Fixed((size.width * self.zoom).round());
-            let height = Length::Fixed((size.height * self.zoom).round());
-            let content: Element<'_, Message> = match (&slot.image, &slot.error) {
-                (Some(handle), _) => image(handle.clone()).width(width).height(height).into(),
-                (None, Some(e)) => center(text(e.as_str())).into(),
-                (None, None) => space::horizontal().into(),
-            };
-            container(content)
-                .width(width)
-                .height(height)
-                .style(|_| {
-                    container::Style::default()
-                        .background(iced::Color::WHITE)
-                        .shadow(iced::Shadow {
-                            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.35),
-                            offset: iced::Vector::new(0.0, 2.0),
-                            blur_radius: 8.0,
-                        })
-                })
-                .into()
-        });
+        let pages = doc
+            .layout
+            .sizes()
+            .iter()
+            .zip(&doc.pages)
+            .enumerate()
+            .map(|(index, (size, slot))| {
+                let width = Length::Fixed((size.width * self.zoom).round());
+                let height = Length::Fixed((size.height * self.zoom).round());
+                let content: Element<'_, Message> = match (&slot.image, &slot.error) {
+                    (Some(handle), _) => {
+                        let marks = self.text_marks(doc, index);
+                        if marks.is_empty() {
+                            image(handle.clone()).width(width).height(height).into()
+                        } else {
+                            let mut layers = vec![image(handle.clone()).width(width).height(height).into()];
+                            layers.extend(marks);
+                            iced::widget::Stack::with_children(layers).into()
+                        }
+                    }
+                    (None, Some(e)) => center(text(e.as_str())).into(),
+                    (None, None) => space::horizontal().into(),
+                };
+                let over_text = self.hover.is_some_and(|(page, position)| {
+                    page == index
+                        && doc
+                            .texts
+                            .get(index)
+                            .and_then(|t| t.text.as_ref())
+                            .is_some_and(|t| {
+                                let (x, y) = self.page_map(index).to_page(position);
+                                t.hit(x, y)
+                            })
+                });
+                let content = mouse_area(content)
+                    .on_move(move |p| Message::PagePointer(index, p))
+                    .on_press(Message::PagePress(index))
+                    .on_double_click(Message::PageDoubleClick(index))
+                    .on_release(Message::PointerReleased)
+                    .interaction(if over_text || self.selecting {
+                        mouse::Interaction::Text
+                    } else {
+                        mouse::Interaction::Idle
+                    });
+                container(content)
+                    .width(width)
+                    .height(height)
+                    // A border rather than a drop shadow: the software renderer draws shadows
+                    // over page images when an overlay such as the find bar is open.
+                    .style(|_| {
+                        container::Style::default()
+                            .background(iced::Color::WHITE)
+                            .border(iced::Border {
+                                color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                                width: 1.0,
+                                radius: 0.0.into(),
+                            })
+                    })
+                    .into()
+            });
         // Fixed content width: at least the viewport (so pages stay centred), wider when zoomed in.
         let content_width = (doc.layout.max_width() * self.zoom + 2.0 * PAGE_GAP).max(self.viewport.width);
         let column = iced::widget::Column::with_children(pages)

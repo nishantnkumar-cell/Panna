@@ -2,18 +2,33 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 
-use crate::{Document, DocumentInfo, Limits, OpenError, RenderError, RenderedPage};
+use crate::{Document, DocumentInfo, Limits, OpenError, PageText, RenderError, RenderedPage};
 
 type OpenReply = Box<dyn FnOnce(Result<DocumentInfo, OpenError>) + Send>;
 type RenderReply = Box<dyn FnOnce(Result<RenderedPage, RenderError>) + Send>;
+type TextReply = Box<dyn FnOnce(Result<PageText, RenderError>) + Send>;
+
+/// Work kinds, in the order a batch runs them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Kind {
+    Page,
+    Thumbnail,
+    Text,
+}
+
+enum Reply {
+    Render {
+        scale: f32,
+        rotation: u8,
+        reply: RenderReply,
+    },
+    Text(TextReply),
+}
 
 struct Job {
     index: usize,
-    scale: f32,
-    rotation: u8,
-    /// Thumbnails are queued separately from page renders and drawn after them.
-    thumbnail: bool,
-    reply: RenderReply,
+    kind: Kind,
+    reply: Reply,
 }
 
 /// Owns one document on a dedicated thread so parsing and rendering never block the UI.
@@ -48,13 +63,7 @@ impl RenderWorker {
         rotation: u8,
         reply: impl FnOnce(Result<RenderedPage, RenderError>) + Send + 'static,
     ) {
-        let _ = self.jobs.send(Job {
-            index,
-            scale,
-            rotation,
-            thumbnail: false,
-            reply: Box::new(reply),
-        });
+        self.send(index, Kind::Page, scale, rotation, Box::new(reply));
     }
 
     /// Like [`render`](Self::render), for a sidebar thumbnail. Pending thumbnails never replace
@@ -66,12 +75,31 @@ impl RenderWorker {
         rotation: u8,
         reply: impl FnOnce(Result<RenderedPage, RenderError>) + Send + 'static,
     ) {
+        self.send(index, Kind::Thumbnail, scale, rotation, Box::new(reply));
+    }
+
+    /// Queues text extraction for one page. It runs after any queued renders.
+    pub fn extract_text(
+        &self,
+        index: usize,
+        reply: impl FnOnce(Result<PageText, RenderError>) + Send + 'static,
+    ) {
         let _ = self.jobs.send(Job {
             index,
-            scale,
-            rotation,
-            thumbnail: true,
-            reply: Box::new(reply),
+            kind: Kind::Text,
+            reply: Reply::Text(Box::new(reply)),
+        });
+    }
+
+    fn send(&self, index: usize, kind: Kind, scale: f32, rotation: u8, reply: RenderReply) {
+        let _ = self.jobs.send(Job {
+            index,
+            kind,
+            reply: Reply::Render {
+                scale,
+                rotation,
+                reply,
+            },
         });
     }
 }
@@ -87,25 +115,40 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
     }
 
     let cache = document.new_cache();
-    while let Ok(first) = queue.recv() {
+    let mut pending: Vec<Job> = Vec::new();
+    loop {
+        if pending.is_empty() {
+            match queue.recv() {
+                Ok(job) => pending.push(job),
+                Err(_) => return,
+            }
+        }
         // Collapse a burst of requests (fast scrolling, repeated zooms) so that only the
-        // newest request per page is rendered. Superseded replies are dropped unanswered.
-        let mut batch = vec![first];
+        // newest request per page and kind is done. Superseded replies are dropped unanswered.
         loop {
             match queue.try_recv() {
                 Ok(job) => {
-                    batch.retain(|queued| queued.index != job.index || queued.thumbnail != job.thumbnail);
-                    batch.push(job);
+                    pending.retain(|queued| queued.index != job.index || queued.kind != job.kind);
+                    pending.push(job);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
         }
-        // Stable sort: page renders before thumbnails, otherwise in request order.
-        batch.sort_by_key(|job| job.thumbnail);
-        for job in batch {
-            let page = document.render_page(&cache, job.index, job.scale);
-            (job.reply)(page.map(|p| p.rotated(job.rotation)));
+        // Stable sort: pages, then thumbnails, then text; otherwise in request order. Only one
+        // job runs before the queue is checked again, so new page renders overtake text work.
+        pending.sort_by_key(|job| job.kind);
+        let job = pending.remove(0);
+        match job.reply {
+            Reply::Render {
+                scale,
+                rotation,
+                reply,
+            } => {
+                let page = document.render_page(&cache, job.index, scale);
+                reply(page.map(|p| p.rotated(rotation)));
+            }
+            Reply::Text(reply) => reply(document.page_text(job.index)),
         }
     }
 }

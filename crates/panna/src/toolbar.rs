@@ -214,18 +214,13 @@ impl Toolbar {
             .style(move |theme: &iced::Theme| {
                 let palette = theme.extended_palette();
                 let style = container::Style::default().background(palette.background.base.color);
+                // No drop shadow; see the note on page borders in main.rs.
                 if floating {
-                    style
-                        .border(iced::Border {
-                            color: palette.background.strong.color,
-                            width: 1.0,
-                            radius: 8.0.into(),
-                        })
-                        .shadow(iced::Shadow {
-                            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.3),
-                            offset: Vector::new(0.0, 3.0),
-                            blur_radius: 12.0,
-                        })
+                    style.border(iced::Border {
+                        color: palette.background.strong.color,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    })
                 } else {
                     style
                 }
