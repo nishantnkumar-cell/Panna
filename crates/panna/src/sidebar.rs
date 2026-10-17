@@ -6,7 +6,7 @@ use std::ops::Range;
 use iced::widget::scrollable::Viewport;
 use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
 use iced::{Center, Element, Fill, Length, Theme};
-use panna_core::{Annotation, Comment, OutlineItem, PageSize};
+use panna_core::{Annotation, Comment, CommentId, OutlineItem, PageSize};
 
 use crate::Message;
 use crate::find::Find;
@@ -200,6 +200,7 @@ pub struct ViewData<'a> {
     pub texts: &'a [TextSlot],
     pub comments: &'a [Comment],
     pub unsaved: &'a [Annotation],
+    pub removed: &'a [CommentId],
 }
 
 impl Sidebar {
@@ -271,7 +272,7 @@ impl Sidebar {
             Tab::Thumbnails => self.thumbnails(&data),
             Tab::Bookmarks => bookmarks(data.outline, data.find),
             Tab::Results => data.find.results(data.texts),
-            Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.texts),
+            Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),
         };
         container(column![header, content])
             .width(WIDTH)

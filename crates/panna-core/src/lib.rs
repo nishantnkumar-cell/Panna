@@ -13,9 +13,9 @@ mod outline;
 mod text;
 mod worker;
 
-pub use comments::{Comment, CommentKind};
+pub use comments::{Comment, CommentId, CommentKind, ObjRef};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
-pub use edit::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, SaveError, text_width, wrap};
+pub use edit::{Annotation, Changes, Color, Kind, LINE_HEIGHT, NOTE_SIZE, SaveError, text_width, wrap};
 pub use limits::Limits;
 pub use outline::OutlineItem;
 pub use text::{FindOptions, PageText, TextBox};

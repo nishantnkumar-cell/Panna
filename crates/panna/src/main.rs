@@ -143,7 +143,8 @@ enum Message {
     Saved {
         doc: u64,
         path: PathBuf,
-        result: Result<(), SaveError>,
+        /// The saved file's comments.
+        result: Result<Vec<Comment>, SaveError>,
     },
     CloseRequested(window::Id),
     Confirm(Choice),
@@ -794,13 +795,11 @@ impl App {
                     return Task::none();
                 };
                 match result {
-                    Ok(()) => {
+                    Ok(comments) => {
                         open.path = path.clone();
-                        // What was just saved is now part of the file's comments.
-                        open.info
-                            .comments
-                            .extend(self.annotate.items.iter().map(Comment::from));
-                        open.info.comments.sort_by_key(|c| c.page);
+                        // Saved comments are listed from the file, so new ones can now be
+                        // removed like any other.
+                        open.info.comments = comments;
                         self.annotate.saved();
                         self.settings.add_recent(path);
                         self.settings.save();
@@ -852,7 +851,7 @@ impl App {
 
     /// Whether there are annotations that haven't been saved.
     fn dirty(&self) -> bool {
-        self.doc.is_some() && !self.annotate.items.is_empty()
+        self.doc.is_some() && self.annotate.dirty()
     }
 
     /// Carries out an action that was waiting on "Save changes?".
@@ -889,10 +888,9 @@ impl App {
         }
         let Some(doc) = &self.doc else { return Task::none() };
         let (tx, rx) = futures_channel::oneshot::channel();
-        doc.worker
-            .set_annotations(self.annotate.items.clone(), move |result| {
-                let _ = tx.send(result);
-            });
+        doc.worker.set_changes(self.annotate.changes(), move |result| {
+            let _ = tx.send(result);
+        });
         let id = doc.id;
         Task::perform(rx, move |result| match result {
             Ok(result) => Message::AnnotationsApplied { doc: id, result },
@@ -1610,6 +1608,7 @@ impl App {
                 texts: &doc.texts,
                 comments: &doc.info.comments,
                 unsaved: &self.annotate.items,
+                removed: &self.annotate.removed,
             })
         };
         match self.sidebar.side {

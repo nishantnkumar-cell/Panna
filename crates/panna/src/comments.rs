@@ -3,7 +3,7 @@
 
 use iced::widget::{Column, button, column, container, row, scrollable, space, text};
 use iced::{Center, Element, Fill, Theme};
-use panna_core::{Annotation, Comment, CommentKind};
+use panna_core::{Annotation, Comment, CommentId, CommentKind};
 
 use crate::Message;
 use crate::annotate;
@@ -40,10 +40,17 @@ fn snippet(s: &str) -> String {
 pub fn panel<'a>(
     saved: &'a [Comment],
     unsaved: &'a [Annotation],
+    removed: &[CommentId],
     texts: &[TextSlot],
 ) -> Element<'a, Message> {
     // Saved comments first within each page, then new ones in the order they were added.
-    let mut entries: Vec<(Comment, Option<usize>)> = saved.iter().cloned().map(|c| (c, None)).collect();
+    // Comments taken out but not yet saved are already gone from the list.
+    let mut entries: Vec<(Comment, Option<usize>)> = saved
+        .iter()
+        .filter(|c| c.id.is_none_or(|id| !removed.contains(&id)))
+        .cloned()
+        .map(|c| (c, None))
+        .collect();
     entries.extend(
         unsaved
             .iter()
@@ -98,11 +105,16 @@ fn entry<'a>(comment: Comment, unsaved: Option<usize>, quote: Option<String>) ->
     ]
     .spacing(6)
     .align_y(Center);
-    if let Some(index) = unsaved {
+    let delete = match (unsaved, comment.id) {
+        (Some(index), _) => Some(annotate::Event::Delete(index)),
+        (None, Some(id)) => Some(annotate::Event::Remove(id)),
+        (None, None) => None,
+    };
+    if let Some(event) = delete {
         heading = heading.push(icons::button(
             Icon::Delete,
             "Delete this comment",
-            Some(Message::Annotate(annotate::Event::Delete(index))),
+            Some(Message::Annotate(event)),
         ));
     }
     let mut body = column![heading].spacing(2);

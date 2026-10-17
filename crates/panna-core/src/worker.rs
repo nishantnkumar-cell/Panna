@@ -4,13 +4,15 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 
 use crate::{
-    Annotation, Document, DocumentInfo, Limits, OpenError, PageText, RenderError, RenderedPage, SaveError,
+    Changes, Comment, Document, DocumentInfo, Limits, OpenError, PageText, RenderError, RenderedPage,
+    SaveError,
 };
 
 type OpenReply = Box<dyn FnOnce(Result<DocumentInfo, OpenError>) + Send>;
 type RenderReply = Box<dyn FnOnce(Result<RenderedPage, RenderError>) + Send>;
 type TextReply = Box<dyn FnOnce(Result<PageText, RenderError>) + Send>;
 type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 
 /// Work kinds, in the order a batch runs them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -30,8 +32,8 @@ enum Reply {
         reply: RenderReply,
     },
     Text(TextReply),
-    Edit(Vec<Annotation>, EditReply),
-    Save(PathBuf, EditReply),
+    Edit(Changes, EditReply),
+    Save(PathBuf, SaveReply),
 }
 
 struct Job {
@@ -100,24 +102,20 @@ impl RenderWorker {
         });
     }
 
-    /// Replaces the unsaved annotations. Pages render with them from then on; until saved,
-    /// the file on disk is untouched. Only the newest pending list is applied.
-    pub fn set_annotations(
-        &self,
-        annotations: Vec<Annotation>,
-        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
-    ) {
+    /// Replaces the unsaved changes. Pages render with them from then on; until saved, the
+    /// file on disk is untouched. Only the newest pending set is applied.
+    pub fn set_changes(&self, changes: Changes, reply: impl FnOnce(Result<(), SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
             index: 0,
             kind: Kind::Edit,
-            reply: Reply::Edit(annotations, Box::new(reply)),
+            reply: Reply::Edit(changes, Box::new(reply)),
         });
     }
 
-    /// Writes the document, with its annotations, to `path`. On success the annotations become
-    /// part of the document, so the next [`set_annotations`](Self::set_annotations) list
-    /// should start empty.
-    pub fn save(&self, path: PathBuf, reply: impl FnOnce(Result<(), SaveError>) + Send + 'static) {
+    /// Writes the document, with its changes, to `path`, and replies with the comments the
+    /// saved file now has. On success the changes become part of the document, so the next
+    /// [`set_changes`](Self::set_changes) should start empty.
+    pub fn save(&self, path: PathBuf, reply: impl FnOnce(Result<Vec<Comment>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
             index: 0,
             kind: Kind::Save,
@@ -139,7 +137,7 @@ impl RenderWorker {
 }
 
 enum Swap {
-    Edit(Vec<Annotation>, EditReply),
+    Edit(Changes, EditReply),
     /// The live document was saved and becomes the base.
     Promote,
 }
@@ -225,7 +223,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 }
                 Reply::Text(reply) => reply(current.page_text(job.index)),
                 Reply::Save(path, reply) => {
-                    let result = write_atomically(&path, current.bytes());
+                    let result = write_atomically(&path, current.bytes()).map(|()| current.comments());
                     let saved = result.is_ok();
                     reply(result);
                     if saved && live.is_some() {
@@ -248,7 +246,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     reply(Ok(()));
                     continue;
                 }
-                let result = base.with_annotations(&list).and_then(|bytes| {
+                let result = base.with_changes(&list).and_then(|bytes| {
                     Document::from_bytes(bytes, None, base.limits()).map_err(|_| SaveError::Damaged)
                 });
                 match result {

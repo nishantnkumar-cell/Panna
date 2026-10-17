@@ -206,6 +206,32 @@ pub(crate) fn dict_entries(data: &[u8]) -> Option<Vec<(&[u8], Range<usize>)>> {
     }
 }
 
+/// The values in an array's contents (the bytes between its brackets): each one's byte span
+/// within `data`.
+pub(crate) fn array_items(data: &[u8]) -> Option<Vec<Range<usize>>> {
+    let mut lex = Lexer::new(data, 0);
+    let mut out = Vec::new();
+    loop {
+        lex.skip_trivia();
+        if lex.pos >= data.len() {
+            return Some(out);
+        }
+        out.push(lex.value()?);
+    }
+}
+
+/// The reference a value is, if it is one (`12 0 R`).
+pub(crate) fn reference(value: &[u8]) -> Option<crate::ObjRef> {
+    let mut lex = Lexer::new(value, 0);
+    let number = u32::try_from(lex.uint()?).ok()?;
+    let generation = u16::try_from(lex.uint()?).ok()?;
+    if !lex.eat(b"R") {
+        return None;
+    }
+    lex.skip_trivia();
+    (lex.pos == value.len()).then_some(crate::ObjRef { number, generation })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +288,23 @@ mod tests {
         assert!(dict_entries(b"no dict").is_none());
         let deep = "[".repeat(10_000);
         assert!(dict_entries(format!("<< /A {deep} >>").as_bytes()).is_none());
+    }
+
+    #[test]
+    fn array_items_and_references() {
+        let data = b"12 0 R /Name 3 [1 2] 7 1 R ";
+        let items: Vec<&[u8]> = array_items(data)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| data.get(r).unwrap_or_default())
+            .collect();
+        assert_eq!(items, [&b"12 0 R"[..], b"/Name", b"3", b"[1 2]", b"7 1 R"]);
+        let r = |s: &[u8]| reference(s).map(|r| (r.number, r.generation));
+        assert_eq!(r(b"12 0 R"), Some((12, 0)));
+        assert_eq!(r(b"7 1 R"), Some((7, 1)));
+        assert_eq!(r(b"3"), None);
+        assert_eq!(r(b"12 0 R 4"), None);
+        assert!(array_items(b"1 [2").is_none());
+        assert_eq!(array_items(b"  ").map(|v| v.len()), Some(0));
     }
 }

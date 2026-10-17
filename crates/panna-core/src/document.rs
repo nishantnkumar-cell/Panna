@@ -258,8 +258,7 @@ impl Document {
             // A malformed outline shouldn't stop the document opening.
             let outline =
                 catch_unwind(AssertUnwindSafe(|| crate::outline::read(&self.pdf))).unwrap_or_default();
-            let comments =
-                catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default();
+            let comments = self.comments();
             DocumentInfo {
                 pages,
                 title,
@@ -282,10 +281,23 @@ impl Document {
     /// The file's bytes with `annotations` added as an incremental update, ready to save or
     /// to reopen. The original revision is kept intact at the start of the output.
     pub fn with_annotations(&self, annotations: &[crate::Annotation]) -> Result<Vec<u8>, crate::SaveError> {
+        self.with_changes(&crate::Changes {
+            add: annotations.to_vec(),
+            remove: Vec::new(),
+        })
+    }
+
+    /// The file's bytes with `changes` (comments added and removed) as an incremental update.
+    pub fn with_changes(&self, changes: &crate::Changes) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::add_annotations(&self.pdf, &self.bytes, annotations)
+            crate::edit::apply(&self.pdf, &self.bytes, changes)
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The comments in the document, as listed in [`DocumentInfo::comments`].
+    pub fn comments(&self) -> Vec<crate::Comment> {
+        catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default()
     }
 
     pub fn limits(&self) -> Limits {

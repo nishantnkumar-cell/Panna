@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
-use panna_core::{Annotation, Color, Comment, CommentKind, Document, Kind, Limits, TextBox};
+use panna_core::{Annotation, Changes, Color, Comment, CommentKind, Document, Kind, Limits, TextBox};
 
 /// Assembles numbered objects (1-based) into a PDF with a classic xref table.
 fn build(objects: &[String]) -> Vec<u8> {
@@ -241,5 +241,47 @@ fn highlights_keep_their_marked_areas() {
     assert!(
         (m.x0 - line.x0).abs() < 0.01 && (m.y0 - line.y0).abs() < 0.01 && (m.y1 - line.y1).abs() < 0.01,
         "{m:?}"
+    );
+}
+
+#[test]
+fn removing_a_saved_comment_takes_its_popup_too() {
+    // A note (5) with its pop-up (6), and a square (7) that must survive.
+    let mut objs = objects(false);
+    objs[2] = objs[2].replace("/Contents 4 0 R", "/Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R]");
+    objs[4] = "<< /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (old) /Popup 6 0 R >>".into();
+    objs.push("<< /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent 5 0 R >>".into());
+    objs.push("<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /Contents (keep) >>".into());
+    let doc = reopen(build(&objs));
+    let listed = doc.info().unwrap().comments;
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    let note = listed.iter().find(|c| c.kind == CommentKind::Note).unwrap();
+    let id = note.id.unwrap();
+    assert_eq!((id.annot.number, id.popup.map(|p| p.number)), (5, Some(6)));
+
+    let added = annotation(Kind::Rect(TextBox {
+        x0: 100.0,
+        y0: 10.0,
+        x1: 150.0,
+        y1: 30.0,
+    }));
+    let saved = doc
+        .with_changes(&Changes {
+            add: vec![added],
+            remove: vec![id],
+        })
+        .unwrap();
+    let text = String::from_utf8_lossy(&saved);
+    let tail = &text[text.rfind("/Annots [").unwrap()..];
+    let annots = &tail[..tail.find(']').unwrap() + 1];
+    assert!(annots.starts_with("/Annots [7 0 R "), "{annots}");
+    let after = reopen(saved).info().unwrap().comments;
+    let kinds: Vec<_> = after
+        .iter()
+        .map(|c| (c.kind.clone(), c.contents.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [(CommentKind::Rect, "keep"), (CommentKind::Rect, "Hello (world)")]
     );
 }

@@ -4,7 +4,7 @@ mod annot;
 pub(crate) mod lex;
 mod update;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,6 +13,23 @@ use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::Array;
 
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, text_width, wrap};
+
+use crate::{CommentId, ObjRef};
+
+/// Unsaved changes to a document's comments.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Changes {
+    /// New annotations, oldest first.
+    pub add: Vec<Annotation>,
+    /// Saved comments to take out.
+    pub remove: Vec<CommentId>,
+}
+
+impl Changes {
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveError {
@@ -45,14 +62,10 @@ impl fmt::Display for SaveError {
 
 impl std::error::Error for SaveError {}
 
-/// Returns `original` with `annotations` appended as an incremental update. With no
-/// annotations the bytes are returned unchanged.
-pub(crate) fn add_annotations(
-    pdf: &Pdf,
-    original: &[u8],
-    annotations: &[Annotation],
-) -> Result<Vec<u8>, SaveError> {
-    if annotations.is_empty() {
+/// Returns `original` with `changes` appended as an incremental update. With no changes the
+/// bytes are returned unchanged.
+pub(crate) fn apply(pdf: &Pdf, original: &[u8], changes: &Changes) -> Result<Vec<u8>, SaveError> {
+    if changes.is_empty() {
         return Ok(original.to_vec());
     }
     let trailer = update::read_trailer(original)?;
@@ -66,8 +79,15 @@ pub(crate) fn add_annotations(
         .map_or(0, |d| d.as_nanos());
 
     let mut by_page: BTreeMap<usize, Vec<&Annotation>> = BTreeMap::new();
-    for a in annotations {
+    for a in &changes.add {
         by_page.entry(a.page).or_default().push(a);
+    }
+    let mut removed: BTreeMap<usize, HashSet<ObjRef>> = BTreeMap::new();
+    for id in &changes.remove {
+        by_page.entry(id.page).or_default();
+        let refs = removed.entry(id.page).or_default();
+        refs.insert(id.annot);
+        refs.extend(id.popup);
     }
     let pages = pdf.pages();
     let mut serial = 0;
@@ -115,8 +135,16 @@ pub(crate) fn add_annotations(
         }
         dict.extend_from_slice(b"/Annots [");
         if let Some(existing) = raw.get::<Array<'_>>(b"Annots") {
-            dict.extend_from_slice(existing.data());
-            dict.push(b' ');
+            let gone = removed.get(&index);
+            let data = existing.data();
+            for item in lex::array_items(data).ok_or(SaveError::Damaged)? {
+                let value = data.get(item).ok_or(SaveError::Damaged)?;
+                if gone.is_some_and(|gone| lex::reference(value).is_some_and(|r| gone.contains(&r))) {
+                    continue;
+                }
+                dict.extend_from_slice(value);
+                dict.push(b' ');
+            }
         }
         dict.extend_from_slice(refs.join(" ").as_bytes());
         dict.extend_from_slice(b"]\n>>");

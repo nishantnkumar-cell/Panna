@@ -70,9 +70,36 @@ impl CommentKind {
     }
 }
 
+/// A PDF object reference, `number generation R`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObjRef {
+    pub number: u32,
+    pub generation: u16,
+}
+
+impl ObjRef {
+    fn new(number: i32, generation: i32) -> Option<Self> {
+        Some(Self {
+            number: u32::try_from(number).ok()?,
+            generation: u16::try_from(generation).ok()?,
+        })
+    }
+}
+
+/// Which saved annotation a comment is, so it can be removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CommentId {
+    pub page: usize,
+    pub annot: ObjRef,
+    /// Its pop-up window annotation, removed along with it.
+    pub popup: Option<ObjRef>,
+}
+
 /// One comment in the file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comment {
+    /// Set for comments saved in the file as their own objects (nearly all of them).
+    pub id: Option<CommentId>,
     pub page: usize,
     pub kind: CommentKind,
     pub contents: String,
@@ -149,6 +176,7 @@ impl From<&Annotation> for Comment {
             _ => Vec::new(),
         };
         Comment {
+            id: None,
             page: a.page,
             kind,
             contents: a.contents.clone(),
@@ -249,7 +277,18 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
                 .unwrap_or_default(),
             _ => Vec::new(),
         };
+        let id = annot
+            .obj_id()
+            .and_then(|id| ObjRef::new(id.obj_number, id.gen_number))
+            .map(|annot_ref| CommentId {
+                page: index,
+                annot: annot_ref,
+                popup: annot
+                    .get_ref(b"Popup")
+                    .and_then(|r| ObjRef::new(r.obj_number, r.gen_number)),
+            });
         out.push(Comment {
+            id,
             page: index,
             kind,
             contents: text(b"Contents"),

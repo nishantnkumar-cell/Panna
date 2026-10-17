@@ -4,7 +4,9 @@
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{Column, button, column, container, row, space, text, text_editor};
 use iced::{Center, Element, Point, Rectangle, Renderer, Size, Theme, mouse};
-use panna_core::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, TextBox, text_width, wrap};
+use panna_core::{
+    Annotation, Changes, Color, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, TextBox, text_width, wrap,
+};
 
 use crate::Message;
 use crate::icons::{self, Icon};
@@ -120,6 +122,8 @@ pub enum Event {
     Redo,
     /// Removes the unsaved annotation at this index.
     Delete(usize),
+    /// Removes a comment saved in the file.
+    Remove(CommentId),
     Edit(text_editor::Action),
     EditDone,
     EditCancel,
@@ -148,13 +152,17 @@ pub struct Annotate {
     colors: [Option<Color>; Tool::ALL.len()],
     /// Unsaved annotations, oldest first.
     pub items: Vec<Annotation>,
-    /// Earlier versions of `items`, for undo and redo.
-    undo: Vec<Vec<Annotation>>,
-    redo: Vec<Vec<Annotation>>,
+    /// Saved comments taken out, not yet saved.
+    pub removed: Vec<CommentId>,
+    /// Earlier versions of `items` and `removed`, for undo and redo.
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
     pub draft: Option<Draft>,
     pub editing: Option<Editing>,
     author: String,
 }
+
+type Snapshot = (Vec<Annotation>, Vec<CommentId>);
 
 /// What an event changed.
 pub enum Outcome {
@@ -185,10 +193,32 @@ impl Annotate {
     /// Forgets unsaved annotations once they are saved (or discarded, or a new file opens).
     pub fn saved(&mut self) {
         self.items.clear();
+        self.removed.clear();
         self.undo.clear();
         self.redo.clear();
         self.draft = None;
         self.editing = None;
+    }
+
+    /// Everything not yet saved, for the renderer and for saving.
+    pub fn changes(&self) -> Changes {
+        Changes {
+            add: self.items.clone(),
+            remove: self.removed.clone(),
+        }
+    }
+
+    /// Whether anything needs saving.
+    pub fn dirty(&self) -> bool {
+        !self.items.is_empty() || !self.removed.is_empty()
+    }
+
+    /// Swaps in a snapshot, returning the state it replaced.
+    fn restore(&mut self, (items, removed): Snapshot) -> Snapshot {
+        (
+            std::mem::replace(&mut self.items, items),
+            std::mem::replace(&mut self.removed, removed),
+        )
     }
 
     pub fn can_undo(&self) -> bool {
@@ -197,7 +227,7 @@ impl Annotate {
 
     /// Keeps the current list for undo, before changing it.
     fn record(&mut self) {
-        self.undo.push(self.items.clone());
+        self.undo.push((self.items.clone(), self.removed.clone()));
         self.redo.clear();
     }
 
@@ -225,13 +255,22 @@ impl Annotate {
             }
             Event::Undo => {
                 if let Some(before) = self.undo.pop() {
-                    self.redo.push(std::mem::replace(&mut self.items, before));
+                    let now = self.restore(before);
+                    self.redo.push(now);
                     return Outcome::Changed;
                 }
             }
             Event::Redo => {
                 if let Some(after) = self.redo.pop() {
-                    self.undo.push(std::mem::replace(&mut self.items, after));
+                    let now = self.restore(after);
+                    self.undo.push(now);
+                    return Outcome::Changed;
+                }
+            }
+            Event::Remove(id) => {
+                if !self.removed.contains(&id) {
+                    self.record();
+                    self.removed.push(id);
                     return Outcome::Changed;
                 }
             }
@@ -706,5 +745,26 @@ mod tests {
         assert_eq!(a.items.len(), 2);
         a.update(Event::Undo);
         assert!(a.items.is_empty() && !a.can_undo());
+    }
+
+    #[test]
+    fn removing_a_saved_comment_is_undoable_and_dirty() {
+        let mut a = Annotate::new();
+        let id = CommentId {
+            page: 0,
+            annot: panna_core::ObjRef {
+                number: 9,
+                generation: 0,
+            },
+            popup: None,
+        };
+        assert!(!a.dirty());
+        assert!(matches!(a.update(Event::Remove(id)), Outcome::Changed));
+        assert!(a.dirty() && a.changes().remove == [id]);
+        assert!(matches!(a.update(Event::Remove(id)), Outcome::Nothing));
+        a.update(Event::Undo);
+        assert!(!a.dirty());
+        a.update(Event::Redo);
+        assert_eq!(a.removed, [id]);
     }
 }
