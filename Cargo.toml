@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/pdf-core", "crates/pdf-app"]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+indexing_slicing = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+# Keep unwinding so engine panics on malformed PDFs can be caught instead of aborting.
+panic = "unwind"
+overflow-checks = true

@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly: re-check advisories against new RustSec entries and run the fuzzer longer.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: Lint and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+
+  supply-chain:
+    name: Advisories, licenses and banned crates
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  fuzz:
+    name: Fuzz open + render
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: Run fuzzer
+        working-directory: fuzz
+        env:
+          RUSTFLAGS: ""
+        run: |
+          SECONDS_TO_RUN=${{ github.event_name == 'schedule' && 3600 || 300 }}
+          cargo +nightly fuzz run open_render -- -max_total_time=$SECONDS_TO_RUN -rss_limit_mb=2048
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+
+  build:
+    name: Release build (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: windows-aarch64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - name: macos-universal
+            os: macos-latest
+            target: universal
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target == 'universal' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build (Linux, Windows)
+        if: matrix.target != 'universal'
+        run: cargo build --release --locked -p pdf-app --target ${{ matrix.target }}
+
+      - name: Package Linux tarball
+        if: runner.os == 'Linux'
+        run: |
+          ID=io.github.nishantnkumar_cell.PdfViewer
+          D=pdf-viewer-${{ matrix.name }}
+          mkdir -p $D/share/applications $D/share/metainfo $D/share/icons/hicolor/scalable/apps $D/bin
+          cp target/${{ matrix.target }}/release/pdf-viewer $D/bin/
+          cp packaging/linux/$ID.desktop $D/share/applications/
+          cp packaging/linux/$ID.metainfo.xml $D/share/metainfo/
+          cp packaging/linux/$ID.svg $D/share/icons/hicolor/scalable/apps/
+          tar czf $D.tar.gz $D
+
+      - name: Package Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pdf-viewer-${{ matrix.name }}
+          Copy-Item target/${{ matrix.target }}/release/pdf-viewer.exe pdf-viewer-${{ matrix.name }}/
+          Compress-Archive pdf-viewer-${{ matrix.name }} pdf-viewer-${{ matrix.name }}.zip
+
+      - name: Build and bundle macOS app (Apple Silicon + Intel)
+        if: matrix.target == 'universal'
+        run: |
+          cargo build --release --locked -p pdf-app --target aarch64-apple-darwin
+          cargo build --release --locked -p pdf-app --target x86_64-apple-darwin
+          APP="PDF Viewer.app"
+          mkdir -p "$APP/Contents/MacOS"
+          lipo -create -output "$APP/Contents/MacOS/pdf-viewer" \
+            target/aarch64-apple-darwin/release/pdf-viewer \
+            target/x86_64-apple-darwin/release/pdf-viewer
+          cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          # Ad-hoc signature so Apple Silicon will run it. Notarisation needs a developer account.
+          codesign --force --deep --sign - "$APP"
+          ditto -c -k --keepParent "$APP" pdf-viewer-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-viewer-${{ matrix.name }}
+          path: |
+            pdf-viewer-${{ matrix.name }}.tar.gz
+            pdf-viewer-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  flatpak:
+    name: Flatpak (KDE Plasma and GNOME)
+    needs: check
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vendor crate sources for the offline Flatpak build
+        run: |
+          pip3 install --break-system-packages aiohttp tomlkit
+          curl -sSfLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+          python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/cargo-sources.json
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: pdf-viewer.flatpak
+          manifest-path: packaging/linux/io.github.nishantnkumar_cell.PdfViewer.yml
+          cache-key: flatpak-builder-${{ github.sha }}

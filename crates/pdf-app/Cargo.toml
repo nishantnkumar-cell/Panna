@@ -1,0 +1,20 @@
+[package]
+name = "pdf-app"
+description = "Offline, memory-safe PDF viewer and editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pdf-viewer"
+path = "src/main.rs"
+
+[dependencies]
+pdf-core = { path = "../pdf-core", version = "0.1.0" }
+iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "image-without-codecs", "thread-pool", "linux-theme-detection", "x11", "wayland", "web-colors"] }
+rfd = "0.17"
+futures-channel = "0.3"
+
+[lints]
+workspace = true

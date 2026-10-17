@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.nishantnkumar_cell.PdfViewer</id>
+  <name>PDF Viewer</name>
+  <summary>View, annotate and fill in PDF files, fully offline</summary>
+  <developer id="io.github.nishantnkumar_cell">
+    <name>Nishant</name>
+  </developer>
+  <url type="homepage">https://github.com/nishantnkumar-cell</url>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>
+      A fast PDF viewer written in memory-safe Rust. It never connects to the internet:
+      no accounts, no cloud, no telemetry.
+    </p>
+    <ul>
+      <li>Smooth continuous scrolling and zoom</li>
+      <li>Follows your desktop's light or dark style</li>
+      <li>Uses your desktop's own file dialogs</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.nishantnkumar_cell.PdfViewer.desktop</launchable>
+  <provides>
+    <binary>pdf-viewer</binary>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">480</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-17">
+      <description><p>First preview: open, scroll, zoom and page navigation.</p></description>
+    </release>
+  </releases>
+</component>

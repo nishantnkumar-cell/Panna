@@ -1,0 +1,13 @@
+[package]
+name = "pdf-core"
+description = "Document loading and rendering for the PDF viewer (no GUI dependencies)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+hayro = "0.8"
+
+[lints]
+workspace = true

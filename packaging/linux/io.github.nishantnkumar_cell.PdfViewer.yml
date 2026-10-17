@@ -1,0 +1,45 @@
+# Flatpak manifest. One package that runs natively on both KDE Plasma and GNOME:
+# it draws its own UI, talks Wayland directly, and uses XDG portals for file dialogs and
+# the light/dark setting, so each desktop shows its own native file chooser.
+#
+# Build (from the repository root):
+#   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/cargo-sources.json
+#   flatpak-builder --user --install --force-clean build-dir packaging/linux/io.github.nishantnkumar_cell.PdfViewer.yml
+id: io.github.nishantnkumar_cell.PdfViewer
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: pdf-viewer
+
+finish-args:
+  # Display: native Wayland, X11 only as a fallback (XWayland or X11 sessions).
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU rendering.
+  - --device=dri
+  # Deliberately absent: --share=network (the app is offline by design) and any
+  # --filesystem access. Files are opened through the XDG document portal, so the app
+  # only ever sees the files you pick or drop on it.
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/pdf-viewer/cargo
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  - name: pdf-viewer
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --locked -p pdf-app
+      - install -Dm755 target/release/pdf-viewer /app/bin/pdf-viewer
+      - install -Dm644 packaging/linux/${FLATPAK_ID}.desktop /app/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 packaging/linux/${FLATPAK_ID}.metainfo.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      - install -Dm644 packaging/linux/${FLATPAK_ID}.svg /app/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+    sources:
+      - type: dir
+        path: ../..
+      - cargo-sources.json
