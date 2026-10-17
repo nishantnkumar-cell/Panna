@@ -6,7 +6,7 @@
 |---|---|---|
 | UI toolkit | **iced 0.14** | Pure Rust, MIT license, cross-platform, good custom canvas, no web engine |
 | PDF rendering | **hayro 0.8** | Pure Rust, the crate itself forbids `unsafe`, ~1000-file regression suite (pdf.js + PDFBox corpora), used by Typst |
-| PDF writing (annotations, forms) | **lopdf** (planned) | Pure Rust object-level reading and writing for incremental saves |
+| PDF writing (annotations, forms) | **Own incremental writer** (`panna-core/src/edit`) | Appends changes after the original bytes, like Acrobat's "save". The original revision is never rewritten, so signatures and anything we don't understand survive. Changed objects are copied byte for byte apart from the keys we edit. We chose this over lopdf, which would mean a second full parser of untrusted input and rewriting the whole file |
 | File dialogs | **rfd** | Native OS dialogs; on Linux it talks to the XDG portal over D-Bus (pure Rust, no GTK) |
 | Alternatives rejected | MuPDF (AGPL, C), PDFium (C++; would need process sandboxing), pdf.js (needs a JS engine) | |
 
@@ -14,7 +14,10 @@
 
 - No blend modes or knockout groups yet. Some PDFs with complex transparency render slightly wrong.
 - It's CPU-only rendering with little performance tuning so far. Very large pages render slowly.
-- No text extraction API yet. Search and copy will need our own text layer built on `hayro-interpret`.
+- No text extraction API. Search and copy use our own text layer (`panna-core/src/text.rs`), built as a `hayro-interpret` device that records glyphs instead of drawing them.
+- Annotations are drawn only from their appearance streams, so every annotation we create gets one.
+
+Saving into encrypted PDFs isn't supported yet, because new objects would need to be encrypted with the file's key.
 
 If hayro can't keep up, the fallback is PDFium running in a separate sandboxed process
 (see "Process isolation" below). That way a C++ memory bug can't touch the UI process.
@@ -25,7 +28,7 @@ If hayro can't keep up, the fallback is PDFium running in a separate sandboxed p
 crates/
   panna-core/   document loading, limits, rendering, background render worker (no GUI deps)
   panna/    iced desktop app (binary: panna)
-fuzz/         cargo-fuzz targets that feed random bytes through open + render
+fuzz/         cargo-fuzz targets that feed random bytes through open, render, text extraction and save
 docs/         this file, the feature map
 ```
 

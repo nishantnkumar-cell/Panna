@@ -1,0 +1,189 @@
+#![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
+use panna_core::{Annotation, Color, Document, Kind, Limits, TextBox};
+
+/// Assembles numbered objects (1-based) into a PDF with a classic xref table.
+fn build(objects: &[String]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", i + 1, body).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+/// The same objects, indexed by a cross-reference stream instead of a table.
+fn build_with_xref_stream(objects: &[String]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", i + 1, body).as_bytes());
+    }
+    let xref = out.len();
+    let own = objects.len() + 1;
+    let mut rows = vec![0u8, 0, 0, 0, 0, 255, 255];
+    for offset in offsets.iter().chain([&xref]) {
+        rows.push(1);
+        rows.extend_from_slice(&(*offset as u32).to_be_bytes());
+        rows.extend_from_slice(&[0, 0]);
+    }
+    out.extend_from_slice(
+        format!(
+            "{own} 0 obj\n<< /Type /XRef /Size {} /W [1 4 2] /Root 1 0 R /Length {} >>\nstream\n",
+            own + 1,
+            rows.len()
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(&rows);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+fn objects(existing_annot: bool) -> Vec<String> {
+    let annots = if existing_annot { "/Annots [5 0 R]" } else { "" };
+    vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R {annots} >>"),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (old) >>".into(),
+    ]
+}
+
+fn annotation(kind: Kind) -> Annotation {
+    Annotation {
+        page: 0,
+        kind,
+        color: Color::RED,
+        opacity: 1.0,
+        width: 4.0,
+        contents: "Hello (world)".into(),
+        author: "Tester".into(),
+    }
+}
+
+fn pixel(doc: &Document, x: usize, y: usize) -> [u8; 4] {
+    let cache = doc.new_cache();
+    let page = doc.render_page(&cache, 0, 1.0).unwrap();
+    let i = (y * page.width as usize + x) * 4;
+    [page.rgba[i], page.rgba[i + 1], page.rgba[i + 2], page.rgba[i + 3]]
+}
+
+fn reopen(bytes: Vec<u8>) -> Document {
+    Document::from_bytes(bytes, None, Limits::default()).unwrap()
+}
+
+#[test]
+fn added_annotations_render_after_reopening() {
+    for bytes in [build(&objects(false)), build_with_xref_stream(&objects(false))] {
+        let doc = Document::from_bytes(bytes.clone(), None, Limits::default()).unwrap();
+        assert_eq!(pixel(&doc, 50, 50), [255, 255, 255, 255]);
+        let saved = doc
+            .with_annotations(&[annotation(Kind::Rect(TextBox {
+                x0: 40.0,
+                y0: 40.0,
+                x1: 160.0,
+                y1: 60.0,
+            }))])
+            .unwrap();
+        // The original revision is untouched.
+        assert_eq!(&saved[..bytes.len()], &bytes[..]);
+        let doc = reopen(saved);
+        // The rectangle's left edge (4pt wide, inside x 40–44) is red; its middle is still white.
+        let edge = pixel(&doc, 42, 50);
+        assert!(edge[0] > 180 && edge[1] < 80, "{edge:?}");
+        assert_eq!(pixel(&doc, 100, 50), [255, 255, 255, 255]);
+    }
+}
+
+#[test]
+fn every_kind_saves_and_reopens() {
+    let b = TextBox {
+        x0: 20.0,
+        y0: 20.0,
+        x1: 120.0,
+        y1: 40.0,
+    };
+    let kinds = vec![
+        Kind::Highlight(vec![b]),
+        Kind::Underline(vec![b]),
+        Kind::StrikeOut(vec![b]),
+        Kind::Note { x: 150.0, y: 10.0 },
+        Kind::FreeText { rect: b, size: 12.0 },
+        Kind::Ink(vec![
+            vec![(10.0, 80.0), (60.0, 90.0), (90.0, 70.0)],
+            vec![(5.0, 5.0)],
+        ]),
+        Kind::Ellipse(b),
+        Kind::Line {
+            from: (10.0, 10.0),
+            to: (190.0, 90.0),
+            arrow: true,
+        },
+    ];
+    let doc = reopen(build(&objects(true)));
+    let all: Vec<Annotation> = kinds.into_iter().map(annotation).collect();
+    let saved = doc.with_annotations(&all).unwrap();
+    let text = String::from_utf8_lossy(&saved);
+    for subtype in [
+        "Highlight",
+        "Underline",
+        "StrikeOut",
+        "/Text",
+        "FreeText",
+        "Ink",
+        "Circle",
+        "Line",
+    ] {
+        assert!(
+            text.contains(&format!("/Subtype /{}", subtype.trim_start_matches('/'))),
+            "{subtype}"
+        );
+    }
+    // The existing annotation is kept alongside the new ones.
+    assert!(text.contains("/Annots [5 0 R 6 0 R"), "{text}");
+    let doc = reopen(saved);
+    assert_eq!(doc.page_count(), 1);
+    // The free text is drawn and extractable.
+    let page_text = doc.page_text(0).unwrap();
+    assert!(page_text.slice(0..page_text.len()).contains("Hello (world)"));
+}
+
+#[test]
+fn saving_twice_chains_updates() {
+    let doc = reopen(build(&objects(false)));
+    let once = doc
+        .with_annotations(&[annotation(Kind::Note { x: 10.0, y: 10.0 })])
+        .unwrap();
+    let doc = reopen(once.clone());
+    let twice = doc
+        .with_annotations(&[annotation(Kind::Note { x: 50.0, y: 10.0 })])
+        .unwrap();
+    assert_eq!(&twice[..once.len()], &once[..]);
+    let text = String::from_utf8_lossy(&twice);
+    assert_eq!(text.matches("/Subtype /Text").count(), 3);
+    let doc = reopen(twice);
+    let p = pixel(&doc, 52, 20);
+    assert!(p[0] > 150 && p[1] < 120, "second note is drawn: {p:?}");
+}
+
+#[test]
+fn nothing_to_add_returns_the_original() {
+    let bytes = build(&objects(false));
+    let doc = reopen(bytes.clone());
+    assert_eq!(doc.with_annotations(&[]).unwrap(), bytes);
+}

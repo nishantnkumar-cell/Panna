@@ -137,6 +137,8 @@ impl std::error::Error for RenderError {}
 /// A parsed PDF document. Not `Sync`-shared: each document lives on one worker thread.
 pub struct Document {
     pdf: Pdf,
+    /// The file as read, kept for incremental saves.
+    bytes: Arc<Vec<u8>>,
     limits: Limits,
     settings: InterpreterSettings,
     file_len: u64,
@@ -177,8 +179,9 @@ impl Document {
         }
         let file_len = bytes.len() as u64;
         let password = password.unwrap_or("");
+        let bytes = Arc::new(bytes);
         let parsed = catch_unwind(AssertUnwindSafe(|| {
-            Pdf::new_with_password(Arc::new(bytes), password)
+            Pdf::new_with_password(Arc::clone(&bytes), password)
         }))
         .map_err(|_| OpenError::EngineCrashed)?;
         let pdf = parsed.map_err(|e| match e {
@@ -195,6 +198,7 @@ impl Document {
         }
         Ok(Self {
             pdf,
+            bytes,
             limits,
             settings: InterpreterSettings::default(),
             file_len,
@@ -268,6 +272,20 @@ impl Document {
         let page = pages.get(index).ok_or(RenderError::NoSuchPage(index))?;
         catch_unwind(AssertUnwindSafe(|| crate::text::extract(page, &self.settings)))
             .map_err(|_| RenderError::EngineCrashed)
+    }
+
+    /// The file's bytes with `annotations` added as an incremental update, ready to save or
+    /// to reopen. The original revision is kept intact at the start of the output.
+    pub fn with_annotations(&self, annotations: &[crate::Annotation]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::add_annotations(&self.pdf, &self.bytes, annotations)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The bytes this document was opened from.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     /// A render cache tied to this document. Reuse it across pages for speed.
