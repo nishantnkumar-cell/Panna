@@ -1,4 +1,5 @@
-//! Keyboard shortcuts. `command()` is Ctrl on Windows and Linux, Cmd on macOS.
+//! Keyboard shortcuts, following Acrobat's where one exists. `command()` is Ctrl on Windows
+//! and Linux, Cmd on macOS.
 
 use iced::keyboard::{self, Key, key::Named};
 
@@ -8,12 +9,20 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
         return None;
     };
+    if modifiers.command() && modifiers.shift() {
+        return match key.as_ref() {
+            Key::Character("=" | "+") => Some(Message::RotateCw),
+            Key::Character("-" | "_") => Some(Message::RotateCcw),
+            _ => None,
+        };
+    }
     if modifiers.command() {
         return match key.as_ref() {
             Key::Character("o") => Some(Message::OpenDialog),
             Key::Character("=" | "+") => Some(Message::ZoomIn),
             Key::Character("-") => Some(Message::ZoomOut),
-            Key::Character("0") => Some(Message::ZoomReset),
+            Key::Character("0") => Some(Message::FitPage),
+            Key::Character("1") => Some(Message::ZoomReset),
             Key::Character("2") => Some(Message::FitWidth),
             _ => None,
         };

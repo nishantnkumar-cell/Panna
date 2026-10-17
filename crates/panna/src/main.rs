@@ -17,7 +17,7 @@ use iced::widget::{
     text_input,
 };
 use iced::{Center, Element, Fill, Length, Size, Subscription, Task, event, mouse, window};
-use panna_core::{DocumentInfo, Limits, OpenError, RenderError, RenderWorker, RenderedPage};
+use panna_core::{DocumentInfo, Limits, OpenError, PageSize, RenderError, RenderWorker, RenderedPage};
 
 use layout::{PAGE_GAP, PageLayout};
 use settings::Settings;
@@ -69,6 +69,7 @@ enum Message {
         doc: u64,
         index: usize,
         scale: f32,
+        rotation: u8,
         result: Result<RenderedPage, RenderError>,
     },
     ScaleFactor(f32),
@@ -77,6 +78,9 @@ enum Message {
     ZoomOut,
     ZoomReset,
     FitWidth,
+    FitPage,
+    RotateCw,
+    RotateCcw,
     PrevPage,
     NextPage,
     PageInput(String),
@@ -91,6 +95,8 @@ struct App {
     doc: Option<OpenDoc>,
     status: Status,
     zoom: f32,
+    /// View rotation in clockwise quarter turns (0–3), applied to every page.
+    rotation: u8,
     scale_factor: f32,
     viewport: ViewportState,
     page_input: String,
@@ -142,6 +148,7 @@ impl App {
             doc: None,
             status: Status::Idle,
             zoom: 1.0,
+            rotation: 0,
             scale_factor: 1.0,
             viewport: ViewportState {
                 offset_y: 0.0,
@@ -223,6 +230,7 @@ impl App {
                 };
                 match result {
                     Ok(info) => {
+                        self.rotation = 0;
                         doc.layout = PageLayout::new(&info.pages);
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
                         doc.info = info;
@@ -245,12 +253,13 @@ impl App {
                 doc,
                 index,
                 scale,
+                rotation,
                 result,
             } => {
                 if let Some(slot) = self
                     .doc
                     .as_mut()
-                    .filter(|d| d.id == doc)
+                    .filter(|d| d.id == doc && rotation == self.rotation)
                     .and_then(|d| d.pages.get_mut(index))
                 {
                     if slot.pending_scale == Some(scale) {
@@ -302,6 +311,19 @@ impl App {
                     Task::none()
                 }
             }
+            Message::FitPage => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let Some(size) = doc.layout.sizes().get(self.current_page()).copied() else {
+                    return Task::none();
+                };
+                let page = self.current_page();
+                let width = (self.viewport.width - 2.0 * PAGE_GAP - 16.0).max(100.0) / size.width;
+                let height = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / size.height;
+                let zoom_task = self.set_zoom(width.min(height));
+                Task::batch([zoom_task, self.go_to_page(page)])
+            }
+            Message::RotateCw => self.rotate(1),
+            Message::RotateCcw => self.rotate(3),
             Message::PrevPage => self.go_to_page(self.current_page().saturating_sub(1)),
             Message::NextPage => self.go_to_page(self.current_page() + 1),
             Message::PageInput(value) => {
@@ -385,6 +407,33 @@ impl App {
         Task::batch([scroll, self.request_visible()])
     }
 
+    /// Turns the view clockwise by `turns` quarter turns, keeping the current page in view.
+    fn rotate(&mut self, turns: u8) -> Task<Message> {
+        let page = self.current_page();
+        let Some(doc) = &mut self.doc else {
+            return Task::none();
+        };
+        self.rotation = (self.rotation + turns) % 4;
+        let sizes: Vec<PageSize> = doc
+            .info
+            .pages
+            .iter()
+            .map(|s| {
+                if self.rotation % 2 == 1 {
+                    PageSize {
+                        width: s.height,
+                        height: s.width,
+                    }
+                } else {
+                    *s
+                }
+            })
+            .collect();
+        doc.layout = PageLayout::new(&sizes);
+        doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
+        self.go_to_page(page)
+    }
+
     fn go_to_page(&mut self, index: usize) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
         if doc.pages.is_empty() {
@@ -434,7 +483,8 @@ impl App {
             }
             slot.pending_scale = Some(scale);
             let (tx, rx) = futures_channel::oneshot::channel();
-            doc.worker.render(index, scale, move |result| {
+            let rotation = self.rotation;
+            doc.worker.render(index, scale, rotation, move |result| {
                 let _ = tx.send(result);
             });
             let doc_id = doc.id;
@@ -445,6 +495,7 @@ impl App {
                     doc: doc_id,
                     index,
                     scale,
+                    rotation,
                     result,
                 },
                 Err(_) => Message::Ignore,
@@ -487,6 +538,16 @@ impl App {
                 .into(),
             button("Fit width")
                 .on_press_maybe(has_doc.then_some(Message::FitWidth))
+                .into(),
+            button("Fit page")
+                .on_press_maybe(has_doc.then_some(Message::FitPage))
+                .into(),
+            gap(),
+            button("↺")
+                .on_press_maybe(has_doc.then_some(Message::RotateCcw))
+                .into(),
+            button("↻")
+                .on_press_maybe(has_doc.then_some(Message::RotateCw))
                 .into(),
         ];
         let toolbar = self.toolbar.view(items, Message::Toolbar);

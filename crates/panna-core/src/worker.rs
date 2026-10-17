@@ -10,6 +10,7 @@ type RenderReply = Box<dyn FnOnce(Result<RenderedPage, RenderError>) + Send>;
 struct Job {
     index: usize,
     scale: f32,
+    rotation: u8,
     reply: RenderReply,
 }
 
@@ -36,17 +37,19 @@ impl RenderWorker {
         Ok(Self { jobs })
     }
 
-    /// Queues a page render. If the worker has gone away, `reply` is never called; the
-    /// caller sees its channel close instead.
+    /// Queues a page render, turned clockwise by `rotation` quarter turns. If the worker has
+    /// gone away, `reply` is never called; the caller sees its channel close instead.
     pub fn render(
         &self,
         index: usize,
         scale: f32,
+        rotation: u8,
         reply: impl FnOnce(Result<RenderedPage, RenderError>) + Send + 'static,
     ) {
         let _ = self.jobs.send(Job {
             index,
             scale,
+            rotation,
             reply: Box::new(reply),
         });
     }
@@ -78,7 +81,8 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
             }
         }
         for job in batch {
-            (job.reply)(document.render_page(&cache, job.index, job.scale));
+            let page = document.render_page(&cache, job.index, job.scale);
+            (job.reply)(page.map(|p| p.rotated(job.rotation)));
         }
     }
 }

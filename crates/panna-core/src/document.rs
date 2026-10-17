@@ -35,6 +35,36 @@ pub struct RenderedPage {
     pub rgba: Vec<u8>,
 }
 
+impl RenderedPage {
+    /// Returns the bitmap turned clockwise by `quarter_turns` × 90°.
+    pub fn rotated(self, quarter_turns: u8) -> Self {
+        let turns = quarter_turns % 4;
+        if turns == 0 {
+            return self;
+        }
+        let (w, h) = (self.width as usize, self.height as usize);
+        let (out_w, out_h) = if turns == 2 { (w, h) } else { (h, w) };
+        let mut rgba = vec![0u8; self.rgba.len()];
+        for (src, px) in self.rgba.as_chunks::<4>().0.iter().enumerate() {
+            let (x, y) = (src % w, src / w);
+            let (nx, ny) = match turns {
+                1 => (h - 1 - y, x),
+                2 => (w - 1 - x, h - 1 - y),
+                _ => (y, w - 1 - x),
+            };
+            let dst = (ny * out_w + nx) * 4;
+            if let Some(slot) = rgba.get_mut(dst..dst + 4) {
+                slot.copy_from_slice(px);
+            }
+        }
+        Self {
+            width: out_w as u32,
+            height: out_h as u32,
+            rgba,
+        }
+    }
+}
+
 impl fmt::Debug for RenderedPage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderedPage")
