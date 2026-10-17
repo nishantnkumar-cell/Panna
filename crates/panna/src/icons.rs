@@ -26,6 +26,11 @@ pub enum Icon {
     DockLeft,
     DockRight,
     Float,
+    Sidebar,
+    Thumbnails,
+    Bookmarks,
+    SwapSide,
+    Close,
 }
 
 impl Icon {
@@ -49,6 +54,11 @@ impl Icon {
             Icon::DockLeft => include_bytes!("../icons/panel-left.svg"),
             Icon::DockRight => include_bytes!("../icons/panel-right.svg"),
             Icon::Float => include_bytes!("../icons/picture-in-picture-2.svg"),
+            Icon::Sidebar => include_bytes!("../icons/panel-left.svg"),
+            Icon::Thumbnails => include_bytes!("../icons/layout-grid.svg"),
+            Icon::Bookmarks => include_bytes!("../icons/bookmark.svg"),
+            Icon::SwapSide => include_bytes!("../icons/arrow-left-right.svg"),
+            Icon::Close => include_bytes!("../icons/x.svg"),
         }
     }
 }
@@ -125,7 +135,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 18] = [
+    const ALL: [Icon; 23] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -144,6 +154,11 @@ mod tests {
         Icon::DockLeft,
         Icon::DockRight,
         Icon::Float,
+        Icon::Sidebar,
+        Icon::Thumbnails,
+        Icon::Bookmarks,
+        Icon::SwapSide,
+        Icon::Close,
     ];
 
     #[test]

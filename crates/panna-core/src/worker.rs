@@ -11,6 +11,8 @@ struct Job {
     index: usize,
     scale: f32,
     rotation: u8,
+    /// Thumbnails are queued separately from page renders and drawn after them.
+    thumbnail: bool,
     reply: RenderReply,
 }
 
@@ -50,6 +52,25 @@ impl RenderWorker {
             index,
             scale,
             rotation,
+            thumbnail: false,
+            reply: Box::new(reply),
+        });
+    }
+
+    /// Like [`render`](Self::render), for a sidebar thumbnail. Pending thumbnails never replace
+    /// pending page renders, and page renders go first.
+    pub fn render_thumbnail(
+        &self,
+        index: usize,
+        scale: f32,
+        rotation: u8,
+        reply: impl FnOnce(Result<RenderedPage, RenderError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index,
+            scale,
+            rotation,
+            thumbnail: true,
             reply: Box::new(reply),
         });
     }
@@ -73,13 +94,15 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
         loop {
             match queue.try_recv() {
                 Ok(job) => {
-                    batch.retain(|queued| queued.index != job.index);
+                    batch.retain(|queued| queued.index != job.index || queued.thumbnail != job.thumbnail);
                     batch.push(job);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
         }
+        // Stable sort: page renders before thumbnails, otherwise in request order.
+        batch.sort_by_key(|job| job.thumbnail);
         for job in batch {
             let page = document.render_page(&cache, job.index, job.scale);
             (job.reply)(page.map(|p| p.rotated(job.rotation)));

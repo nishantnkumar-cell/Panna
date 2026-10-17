@@ -14,8 +14,8 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Continuous scroll, single page, two-page spread | V1 | Continuous scroll done; spreads later in V1 |
 | Zoom in/out, fit width, fit page, actual size | V1 | Done |
 | Rotate view | V1 | Done |
-| Page thumbnails sidebar | V1 | |
-| Bookmarks / outline panel | V1 | |
+| Page thumbnails sidebar | V1 | Done (F4); left or right edge, remembered |
+| Bookmarks / outline panel | V1 | Done; nested, click to jump |
 | Go to page, next/previous page | V1 | Done |
 | Text search (find, find next, match case, whole word) | V1 | Needs text extraction |
 | Select and copy text | V1 | |
@@ -25,7 +25,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Full-screen / presentation mode | Later | |
 | Night mode / custom page colours (accessibility) | Later | |
 | Recent files list | V1 | Done; stored locally only |
-| Toolbars dock to any edge or float; position remembered | V1 | Done |
+| Toolbars dock to any edge or float; position remembered | V1 | Done; icon-only (Lucide, ISC) with hover tips |
 | Print | Later | Uses OS print dialog |
 | Document properties (title, author, page size, PDF version) | V1 | Done (Ctrl+D) |
 | Password-protected (encrypted) PDFs | V1 | Done |

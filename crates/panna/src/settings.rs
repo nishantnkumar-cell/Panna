@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use iced::Point;
 
+use crate::sidebar::{Side, Tab};
 use crate::toolbar::Dock;
 
 /// Settings files bigger than this are ignored rather than parsed.
@@ -15,6 +16,9 @@ const MAX_RECENT: usize = 10;
 pub struct Settings {
     pub toolbar_dock: Dock,
     pub toolbar_pos: Point,
+    pub sidebar_open: bool,
+    pub sidebar_side: Side,
+    pub sidebar_tab: Tab,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -24,6 +28,9 @@ impl Default for Settings {
         Self {
             toolbar_dock: Dock::Top,
             toolbar_pos: Point::new(40.0, 60.0),
+            sidebar_open: false,
+            sidebar_side: Side::Left,
+            sidebar_tab: Tab::Thumbnails,
             recent: Vec::new(),
         }
     }
@@ -77,6 +84,9 @@ impl Settings {
                 "toolbar.dock" => out.toolbar_dock = Dock::parse(value.trim()).unwrap_or(out.toolbar_dock),
                 "toolbar.x" => out.toolbar_pos.x = finite(value).unwrap_or(out.toolbar_pos.x),
                 "toolbar.y" => out.toolbar_pos.y = finite(value).unwrap_or(out.toolbar_pos.y),
+                "sidebar.open" => out.sidebar_open = value.trim() == "true",
+                "sidebar.side" => out.sidebar_side = Side::parse(value.trim()).unwrap_or(out.sidebar_side),
+                "sidebar.tab" => out.sidebar_tab = Tab::parse(value.trim()).unwrap_or(out.sidebar_tab),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
                     out.recent.push(PathBuf::from(value));
@@ -89,10 +99,13 @@ impl Settings {
 
     fn serialize(&self) -> String {
         let mut out = format!(
-            "toolbar.dock={}\ntoolbar.x={}\ntoolbar.y={}\n",
+            "toolbar.dock={}\ntoolbar.x={}\ntoolbar.y={}\nsidebar.open={}\nsidebar.side={}\nsidebar.tab={}\n",
             self.toolbar_dock.as_str(),
             self.toolbar_pos.x,
-            self.toolbar_pos.y
+            self.toolbar_pos.y,
+            self.sidebar_open,
+            self.sidebar_side.as_str(),
+            self.sidebar_tab.as_str(),
         );
         // Paths that aren't UTF-8 or contain line breaks can't be stored in this format.
         for path in &self.recent {
@@ -136,6 +149,9 @@ mod tests {
         let s = Settings {
             toolbar_dock: Dock::Floating,
             toolbar_pos: Point::new(120.5, 33.0),
+            sidebar_open: true,
+            sidebar_side: Side::Right,
+            sidebar_tab: Tab::Bookmarks,
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);

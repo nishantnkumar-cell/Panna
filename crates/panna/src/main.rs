@@ -8,6 +8,7 @@ mod icons;
 mod layout;
 mod settings;
 mod shortcuts;
+mod sidebar;
 mod toolbar;
 
 use std::path::PathBuf;
@@ -23,6 +24,7 @@ use panna_core::{DocumentInfo, Limits, OpenError, PageSize, RenderError, RenderW
 use icons::Icon;
 use layout::{PAGE_GAP, PageLayout};
 use settings::Settings;
+use sidebar::{Sidebar, ThumbLayout};
 use toolbar::{Dock, Toolbar};
 
 const MIN_ZOOM: f32 = 0.25;
@@ -93,6 +95,14 @@ enum Message {
     PasswordSubmit,
     ToggleProperties,
     CloseOverlays,
+    Sidebar(sidebar::Event),
+    GoToPage(usize),
+    ThumbRendered {
+        doc: u64,
+        index: usize,
+        rotation: u8,
+        result: Result<RenderedPage, RenderError>,
+    },
     Ignore,
 }
 
@@ -108,6 +118,7 @@ struct App {
     page_input: String,
     settings: Settings,
     toolbar: Toolbar,
+    sidebar: Sidebar,
     window_size: Size,
     show_properties: bool,
 }
@@ -132,6 +143,14 @@ struct OpenDoc {
     worker: RenderWorker,
     layout: PageLayout,
     pages: Vec<Slot>,
+    thumb_layout: ThumbLayout,
+    thumbs: Vec<Thumb>,
+}
+
+#[derive(Default)]
+pub(crate) struct Thumb {
+    image: Option<image::Handle>,
+    pending: bool,
 }
 
 #[derive(Default)]
@@ -206,6 +225,7 @@ impl App {
             },
             page_input: String::new(),
             toolbar: Toolbar::new(settings.toolbar_dock, settings.toolbar_pos),
+            sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
             settings,
             window_size: INITIAL_SIZE,
             show_properties: false,
@@ -285,6 +305,8 @@ impl App {
                         self.rotation = 0;
                         doc.layout = PageLayout::new(&info.pages);
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
+                        doc.thumb_layout = ThumbLayout::new(&info.pages);
+                        doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
                         doc.info = info;
                         self.status = Status::Idle;
                         self.zoom = 1.0;
@@ -292,6 +314,7 @@ impl App {
                         Task::batch([
                             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y: 0.0 }),
                             self.request_visible(),
+                            self.request_thumbnails(),
                         ])
                     }
                     Err(OpenError::PasswordRequired) => {
@@ -436,6 +459,36 @@ impl App {
                 self.show_properties = false;
                 Task::none()
             }
+            Message::Sidebar(event) => {
+                if self.sidebar.update(event) {
+                    self.settings.sidebar_open = self.sidebar.open;
+                    self.settings.sidebar_side = self.sidebar.side;
+                    self.settings.sidebar_tab = self.sidebar.tab;
+                    self.settings.save();
+                }
+                self.request_thumbnails()
+            }
+            Message::GoToPage(index) => self.go_to_page(index),
+            Message::ThumbRendered {
+                doc,
+                index,
+                rotation,
+                result,
+            } => {
+                if let Some(thumb) = self
+                    .doc
+                    .as_mut()
+                    .filter(|d| d.id == doc && rotation == self.rotation)
+                    .and_then(|d| d.thumbs.get_mut(index))
+                {
+                    thumb.pending = false;
+                    // A failed thumbnail stays blank; the page view shows the error.
+                    if let Ok(page) = result {
+                        thumb.image = Some(image::Handle::from_rgba(page.width, page.height, page.rgba));
+                    }
+                }
+                Task::none()
+            }
         }
     }
 
@@ -463,10 +516,13 @@ impl App {
                 pages: Vec::new(),
                 title: None,
                 properties: Vec::new(),
+                outline: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
             pages: Vec::new(),
+            thumb_layout: ThumbLayout::default(),
+            thumbs: Vec::new(),
         });
         Task::perform(rx, move |result| {
             Message::Opened(id, result.unwrap_or(Err(OpenError::EngineCrashed)))
@@ -516,8 +572,10 @@ impl App {
             })
             .collect();
         doc.layout = PageLayout::new(&sizes);
+        doc.thumb_layout = ThumbLayout::new(&sizes);
         doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
-        self.go_to_page(page)
+        doc.thumbs.iter_mut().for_each(|thumb| *thumb = Thumb::default());
+        Task::batch([self.go_to_page(page), self.request_thumbnails()])
     }
 
     fn go_to_page(&mut self, index: usize) -> Task<Message> {
@@ -590,6 +648,49 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// Requests thumbnails for the sidebar's visible range and drops ones far outside it.
+    fn request_thumbnails(&mut self) -> Task<Message> {
+        if !self.sidebar.showing_thumbnails() {
+            return Task::none();
+        }
+        let Some(doc) = &mut self.doc else {
+            return Task::none();
+        };
+        let wanted = self.sidebar.wanted(&doc.thumb_layout);
+        let rotation = self.rotation;
+        let mut tasks = Vec::new();
+        for (index, thumb) in doc.thumbs.iter_mut().enumerate() {
+            if !wanted.contains(&index) {
+                *thumb = Thumb::default();
+                continue;
+            }
+            if thumb.image.is_some() || thumb.pending {
+                continue;
+            }
+            let Some(size) = doc.layout.sizes().get(index) else {
+                continue;
+            };
+            let scale = doc.thumb_layout.size(index).0 / size.width.max(1.0) * self.scale_factor;
+            thumb.pending = true;
+            let (tx, rx) = futures_channel::oneshot::channel();
+            doc.worker
+                .render_thumbnail(index, scale, rotation, move |result| {
+                    let _ = tx.send(result);
+                });
+            let doc_id = doc.id;
+            tasks.push(Task::perform(rx, move |result| match result {
+                Ok(result) => Message::ThumbRendered {
+                    doc: doc_id,
+                    index,
+                    rotation,
+                    result,
+                },
+                Err(_) => Message::Ignore,
+            }));
+        }
+        Task::batch(tasks)
+    }
+
     fn view(&self) -> Element<'_, Message> {
         let page_count = self.doc.as_ref().map_or(0, |d| d.pages.len());
         let has_doc = page_count > 0;
@@ -604,6 +705,15 @@ impl App {
         let on = |m: Message| has_doc.then_some(m);
         let m = icons::MOD;
         let items: Vec<Element<'_, Message>> = vec![
+            icons::button(
+                Icon::Sidebar,
+                if self.sidebar.open {
+                    "Hide sidebar (F4)"
+                } else {
+                    "Show sidebar (F4)"
+                },
+                on(Message::Sidebar(sidebar::Event::Toggle)),
+            ),
             icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
@@ -675,7 +785,7 @@ impl App {
                 .align_x(Center),
             )
             .into(),
-            (Status::Idle, Some(doc)) if has_doc => self.pages_view(doc),
+            (Status::Idle, Some(doc)) if has_doc => self.with_sidebar(doc, self.pages_view(doc)),
             _ => self.welcome_view(),
         };
         let body = match (&self.doc, self.show_properties) {
@@ -720,6 +830,22 @@ impl App {
             }
         }
         center(scrollable(content)).into()
+    }
+
+    fn with_sidebar<'a>(&'a self, doc: &'a OpenDoc, pages: Element<'a, Message>) -> Element<'a, Message> {
+        if !self.sidebar.open {
+            return pages;
+        }
+        let bar = self.sidebar.view(sidebar::ViewData {
+            layout: &doc.thumb_layout,
+            thumbs_images: &doc.thumbs,
+            outline: &doc.info.outline,
+            current: self.current_page(),
+        });
+        match self.sidebar.side {
+            sidebar::Side::Left => row![bar, pages].into(),
+            sidebar::Side::Right => row![pages, bar].into(),
+        }
     }
 
     fn pages_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {
