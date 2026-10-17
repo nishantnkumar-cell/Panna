@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 panna-core = { path = "../panna-core", version = "0.1.0" }
-iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "image-without-codecs", "svg", "thread-pool", "linux-theme-detection", "x11", "wayland", "web-colors"] }
+iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "image-without-codecs", "svg", "canvas", "thread-pool", "linux-theme-detection", "x11", "wayland", "web-colors"] }
 rfd = "0.17"
 futures-channel = "0.3"
 

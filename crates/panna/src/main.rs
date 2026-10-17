@@ -4,6 +4,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod annotate;
 mod find;
 mod icons;
 mod layout;
@@ -23,7 +24,7 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
-    DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker, RenderedPage,
+    DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker, RenderedPage, SaveError,
 };
 
 use icons::Icon;
@@ -65,6 +66,8 @@ fn window_settings() -> window::Settings {
     window::Settings {
         size: INITIAL_SIZE,
         icon: window::icon::from_rgba(WINDOW_ICON.to_vec(), 64, 64).ok(),
+        // Closing asks first when there are unsaved annotations.
+        exit_on_close_request: false,
         min_size: Some(iced::Size::new(480.0, 360.0)),
         #[cfg(target_os = "linux")]
         platform_specific: window::settings::PlatformSpecific {
@@ -125,6 +128,22 @@ enum Message {
     PageDoubleClick(usize),
     PointerReleased,
     Copy,
+    Annotate(annotate::Event),
+    AnnotationsApplied {
+        doc: u64,
+        result: Result<(), SaveError>,
+    },
+    Save,
+    SaveAs,
+    SaveAsChosen(Option<PathBuf>),
+    Saved {
+        doc: u64,
+        path: PathBuf,
+        result: Result<(), SaveError>,
+    },
+    CloseRequested(window::Id),
+    Confirm(Choice),
+    DismissNotice,
     Ignore,
 }
 
@@ -149,6 +168,29 @@ struct App {
     hover: Option<(usize, Point)>,
     /// A drag-selection is in progress.
     selecting: bool,
+    annotate: annotate::Annotate,
+    saving: bool,
+    /// What to do once unsaved changes are saved or discarded.
+    confirm: Option<Pending>,
+    after_save: Option<Pending>,
+    /// A problem to show the user, such as a failed save.
+    notice: Option<String>,
+}
+
+/// An action that would lose unsaved annotations.
+#[derive(Debug, Clone)]
+enum Pending {
+    Close,
+    Open(PathBuf),
+    OpenDialog,
+}
+
+/// The answer to "Save changes?".
+#[derive(Debug, Clone, Copy)]
+enum Choice {
+    Save,
+    Discard,
+    Cancel,
 }
 
 enum Status {
@@ -234,6 +276,18 @@ fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
     )
 }
 
+/// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
+fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
+    opaque(
+        mouse_area(
+            center(opaque(card)).style(|_| {
+                container::Style::default().background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.35))
+            }),
+        )
+        .on_press(dismiss),
+    )
+}
+
 fn password_id() -> iced::widget::Id {
     iced::widget::Id::new("password")
 }
@@ -264,6 +318,11 @@ impl App {
             selection: None,
             hover: None,
             selecting: false,
+            annotate: annotate::Annotate::new(),
+            saving: false,
+            confirm: None,
+            after_save: None,
+            notice: None,
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -298,8 +357,8 @@ impl App {
             iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
             _ => None,
         });
-        let mut subs = vec![base];
-        if self.selecting {
+        let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
+        if self.selecting || self.annotate.draft.is_some() {
             // Finish a text selection even when the button is released outside the page.
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
@@ -327,6 +386,10 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::OpenDialog if self.dirty() => {
+                self.confirm = Some(Pending::OpenDialog);
+                Task::none()
+            }
             Message::OpenDialog => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -338,7 +401,13 @@ impl App {
                 },
                 Message::FileChosen,
             ),
-            Message::FileChosen(Some(path)) => self.open(path, None),
+            Message::FileChosen(Some(path)) => {
+                if self.dirty() {
+                    self.confirm = Some(Pending::Open(path));
+                    return Task::none();
+                }
+                self.open(path, None)
+            }
             Message::FileChosen(None) | Message::Ignore => Task::none(),
             Message::Opened(id, result) => {
                 let Some(doc) = self.doc.as_mut().filter(|d| d.id == id) else {
@@ -357,6 +426,7 @@ impl App {
                         doc.info = info;
                         self.selection = None;
                         self.hover = None;
+                        self.annotate.saved();
                         self.find.rescan(&doc.texts);
                         self.status = Status::Idle;
                         self.zoom = 1.0;
@@ -565,11 +635,24 @@ impl App {
             Message::Find(event) => self.find_event(event),
             Message::PagePointer(page, position) => {
                 self.hover = Some((page, position));
+                if self.annotate.draft.is_some() {
+                    let at = self.page_map(page).to_page(position);
+                    self.annotate.drag(page, at);
+                    return Task::none();
+                }
                 if self.selecting
                     && let Some(caret) = self.caret_at(page, position)
                     && let Some(selection) = &mut self.selection
                 {
                     selection.focus = caret;
+                }
+                Task::none()
+            }
+            Message::PagePress(page) if self.annotate.open && !self.annotate.tool.marks_text() => {
+                self.selection = None;
+                if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
+                    let at = self.page_map(page).to_page(position);
+                    self.annotate.press(page, at);
                 }
                 Task::none()
             }
@@ -610,6 +693,13 @@ impl App {
                 self.copy_primary()
             }
             Message::PointerReleased => {
+                if self.annotate.draft.is_some() {
+                    let outcome = self.annotate.release();
+                    if self.annotate.editing.is_some() {
+                        return operation::focus(annotate::editor_id());
+                    }
+                    return self.after_annotate(outcome);
+                }
                 if !self.selecting {
                     return Task::none();
                 }
@@ -617,13 +707,205 @@ impl App {
                 if self.selection.is_some_and(|s| s.is_empty()) {
                     self.selection = None;
                 }
+                if self.annotate.open && self.annotate.tool != annotate::Tool::Select {
+                    return self.mark_selection();
+                }
                 self.copy_primary()
+            }
+            Message::Annotate(event) => {
+                // Choosing a markup tool with text selected marks it straight away.
+                let marks_now = matches!(
+                    event,
+                    annotate::Event::Tool(
+                        annotate::Tool::Highlight | annotate::Tool::Underline | annotate::Tool::StrikeOut
+                    )
+                ) && self.selection.is_some_and(|s| !s.is_empty());
+                let opening = matches!(event, annotate::Event::Toggle);
+                if self.saving && !opening {
+                    return Task::none();
+                }
+                let outcome = self.annotate.update(event);
+                if marks_now {
+                    return self.mark_selection();
+                }
+                self.after_annotate(outcome)
+            }
+            Message::AnnotationsApplied { doc, result } => {
+                let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
+                    return Task::none();
+                };
+                if let Err(e) = result {
+                    self.notice = Some(e.to_string());
+                    return Task::none();
+                }
+                // Re-render with the change; old bitmaps stay up until the new ones arrive.
+                for slot in &mut open.pages {
+                    slot.rendered_scale = None;
+                    slot.pending_scale = None;
+                }
+                for thumb in &mut open.thumbs {
+                    *thumb = Thumb::default();
+                }
+                Task::batch([self.request_visible(), self.request_thumbnails()])
+            }
+            Message::Save => {
+                let Some(path) = self.doc.as_ref().map(|d| d.path.clone()) else {
+                    return Task::none();
+                };
+                self.save_to(path)
+            }
+            Message::SaveAs => {
+                if self.doc.is_none() {
+                    return Task::none();
+                }
+                let name = self
+                    .doc
+                    .as_ref()
+                    .and_then(|d| d.path.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "document.pdf".into());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save PDF as")
+                            .add_filter("PDF documents", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::SaveAsChosen,
+                )
+            }
+            Message::SaveAsChosen(Some(path)) => self.save_to(path),
+            Message::SaveAsChosen(None) => {
+                self.after_save = None;
+                Task::none()
+            }
+            Message::Saved { doc, path, result } => {
+                self.saving = false;
+                let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(()) => {
+                        open.path = path.clone();
+                        self.annotate.saved();
+                        self.settings.add_recent(path);
+                        self.settings.save();
+                        match self.after_save.take() {
+                            Some(next) => self.proceed(next),
+                            None => Task::none(),
+                        }
+                    }
+                    Err(e) => {
+                        self.after_save = None;
+                        self.notice = Some(e.to_string());
+                        Task::none()
+                    }
+                }
+            }
+            Message::CloseRequested(id) => {
+                if self.dirty() {
+                    self.confirm = Some(Pending::Close);
+                    return Task::none();
+                }
+                window::close(id)
+            }
+            Message::Confirm(choice) => {
+                let Some(pending) = self.confirm.take() else {
+                    return Task::none();
+                };
+                match choice {
+                    Choice::Cancel => Task::none(),
+                    Choice::Discard => {
+                        self.annotate.saved();
+                        self.proceed(pending)
+                    }
+                    Choice::Save => {
+                        self.after_save = Some(pending);
+                        self.update(Message::Save)
+                    }
+                }
+            }
+            Message::DismissNotice => {
+                self.notice = None;
+                Task::none()
             }
             Message::Copy => match self.selected_text() {
                 Some(text) => iced::clipboard::write(text),
                 None => Task::none(),
             },
         }
+    }
+
+    /// Whether there are annotations that haven't been saved.
+    fn dirty(&self) -> bool {
+        self.doc.is_some() && !self.annotate.items.is_empty()
+    }
+
+    /// Carries out an action that was waiting on "Save changes?".
+    fn proceed(&mut self, pending: Pending) -> Task<Message> {
+        match pending {
+            Pending::Close => iced::exit(),
+            Pending::Open(path) => self.open(path, None),
+            Pending::OpenDialog => self.update(Message::OpenDialog),
+        }
+    }
+
+    fn save_to(&mut self, path: PathBuf) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        if self.saving {
+            return Task::none();
+        }
+        self.saving = true;
+        let (tx, rx) = futures_channel::oneshot::channel();
+        doc.worker.save(path.clone(), move |result| {
+            let _ = tx.send(result);
+        });
+        let id = doc.id;
+        Task::perform(rx, move |result| Message::Saved {
+            doc: id,
+            path: path.clone(),
+            result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+        })
+    }
+
+    /// Sends the current annotation list to the worker after a change.
+    fn after_annotate(&mut self, outcome: annotate::Outcome) -> Task<Message> {
+        if !matches!(outcome, annotate::Outcome::Changed) {
+            return Task::none();
+        }
+        let Some(doc) = &self.doc else { return Task::none() };
+        let (tx, rx) = futures_channel::oneshot::channel();
+        doc.worker
+            .set_annotations(self.annotate.items.clone(), move |result| {
+                let _ = tx.send(result);
+            });
+        let id = doc.id;
+        Task::perform(rx, move |result| match result {
+            Ok(result) => Message::AnnotationsApplied { doc: id, result },
+            // Superseded by a newer list.
+            Err(_) => Message::Ignore,
+        })
+    }
+
+    /// Highlights, underlines or strikes through the selected text with the current tool.
+    fn mark_selection(&mut self) -> Task<Message> {
+        let Some((selection, doc)) = self.selection.zip(self.doc.as_ref()) else {
+            return Task::none();
+        };
+        let per_page = selection
+            .pages()
+            .filter_map(|page| {
+                let text = doc.texts.get(page)?.text.as_ref()?;
+                let range = selection.range_on(page, text.len())?;
+                Some((page, text.rects(range)))
+            })
+            .collect();
+        self.selection = None;
+        let outcome = self.annotate.mark_text(per_page);
+        self.after_annotate(outcome)
     }
 
     fn selected_text(&self) -> Option<String> {
@@ -1072,6 +1354,11 @@ impl App {
                 on(Message::Sidebar(sidebar::Event::Toggle)),
             ),
             icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
+            icons::button(
+                Icon::Save,
+                format!("Save ({m}S)"),
+                (self.dirty() && !self.saving).then_some(Message::Save),
+            ),
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
             icons::with_tip(page_box, "Go to page"),
@@ -1100,6 +1387,16 @@ impl App {
                 Icon::Search,
                 format!("Find ({m}F)"),
                 on(Message::Find(find::Event::Open)),
+            ),
+            icons::toggle(
+                Icon::Annotate,
+                if self.annotate.open {
+                    "Hide comment tools"
+                } else {
+                    "Comment and draw"
+                },
+                self.annotate.open,
+                Message::Annotate(annotate::Event::Toggle),
             ),
             gap(),
             icons::button(
@@ -1150,6 +1447,11 @@ impl App {
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.pages_view(doc);
+                let pages = if self.annotate.open {
+                    row![container(self.annotate.rail()).padding(6), pages].into()
+                } else {
+                    pages
+                };
                 self.with_sidebar(doc, pages)
             }
             _ => self.welcome_view(),
@@ -1157,6 +1459,36 @@ impl App {
         let body = match (&self.doc, self.show_properties) {
             (Some(doc), true) => stack![body, properties_view(&doc.info)].into(),
             _ => body,
+        };
+        let body = match self.annotate.editor() {
+            Some(card) => stack![body, modal(card, Message::Annotate(annotate::Event::EditCancel))].into(),
+            None => body,
+        };
+        let body = if self.confirm.is_some() {
+            stack![body, modal(self.confirm_view(), Message::Confirm(Choice::Cancel))].into()
+        } else {
+            body
+        };
+        let body = match &self.notice {
+            Some(notice) => stack![
+                body,
+                modal(
+                    container(
+                        column![
+                            text(notice.as_str()),
+                            button("OK").on_press(Message::DismissNotice)
+                        ]
+                        .spacing(12)
+                        .width(360)
+                    )
+                    .padding(16)
+                    .style(container::rounded_box)
+                    .into(),
+                    Message::DismissNotice
+                )
+            ]
+            .into(),
+            None => body,
         };
 
         match self.toolbar.dock {
@@ -1170,6 +1502,38 @@ impl App {
             ]
             .into(),
         }
+    }
+
+    fn confirm_view(&self) -> Element<'_, Message> {
+        let name = self
+            .doc
+            .as_ref()
+            .and_then(|d| d.path.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        container(
+            column![
+                text(format!("Save your changes to “{name}”?")).size(16),
+                text("Your comments and drawings will be lost if you don't save them.")
+                    .style(text::secondary),
+                row![
+                    button("Don't save")
+                        .style(button::secondary)
+                        .on_press(Message::Confirm(Choice::Discard)),
+                    space::horizontal(),
+                    button("Cancel")
+                        .style(button::secondary)
+                        .on_press(Message::Confirm(Choice::Cancel)),
+                    button("Save").on_press(Message::Confirm(Choice::Save)),
+                ]
+                .spacing(8),
+            ]
+            .spacing(12)
+            .width(400),
+        )
+        .padding(18)
+        .style(container::rounded_box)
+        .into()
     }
 
     fn welcome_view(&self) -> Element<'_, Message> {
@@ -1267,11 +1631,18 @@ impl App {
                 let content: Element<'_, Message> = match (&slot.image, &slot.error) {
                     (Some(handle), _) => {
                         let marks = self.text_marks(doc, index);
-                        if marks.is_empty() {
+                        let preview = annotate::preview(
+                            &self.annotate,
+                            index,
+                            self.page_map(index),
+                            Size::new(size.width * self.zoom, size.height * self.zoom),
+                        );
+                        if marks.is_empty() && preview.is_none() {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
                             let mut layers = vec![image(handle.clone()).width(width).height(height).into()];
                             layers.extend(marks);
+                            layers.extend(preview);
                             iced::widget::Stack::with_children(layers).into()
                         }
                     }
@@ -1294,7 +1665,9 @@ impl App {
                     .on_press(Message::PagePress(index))
                     .on_double_click(Message::PageDoubleClick(index))
                     .on_release(Message::PointerReleased)
-                    .interaction(if over_text || self.selecting {
+                    .interaction(if self.annotate.open && !self.annotate.tool.marks_text() {
+                        mouse::Interaction::Crosshair
+                    } else if over_text || self.selecting {
                         mouse::Interaction::Text
                     } else {
                         mouse::Interaction::Idle

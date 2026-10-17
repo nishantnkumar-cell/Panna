@@ -42,6 +42,12 @@ impl Selection {
         }
     }
 
+    /// The pages the selection touches.
+    pub fn pages(&self) -> std::ops::RangeInclusive<usize> {
+        let (start, end) = self.ordered();
+        start.page..=end.page
+    }
+
     pub fn is_empty(&self) -> bool {
         self.anchor == self.focus
     }

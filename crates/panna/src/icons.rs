@@ -34,6 +34,21 @@ pub enum Icon {
     FindNext,
     MatchCase,
     WholeWord,
+    Pointer,
+    Highlighter,
+    Underline,
+    Strikethrough,
+    StickyNote,
+    TextBox,
+    Pen,
+    Square,
+    Circle,
+    Arrow,
+    Line,
+    Undo,
+    Redo,
+    Save,
+    Annotate,
 }
 
 impl Icon {
@@ -65,6 +80,21 @@ impl Icon {
             Icon::FindNext => include_bytes!("../icons/chevron-down.svg"),
             Icon::MatchCase => include_bytes!("../icons/case-sensitive.svg"),
             Icon::WholeWord => include_bytes!("../icons/whole-word.svg"),
+            Icon::Pointer => include_bytes!("../icons/mouse-pointer-2.svg"),
+            Icon::Highlighter => include_bytes!("../icons/highlighter.svg"),
+            Icon::Underline => include_bytes!("../icons/underline.svg"),
+            Icon::Strikethrough => include_bytes!("../icons/strikethrough.svg"),
+            Icon::StickyNote => include_bytes!("../icons/sticky-note.svg"),
+            Icon::TextBox => include_bytes!("../icons/type.svg"),
+            Icon::Pen => include_bytes!("../icons/pen-line.svg"),
+            Icon::Square => include_bytes!("../icons/square.svg"),
+            Icon::Circle => include_bytes!("../icons/circle.svg"),
+            Icon::Arrow => include_bytes!("../icons/move-up-right.svg"),
+            Icon::Line => include_bytes!("../icons/slash.svg"),
+            Icon::Undo => include_bytes!("../icons/undo-2.svg"),
+            Icon::Redo => include_bytes!("../icons/redo-2.svg"),
+            Icon::Save => include_bytes!("../icons/save.svg"),
+            Icon::Annotate => include_bytes!("../icons/message-square-plus.svg"),
         }
     }
 }
@@ -161,7 +191,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 26] = [
+    const ALL: [Icon; 41] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -188,6 +218,21 @@ mod tests {
         Icon::FindNext,
         Icon::MatchCase,
         Icon::WholeWord,
+        Icon::Pointer,
+        Icon::Highlighter,
+        Icon::Underline,
+        Icon::Strikethrough,
+        Icon::StickyNote,
+        Icon::TextBox,
+        Icon::Pen,
+        Icon::Square,
+        Icon::Circle,
+        Icon::Arrow,
+        Icon::Line,
+        Icon::Undo,
+        Icon::Redo,
+        Icon::Save,
+        Icon::Annotate,
     ];
 
     #[test]

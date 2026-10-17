@@ -4,6 +4,7 @@
 use iced::keyboard::{self, Key, key::Named};
 
 use crate::Message;
+use crate::annotate;
 use crate::find::Event;
 
 pub fn map(event: keyboard::Event) -> Option<Message> {
@@ -16,6 +17,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     if modifiers.command() && modifiers.shift() {
         return match key.as_ref() {
             Key::Character("g" | "G") => Some(Message::Find(Event::Prev)),
+            Key::Character("z" | "Z") => Some(Message::Annotate(annotate::Event::Redo)),
+            Key::Character("s" | "S") => Some(Message::SaveAs),
             Key::Character("=" | "+") => Some(Message::RotateCw),
             Key::Character("-" | "_") => Some(Message::RotateCcw),
             _ => None,
@@ -33,6 +36,9 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("f") => Some(Message::Find(Event::Open)),
             Key::Character("g") => Some(Message::Find(Event::Next)),
             Key::Character("c") => Some(Message::Copy),
+            Key::Character("s") => Some(Message::Save),
+            Key::Character("z") => Some(Message::Annotate(annotate::Event::Undo)),
+            Key::Character("y") => Some(Message::Annotate(annotate::Event::Redo)),
             _ => None,
         };
     }
