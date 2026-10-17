@@ -236,13 +236,12 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
                 .get::<Array<'_>>(b"QuadPoints")
                 .map(|quads| {
                     let numbers: Vec<f64> = quads.iter::<f64>().take(MAX_AREAS * 8).collect();
-                    numbers
-                        .chunks_exact(8)
+                    let (quads, _) = numbers.as_chunks::<8>();
+                    quads
+                        .iter()
                         .filter_map(|q| {
-                            let corners: Vec<(f64, f64)> = q
-                                .chunks_exact(2)
-                                .filter_map(|p| Some((*p.first()?, *p.get(1)?)))
-                                .collect();
+                            let (points, _) = q.as_chunks::<2>();
+                            let corners: Vec<(f64, f64)> = points.iter().map(|&[x, y]| (x, y)).collect();
                             view_box(&corners)
                         })
                         .collect()
