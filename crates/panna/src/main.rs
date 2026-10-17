@@ -5,18 +5,23 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod layout;
+mod settings;
 mod shortcuts;
+mod toolbar;
 
 use std::path::PathBuf;
 
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
-    button, center, column, container, image, operation, row, scrollable, space, text, text_input,
+    button, center, column, container, image, opaque, operation, pin, row, scrollable, space, stack, text,
+    text_input,
 };
-use iced::{Center, Element, Fill, Length, Subscription, Task, event, window};
+use iced::{Center, Element, Fill, Length, Size, Subscription, Task, event, mouse, window};
 use panna_core::{DocumentInfo, Limits, OpenError, RenderError, RenderWorker, RenderedPage};
 
 use layout::{PAGE_GAP, PageLayout};
+use settings::Settings;
+use toolbar::{Dock, Toolbar};
 
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
@@ -37,12 +42,14 @@ fn main() -> iced::Result {
 
 /// Reverse-DNS app ID. On Linux it must match the `.desktop` file name so GNOME and KDE show
 /// the right icon and group windows correctly.
+const INITIAL_SIZE: Size = Size::new(1100.0, 850.0);
+
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const APP_ID: &str = "io.github.nishantnkumar_cell.Panna";
 
 fn window_settings() -> window::Settings {
     window::Settings {
-        size: iced::Size::new(1100.0, 850.0),
+        size: INITIAL_SIZE,
         min_size: Some(iced::Size::new(480.0, 360.0)),
         #[cfg(target_os = "linux")]
         platform_specific: window::settings::PlatformSpecific {
@@ -74,6 +81,8 @@ enum Message {
     NextPage,
     PageInput(String),
     PageSubmit,
+    Toolbar(toolbar::Event),
+    WindowResized(Size),
     Ignore,
 }
 
@@ -85,6 +94,9 @@ struct App {
     scale_factor: f32,
     viewport: ViewportState,
     page_input: String,
+    settings: Settings,
+    toolbar: Toolbar,
+    window_size: Size,
 }
 
 enum Status {
@@ -124,6 +136,7 @@ fn scroll_id() -> iced::widget::Id {
 
 impl App {
     fn boot() -> (Self, Task<Message>) {
+        let settings = Settings::load();
         let mut app = Self {
             next_doc_id: 0,
             doc: None,
@@ -136,6 +149,9 @@ impl App {
                 height: 800.0,
             },
             page_input: String::new(),
+            toolbar: Toolbar::new(settings.toolbar_dock, settings.toolbar_pos),
+            settings,
+            window_size: INITIAL_SIZE,
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -163,12 +179,27 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, status, _window| match event {
+        let base = event::listen_with(|event, status, _window| match event {
             iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::FileChosen(Some(path))),
             iced::Event::Window(window::Event::Rescaled(factor)) => Some(Message::ScaleFactor(factor)),
+            iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size)),
             iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
             _ => None,
-        })
+        });
+        if !self.toolbar.dragging() {
+            return base;
+        }
+        // Follow the cursor anywhere in the window while a toolbar is being dragged.
+        let drag = event::listen_with(|event, _status, _window| match event {
+            iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                Some(Message::Toolbar(toolbar::Event::CursorMoved(position)))
+            }
+            iced::Event::Mouse(
+                mouse::Event::ButtonReleased(mouse::Button::Left) | mouse::Event::CursorLeft,
+            ) => Some(Message::Toolbar(toolbar::Event::Released)),
+            _ => None,
+        });
+        Subscription::batch([base, drag])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -288,6 +319,18 @@ impl App {
                     Some(index) => self.go_to_page(index),
                     None => Task::none(),
                 }
+            }
+            Message::Toolbar(event) => {
+                if self.toolbar.update(event, self.window_size) {
+                    self.settings.toolbar_dock = self.toolbar.dock;
+                    self.settings.toolbar_pos = self.toolbar.pos;
+                    self.settings.save();
+                }
+                Task::none()
+            }
+            Message::WindowResized(size) => {
+                self.window_size = size;
+                Task::none()
             }
         }
     }
@@ -420,23 +463,33 @@ impl App {
             .on_submit(Message::PageSubmit)
             .width(56);
 
-        let toolbar = row![
-            button("Open").on_press(Message::OpenDialog),
-            space::horizontal().width(16),
-            button("‹").on_press_maybe(has_doc.then_some(Message::PrevPage)),
-            page_box,
-            text(format!("of {page_count}")),
-            button("›").on_press_maybe(has_doc.then_some(Message::NextPage)),
-            space::horizontal().width(16),
-            button("−").on_press_maybe(has_doc.then_some(Message::ZoomOut)),
+        let gap = || space().width(10).height(10).into();
+        let items: Vec<Element<'_, Message>> = vec![
+            button("Open").on_press(Message::OpenDialog).into(),
+            gap(),
+            button("‹")
+                .on_press_maybe(has_doc.then_some(Message::PrevPage))
+                .into(),
+            page_box.into(),
+            text(format!("of {page_count}")).into(),
+            button("›")
+                .on_press_maybe(has_doc.then_some(Message::NextPage))
+                .into(),
+            gap(),
+            button("−")
+                .on_press_maybe(has_doc.then_some(Message::ZoomOut))
+                .into(),
             button(text(format!("{:.0}%", self.zoom * 100.0)))
-                .on_press_maybe(has_doc.then_some(Message::ZoomReset)),
-            button("+").on_press_maybe(has_doc.then_some(Message::ZoomIn)),
-            button("Fit width").on_press_maybe(has_doc.then_some(Message::FitWidth)),
-        ]
-        .spacing(6)
-        .align_y(Center)
-        .padding(8);
+                .on_press_maybe(has_doc.then_some(Message::ZoomReset))
+                .into(),
+            button("+")
+                .on_press_maybe(has_doc.then_some(Message::ZoomIn))
+                .into(),
+            button("Fit width")
+                .on_press_maybe(has_doc.then_some(Message::FitWidth))
+                .into(),
+        ];
+        let toolbar = self.toolbar.view(items, Message::Toolbar);
 
         let body: Element<'_, Message> = match (&self.status, &self.doc) {
             (Status::Error(e), _) => center(
@@ -461,7 +514,17 @@ impl App {
             .into(),
         };
 
-        column![toolbar, body].into()
+        match self.toolbar.dock {
+            Dock::Top => column![toolbar, body].into(),
+            Dock::Bottom => column![body, toolbar].into(),
+            Dock::Left => row![toolbar, body].into(),
+            Dock::Right => row![body, toolbar].into(),
+            Dock::Floating => stack![
+                body,
+                pin(opaque(toolbar)).x(self.toolbar.pos.x).y(self.toolbar.pos.y)
+            ]
+            .into(),
+        }
     }
 
     fn pages_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {

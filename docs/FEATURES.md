@@ -25,6 +25,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Full-screen / presentation mode | Later | |
 | Night mode / custom page colours (accessibility) | Later | |
 | Recent files list | V1 | Stored locally only |
+| Toolbars dock to any edge or float; position remembered | V1 | Done |
 | Print | Later | Uses OS print dialog |
 | Document properties (title, author, page size, PDF version) | V1 | |
 | Password-protected (encrypted) PDFs | V1 | Engine supports decryption; needs a password prompt |
