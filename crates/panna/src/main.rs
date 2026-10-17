@@ -265,7 +265,6 @@ impl App {
             hover: None,
             selecting: false,
         };
-        app.find.open = app.sidebar.showing_search();
         let scale = window::oldest()
             .and_then(window::scale_factor)
             .map(Message::ScaleFactor);
@@ -511,6 +510,9 @@ impl App {
             Message::CloseOverlays => {
                 if self.show_properties {
                     self.show_properties = false;
+                } else if self.find.open {
+                    self.find.open = false;
+                    self.find.rescan(&[]);
                 } else {
                     self.selection = None;
                 }
@@ -518,13 +520,9 @@ impl App {
             }
             Message::Sidebar(event) => {
                 if self.sidebar.update(event) {
-                    self.settings.sidebar_open = self.sidebar.open;
-                    self.settings.sidebar_side = self.sidebar.side;
-                    self.settings.sidebar_tab = self.sidebar.tab;
-                    self.settings.save();
+                    self.save_sidebar();
                 }
-                self.sync_search_panel();
-                Task::batch([self.request_thumbnails(), self.request_search_text()])
+                self.request_thumbnails()
             }
             Message::GoToPage(index) => self.go_to_page(index),
             Message::ThumbRendered {
@@ -671,15 +669,12 @@ impl App {
     fn find_event(&mut self, event: find::Event) -> Task<Message> {
         match event {
             find::Event::Open => {
-                // Search lives in the sidebar, as in Word's navigation pane.
-                if !self.sidebar.showing_search() {
-                    self.sidebar.open = true;
-                    self.sidebar.tab = sidebar::Tab::Search;
-                    self.settings.sidebar_open = true;
-                    self.settings.sidebar_tab = sidebar::Tab::Search;
-                    self.settings.save();
-                }
+                // Find lives in the navigation pane, as in Word: Ctrl+F opens the pane.
                 self.find.open = true;
+                if !self.sidebar.open {
+                    self.sidebar.open = true;
+                    self.save_sidebar();
+                }
                 // Start with the selected word, as most viewers do.
                 if let Some(text) = self
                     .selected_text()
@@ -695,12 +690,20 @@ impl App {
                     self.step_find(true),
                 ])
             }
-            find::Event::Select(i) => match self.find.select(i).cloned() {
-                Some(hit) => self.show_hit(hit),
-                None => Task::none(),
-            },
+            find::Event::Close => {
+                self.find.open = false;
+                self.find.query.clear();
+                self.rescan_find();
+                Task::none()
+            }
             find::Event::Query(query) => {
+                self.find.open = true;
                 self.find.query = query;
+                if self.find.active() && self.sidebar.tab != sidebar::Tab::Results {
+                    // Typing a search shows the results list, like Word.
+                    self.sidebar.tab = sidebar::Tab::Results;
+                    self.save_sidebar();
+                }
                 self.rescan_find();
                 Task::batch([self.request_search_text(), self.step_find(true)])
             }
@@ -721,7 +724,18 @@ impl App {
                 }
                 self.step_find(false)
             }
+            find::Event::Goto(index) => match self.find.select(index).cloned() {
+                Some(hit) => self.reveal_hit(&hit),
+                None => Task::none(),
+            },
         }
+    }
+
+    fn save_sidebar(&mut self) {
+        self.settings.sidebar_open = self.sidebar.open;
+        self.settings.sidebar_side = self.sidebar.side;
+        self.settings.sidebar_tab = self.sidebar.tab;
+        self.settings.save();
     }
 
     fn rescan_find(&mut self) {
@@ -734,23 +748,14 @@ impl App {
     /// Moves to the next or previous match and scrolls it into view.
     fn step_find(&mut self, forward: bool) -> Task<Message> {
         let from = self.current_page();
-        let Some(hit) = self.find.step(forward, from).cloned() else {
-            return Task::none();
-        };
-        self.show_hit(hit)
-    }
-
-    /// Search results are highlighted only while the search panel is showing.
-    fn sync_search_panel(&mut self) {
-        let showing = self.sidebar.showing_search();
-        if showing != self.find.open {
-            self.find.open = showing;
-            self.rescan_find();
+        match self.find.step(forward, from).cloned() {
+            Some(hit) => self.reveal_hit(&hit),
+            None => Task::none(),
         }
     }
 
-    /// Scrolls a search result into view, unless it is already comfortably visible.
-    fn show_hit(&mut self, hit: find::Hit) -> Task<Message> {
+    /// Scrolls a search match into view unless it is already comfortably on screen.
+    fn reveal_hit(&mut self, hit: &find::Hit) -> Task<Message> {
         let Some(text) = self.page_text(hit.page) else {
             return Task::none();
         };
@@ -1202,11 +1207,8 @@ impl App {
             thumbs_images: &doc.thumbs,
             outline: &doc.info.outline,
             current: self.current_page(),
-            search: self.sidebar.showing_search().then(|| {
-                let total = doc.texts.len();
-                let searched = doc.texts.iter().filter(|t| t.text.is_some()).count();
-                self.find.panel(&doc.texts, searched, total)
-            }),
+            find: &self.find,
+            texts: &doc.texts,
         });
         match self.sidebar.side {
             sidebar::Side::Left => row![bar, pages].into(),

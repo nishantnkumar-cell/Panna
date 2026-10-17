@@ -1,16 +1,19 @@
-//! The navigation sidebar: page thumbnails and bookmarks, docked to the left or right edge.
+//! The navigation sidebar, modelled on Word's navigation pane: a search box on top, then
+//! Bookmarks, Pages (thumbnails) and Results tabs. Docks to the left or right edge.
 
 use std::ops::Range;
 
 use iced::widget::scrollable::Viewport;
-use iced::widget::{Column, button, column, container, image, row, scrollable, space, text};
+use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
 use iced::{Center, Element, Fill, Length, Theme};
 use panna_core::{OutlineItem, PageSize};
 
 use crate::Message;
+use crate::find::Find;
 use crate::icons::{self, Icon};
+use crate::selection::TextSlot;
 
-pub const WIDTH: f32 = 240.0;
+pub const WIDTH: f32 = 248.0;
 /// Widest thumbnail; tall pages are narrower so no thumbnail exceeds `THUMB_MAX_H`.
 pub const THUMB_W: f32 = 132.0;
 const THUMB_MAX_H: f32 = 200.0;
@@ -25,7 +28,7 @@ pub enum Tab {
     #[default]
     Thumbnails,
     Bookmarks,
-    Search,
+    Results,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,7 +60,7 @@ impl Tab {
         match self {
             Tab::Thumbnails => "thumbnails",
             Tab::Bookmarks => "bookmarks",
-            Tab::Search => "search",
+            Tab::Results => "results",
         }
     }
 
@@ -65,7 +68,7 @@ impl Tab {
         match s {
             "thumbnails" => Some(Tab::Thumbnails),
             "bookmarks" => Some(Tab::Bookmarks),
-            "search" => Some(Tab::Search),
+            "results" => Some(Tab::Results),
             _ => None,
         }
     }
@@ -190,46 +193,78 @@ pub struct ViewData<'a> {
     pub thumbs_images: &'a [crate::Thumb],
     pub outline: &'a [OutlineItem],
     pub current: usize,
-    /// The search panel, built only while the search tab is showing.
-    pub search: Option<Element<'a, Message>>,
+    pub find: &'a Find,
+    pub texts: &'a [TextSlot],
 }
 
 impl Sidebar {
-    /// Whether the search panel is on screen.
-    pub fn showing_search(&self) -> bool {
-        self.open && self.tab == Tab::Search
-    }
-
-    pub fn view<'a>(&self, mut data: ViewData<'a>) -> Element<'a, Message> {
+    pub fn view<'a>(&self, data: ViewData<'a>) -> Element<'a, Message> {
         let ev = Message::Sidebar;
-        let tab_button = |tab: Tab, icon: Icon, tip: &str| {
-            // The active tab shows disabled, like a selected segment.
-            icons::button(
-                icon,
-                tip.to_owned(),
-                (self.tab != tab).then(|| ev(Event::Tab(tab))),
-            )
+        // Word-style text tabs; the open one is underlined in the accent colour.
+        let tab_button = |tab: Tab, label: &'static str| {
+            let active = self.tab == tab;
+            button(text(label).size(13))
+                .padding([4, 8])
+                .style(move |theme: &Theme, status| {
+                    let palette = theme.extended_palette();
+                    let mut style = button::text(theme, status);
+                    if active {
+                        style.text_color = palette.primary.strong.color;
+                        style.border = iced::Border {
+                            color: palette.primary.strong.color,
+                            width: 0.0,
+                            radius: 0.0.into(),
+                        };
+                    }
+                    style
+                })
+                .on_press(ev(Event::Tab(tab)))
         };
+        let underline = |tab: Tab| {
+            let active = self.tab == tab;
+            container(space().height(2).width(Fill)).style(move |theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style::default().background(if active {
+                    palette.primary.strong.color
+                } else {
+                    iced::Color::TRANSPARENT
+                })
+            })
+        };
+        let tab =
+            |t: Tab, label: &'static str| column![tab_button(t, label), underline(t)].width(iced::Shrink);
         let side_tip = match self.side {
             Side::Left => "Move sidebar to the right",
             Side::Right => "Move sidebar to the left",
         };
-        let header = row![
-            tab_button(Tab::Thumbnails, Icon::Thumbnails, "Page thumbnails"),
-            tab_button(Tab::Bookmarks, Icon::Bookmarks, "Bookmarks"),
-            tab_button(Tab::Search, Icon::Search, &format!("Search ({}F)", icons::MOD)),
+        let title = row![
+            text("Navigation").size(14),
             space::horizontal(),
             icons::button(Icon::SwapSide, side_tip, Some(ev(Event::SwapSide))),
             icons::button(Icon::Close, "Hide sidebar (F4)", Some(ev(Event::Toggle))),
         ]
         .spacing(2)
-        .padding([4, 6])
+        .padding([4, 8])
         .align_y(Center);
+        let searched = data.texts.iter().filter(|t| t.text.is_some()).count();
+        let tabs = row![
+            tab(Tab::Bookmarks, "Bookmarks"),
+            tab(Tab::Thumbnails, "Pages"),
+            tab(Tab::Results, "Results"),
+        ]
+        .spacing(2)
+        .padding([0, 6]);
+        let header = column![
+            title,
+            data.find.search_box(searched, data.texts.len()),
+            tabs,
+            rule::horizontal(1),
+        ];
 
         let content = match self.tab {
             Tab::Thumbnails => self.thumbnails(&data),
-            Tab::Bookmarks => bookmarks(data.outline),
-            Tab::Search => data.search.take().unwrap_or_else(|| space().into()),
+            Tab::Bookmarks => bookmarks(data.outline, data.find),
+            Tab::Results => data.find.results(data.texts),
         };
         container(column![header, content])
             .width(WIDTH)
@@ -266,9 +301,33 @@ impl Sidebar {
                                 radius: 2.0.into(),
                             })
                     });
-            let entry = column![frame, text((index + 1).to_string()).size(12).height(LABEL_H)]
-                .align_x(Center)
-                .spacing(2);
+            // While searching, pages with results say how many, like Word's filtered Pages tab.
+            let found = if data.find.active() {
+                data.find.count_in(index..index + 1)
+            } else {
+                0
+            };
+            let label: Element<'a, Message> = if found > 0 {
+                row![
+                    text((index + 1).to_string()).size(12),
+                    container(text(found.to_string()).size(10))
+                        .padding([0, 5])
+                        .style(|theme: &Theme| {
+                            let palette = theme.extended_palette();
+                            container::Style::default()
+                                .background(palette.primary.strong.color)
+                                .color(palette.primary.strong.text)
+                                .border(iced::Border::default().rounded(8))
+                        }),
+                ]
+                .spacing(4)
+                .align_y(Center)
+                .height(LABEL_H)
+                .into()
+            } else {
+                text((index + 1).to_string()).size(12).height(LABEL_H).into()
+            };
+            let entry = column![frame, label].align_x(Center).spacing(2);
             button(entry)
                 .padding(0)
                 .style(button::text)
@@ -289,7 +348,18 @@ impl Sidebar {
     }
 }
 
-fn bookmarks(outline: &[OutlineItem]) -> Element<'_, Message> {
+/// Pages covered by bookmark `i`: from its page up to the next bookmark's page.
+fn section(outline: &[OutlineItem], i: usize) -> Option<std::ops::Range<usize>> {
+    let start = outline.get(i)?.page?;
+    let end = outline
+        .iter()
+        .skip(i + 1)
+        .find_map(|item| item.page.filter(|&p| p > start))
+        .unwrap_or(start + 1);
+    Some(start..end)
+}
+
+fn bookmarks<'a>(outline: &'a [OutlineItem], find: &Find) -> Element<'a, Message> {
     if outline.is_empty() {
         return container(
             text("This document has no bookmarks.")
@@ -299,29 +369,43 @@ fn bookmarks(outline: &[OutlineItem]) -> Element<'_, Message> {
         .padding(PAD)
         .into();
     }
-    let items = outline.iter().map(|item| {
+    let items = outline.iter().enumerate().map(|(i, item)| {
         let title = if item.title.is_empty() {
             "(untitled)"
         } else {
             item.title.as_str()
         };
         let indent = f32::from(item.depth.min(8)) * 12.0;
+        // Like Word's Headings tab, sections that contain search results are highlighted.
+        let found = find.active() && section(outline, i).is_some_and(|pages| find.count_in(pages) > 0);
         let label = text(title).size(13).wrapping(text::Wrapping::WordOrGlyph);
         row![
             space().width(indent),
             button(label)
                 .padding([3, 6])
                 .width(Length::Fill)
-                .style(button::text)
+                .style(move |theme: &Theme, status| {
+                    let mut style = button::text(theme, status);
+                    if found {
+                        let palette = theme.extended_palette();
+                        style.background = Some(palette.primary.weak.color.into());
+                        style.text_color = palette.primary.weak.text;
+                    }
+                    style
+                })
                 .on_press_maybe(item.page.map(Message::GoToPage)),
         ]
         .into()
     });
-    scrollable(Column::with_children(items).padding([4, 6]).width(Fill))
-        .height(Fill)
-        .into()
+    scrollable(
+        Column::with_children(items)
+            .spacing(1)
+            .padding([4, 6])
+            .width(Fill),
+    )
+    .height(Fill)
+    .into()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +449,26 @@ mod tests {
         let range = layout.visible(top_50 + 1.0, 300.0);
         assert!(range.contains(&50) && range.end <= 53);
         assert_eq!(ThumbLayout::default().visible(0.0, 100.0), 0..0);
+    }
+
+    #[test]
+    fn bookmark_sections_run_to_the_next_bookmark() {
+        let item = |page: Option<usize>| OutlineItem {
+            title: String::new(),
+            depth: 0,
+            page,
+        };
+        let outline = [
+            item(Some(2)),
+            item(None),
+            item(Some(2)),
+            item(Some(7)),
+            item(Some(9)),
+        ];
+        assert_eq!(section(&outline, 0), Some(2..7));
+        assert_eq!(section(&outline, 1), None);
+        assert_eq!(section(&outline, 3), Some(7..9));
+        assert_eq!(section(&outline, 4), Some(9..10));
     }
 
     #[test]

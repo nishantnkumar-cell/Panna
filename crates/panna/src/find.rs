@@ -1,10 +1,11 @@
-//! Document search: matches every page's text as it is extracted, steps through the matches,
-//! and lists them with their context in the sidebar.
+//! The find bar: searches every page's text as it is extracted, and steps through matches.
 
 use std::ops::Range;
 
-use iced::widget::{Column, button, column, rich_text, row, scrollable, space, span, text, text_input};
-use iced::{Center, Element, Fill, Font, Theme, font};
+use iced::widget::{
+    Column, button, column, container, rich_text, row, scrollable, space, span, text, text_input,
+};
+use iced::{Center, Color, Element, Fill, Theme};
 use panna_core::{FindOptions, PageText};
 
 use crate::Message;
@@ -14,38 +15,14 @@ use crate::selection::TextSlot;
 #[derive(Debug, Clone)]
 pub enum Event {
     Open,
+    Close,
     Query(String),
     MatchCase,
     WholeWord,
     Next,
     Prev,
-    Select(usize),
-}
-
-/// Results listed in the panel. More are still highlighted and reachable with Next.
-const MAX_LISTED: usize = 500;
-/// Characters of context shown on each side of a match.
-const CONTEXT: usize = 32;
-
-/// The text around a match, on one line: (before, match, after).
-fn snippet(text: &PageText, range: Range<usize>) -> (String, String, String) {
-    let clean = |s: String| s.replace('\n', " ");
-    let start = range.start.saturating_sub(CONTEXT);
-    let mut before = clean(text.slice(start..range.start));
-    if start > 0 {
-        // Start at a word boundary.
-        if let Some(space) = before.find(' ') {
-            before = format!("…{}", &before[space + 1..]);
-        }
-    }
-    let end = range.end + CONTEXT;
-    let mut after = clean(text.slice(range.end..end));
-    if end < text.len()
-        && let Some(space) = after.rfind(' ')
-    {
-        after = format!("{}…", &after[..space]);
-    }
-    (before, clean(text.slice(range)), after)
+    /// Jump to match number `n` (from the Results list).
+    Goto(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,8 +41,41 @@ pub struct Find {
     current: Option<usize>,
 }
 
+/// Highlight behind matched text in the Results list, like a highlighter pen.
+const MATCH: Color = Color::from_rgb8(0xFF, 0xD8, 0x4D);
+/// Characters of context shown on each side of a match in the Results list.
+const CONTEXT: usize = 40;
+/// Results listed at most; the count and stepping still cover every match.
+const MAX_LISTED: usize = 500;
+
 pub fn input_id() -> iced::widget::Id {
     iced::widget::Id::new("find")
+}
+
+fn results_id() -> iced::widget::Id {
+    iced::widget::Id::new("find-results")
+}
+
+fn note(message: &str) -> Element<'_, Message> {
+    container(text(message).size(13).style(text::secondary))
+        .padding(12)
+        .into()
+}
+
+/// Joins lines with spaces and trims context to whole words, with an ellipsis where cut.
+fn tidy(s: &str, leading: bool) -> String {
+    let flat: String = s
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect();
+    if s.chars().count() < CONTEXT {
+        return flat;
+    }
+    match (leading, flat.find(' '), flat.rfind(' ')) {
+        (true, Some(cut), _) => format!("…{}", &flat[cut..]),
+        (false, _, Some(cut)) if cut > 0 => format!("{}…", &flat[..cut]),
+        _ => flat,
+    }
 }
 
 impl Find {
@@ -152,11 +162,23 @@ impl Find {
         self.current.is_none() && !self.hits.is_empty()
     }
 
-    /// The search panel in the sidebar: a search box, options, and every match with the text
-    /// around it, as in Word's navigation pane.
-    pub fn panel<'a>(&'a self, texts: &'a [TextSlot], searched: usize, total: usize) -> Element<'a, Message> {
-        let ev = |e: Event| Message::Find(e);
-        let status = if !self.active() {
+    /// Makes match `index` current. Returns it, or `None` if there is no such match.
+    pub fn select(&mut self, index: usize) -> Option<&Hit> {
+        let hit = self.hits.get(index)?;
+        self.current = Some(index);
+        Some(hit)
+    }
+
+    /// Number of matches on pages in `pages`.
+    pub fn count_in(&self, pages: Range<usize>) -> usize {
+        let start = self.hits.partition_point(|h| h.page < pages.start);
+        let end = self.hits.partition_point(|h| h.page < pages.end);
+        end.saturating_sub(start)
+    }
+
+    /// "Result 3 of 27", "Searching… 40%", "No matches", as in Word's navigation pane.
+    pub fn status(&self, searched: usize, total: usize) -> String {
+        if !self.active() {
             String::new()
         } else if self.hits.is_empty() && searched < total {
             format!("Searching… {}%", searched * 100 / total.max(1))
@@ -168,15 +190,31 @@ impl Find {
                 Some(c) => format!("Result {} of {}{more}", c + 1, self.hits.len()),
                 None => format!("{}{more} results", self.hits.len()),
             }
-        };
+        }
+    }
+
+    /// The search box at the top of the navigation pane, with the match count, options and
+    /// previous/next buttons underneath.
+    pub fn search_box(&self, searched: usize, total: usize) -> Element<'_, Message> {
+        let ev = |e: Event| Message::Find(e);
         let has_hits = !self.hits.is_empty();
         let input = text_input("Search document", &self.query)
             .id(input_id())
             .on_input(move |q| ev(Event::Query(q)))
             .on_submit(ev(Event::Next))
-            .size(13)
-            .padding([4, 6]);
+            .padding([5, 8])
+            .width(Fill);
+        let clear = (!self.query.is_empty())
+            .then(|| icons::button(Icon::Close, "Clear search (Esc)", Some(ev(Event::Close))));
+        let field = row![icons::glyph::<Message>(Icon::Search, true), input]
+            .push(clear.unwrap_or_else(|| space().into()))
+            .spacing(4)
+            .align_y(Center);
         let controls = row![
+            text(self.status(searched, total))
+                .size(12)
+                .style(text::secondary)
+                .width(Fill),
             icons::toggle(
                 Icon::MatchCase,
                 "Match case",
@@ -189,7 +227,6 @@ impl Find {
                 self.options.whole_word,
                 ev(Event::WholeWord)
             ),
-            space::horizontal(),
             icons::button(
                 Icon::FindPrev,
                 "Previous result (Shift+F3)",
@@ -203,80 +240,73 @@ impl Find {
         ]
         .spacing(2)
         .align_y(Center);
+        column![field, controls].spacing(4).padding([6, 8]).into()
+    }
 
-        let mut list = Column::new().spacing(2);
-        for (i, hit) in self.hits.iter().enumerate().take(MAX_LISTED) {
-            let Some(page_text) = texts.get(hit.page).and_then(|t| t.text.as_deref()) else {
-                continue;
-            };
-            let (before, found, after) = snippet(page_text, hit.range.clone());
-            let current = self.current == Some(i);
-            let line: text::Rich<'_, (), Message> = rich_text![
-                span(before),
-                span(found).font(Font {
-                    weight: font::Weight::Bold,
-                    ..Font::DEFAULT
-                }),
-                span(after),
-            ]
-            .size(12);
-            let entry = column![
-                text(format!("Page {}", hit.page + 1))
-                    .size(11)
-                    .style(text::secondary),
-                line
-            ]
-            .spacing(1);
-            list = list.push(
-                button(entry)
-                    .padding([4, 6])
-                    .width(Fill)
-                    .style(move |theme: &Theme, status| {
-                        let palette = theme.extended_palette();
-                        let background = if current {
-                            Some(palette.primary.weak.color.into())
-                        } else if matches!(status, button::Status::Hovered) {
-                            Some(palette.background.strong.color.into())
-                        } else {
-                            None
-                        };
-                        button::Style {
-                            background,
-                            text_color: palette.background.base.text,
-                            border: iced::Border {
-                                radius: 4.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }
-                    })
-                    .on_press(ev(Event::Select(i))),
-            );
+    /// The Results tab: one entry per match with surrounding text, the match highlighted as on the page.
+    pub fn results<'a>(&'a self, texts: &'a [TextSlot]) -> Element<'a, Message> {
+        if !self.active() {
+            return note("Type in the search box to find text in this document.");
         }
+        if self.hits.is_empty() {
+            return note("No results yet.");
+        }
+        // ponytail: shows the first MAX_LISTED results; a virtualised list if people need more.
+        let shown = self.hits.iter().enumerate().take(MAX_LISTED).map(|(i, hit)| {
+            let Some(page) = texts.get(hit.page).and_then(|t| t.text.as_ref()) else {
+                return space().into();
+            };
+            let before = page.slice(hit.range.start.saturating_sub(CONTEXT)..hit.range.start);
+            let after = page.slice(hit.range.end..hit.range.end + CONTEXT);
+            let snippet: text::Rich<'_, (), Message> = rich_text![
+                span(tidy(&before, true)),
+                span(page.slice(hit.range.clone()).replace('\n', " "))
+                    .background(MATCH)
+                    .color(Color::BLACK),
+                span(tidy(&after, false)),
+            ]
+            .size(13)
+            .wrapping(text::Wrapping::WordOrGlyph);
+            let current = self.current == Some(i);
+            button(
+                column![
+                    text(format!("Page {}", hit.page + 1))
+                        .size(11)
+                        .style(text::secondary),
+                    snippet
+                ]
+                .spacing(2),
+            )
+            .width(Fill)
+            .padding([6, 8])
+            .style(move |theme: &Theme, status| {
+                let mut style = button::text(theme, status);
+                if current {
+                    let palette = theme.extended_palette();
+                    style.background = Some(palette.primary.weak.color.into());
+                    style.text_color = palette.primary.weak.text;
+                }
+                style
+            })
+            .on_press(Message::Find(Event::Goto(i)))
+            .into()
+        });
+        let mut list = Column::with_children(shown)
+            .spacing(2)
+            .padding([4, 6])
+            .width(Fill);
         if self.hits.len() > MAX_LISTED {
             list = list.push(
-                text(format!("Showing the first {MAX_LISTED} results."))
-                    .size(11)
-                    .style(text::secondary),
+                text(format!(
+                    "Showing the first {MAX_LISTED} of {} results.",
+                    self.hits.len()
+                ))
+                .size(12)
+                .style(text::secondary),
             );
         }
-        column![
-            column![input, controls, text(status).size(12).style(text::secondary)]
-                .spacing(4)
-                .padding([4, 8]),
-            scrollable(list.padding([0, 6])).height(Fill),
-        ]
-        .spacing(2)
-        .into()
+        scrollable(list).id(results_id()).height(Fill).into()
     }
-
-    /// Makes result `i` current. Returns it.
-    pub fn select(&mut self, i: usize) -> Option<&Hit> {
-        let hit = self.hits.get(i)?;
-        self.current = Some(i);
-        Some(hit)
-    }
-
     pub fn update_options(&mut self, event: &Event) {
         match event {
             Event::MatchCase => self.options.match_case = !self.options.match_case,
@@ -316,6 +346,23 @@ mod tests {
         assert_eq!(f.step(false, 0).map(|h| h.page), Some(4));
         let mut f = find_with(&[(1, 0)]);
         assert_eq!(f.step(true, 9).map(|h| h.page), Some(1));
+    }
+
+    #[test]
+    fn counts_matches_in_a_page_range() {
+        let f = find_with(&[(1, 0), (4, 0), (4, 9), (8, 2)]);
+        assert_eq!(f.count_in(0..4), 1);
+        assert_eq!(f.count_in(4..5), 2);
+        assert_eq!(f.count_in(2..100), 3);
+        assert_eq!(f.count_in(5..5), 0);
+    }
+
+    #[test]
+    fn snippets_cut_at_word_boundaries() {
+        let long = "alpha beta gamma delta epsilon zeta eta theta";
+        assert_eq!(tidy(long, true), "… beta gamma delta epsilon zeta eta theta");
+        assert_eq!(tidy(long, false), "alpha beta gamma delta epsilon zeta eta…");
+        assert_eq!(tidy("short\nline", true), "short line");
     }
 
     #[test]
