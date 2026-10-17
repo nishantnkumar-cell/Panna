@@ -109,12 +109,10 @@ pub fn glyph<'a, M: 'a>(icon: Icon, enabled: bool) -> Element<'a, M> {
     svg(svg::Handle::from_memory(icon.bytes()))
         .width(ICON_SIZE)
         .height(ICON_SIZE)
-        .style(move |theme: &Theme, _status| {
-            let mut color = theme.palette().text;
-            if !enabled {
-                color.a = 0.35;
-            }
-            svg::Style { color: Some(color) }
+        // The tint's alpha is ignored by the software renderer, so dimming uses opacity.
+        .opacity(if enabled { 1.0_f32 } else { 0.35 })
+        .style(|theme: &Theme, _status| svg::Style {
+            color: Some(theme.palette().text),
         })
         .into()
 }

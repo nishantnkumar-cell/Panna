@@ -39,16 +39,16 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Highlight, underline, strikethrough text | V1 | |
-| Sticky notes | V1 | |
-| Free text / text box comments | V1 | |
-| Freehand drawing (ink) | V1 | |
-| Shapes: rectangle, ellipse, line, arrow, polygon, cloud | V1 | |
+| Highlight, underline, strikethrough text | V1 | Done; select text with the tool chosen, across pages |
+| Sticky notes | V1 | Done |
+| Free text / text box comments | V1 | Done; Helvetica, wrapped to the box |
+| Freehand drawing (ink) | V1 | Done |
+| Shapes: rectangle, ellipse, line, arrow, polygon, cloud | V1 | Rectangle, ellipse, line and arrow done; polygon and cloud later |
 | Stamps (Approved, Draft, custom image stamps) | Later | |
 | Comment list panel, replies, status (accepted/rejected) | V1 | Replies later |
-| Edit / move / delete annotations, colour and opacity | V1 | |
-| Undo / redo | V1 | |
-| Save annotations back into the PDF (standard annotations) | V1 | Readable by Acrobat and other viewers |
+| Edit / move / delete annotations, colour and opacity | V1 | Six-colour palette per tool done; editing existing ones next |
+| Undo / redo | V1 | Done (Ctrl+Z, Ctrl+Y) |
+| Save annotations back into the PDF (standard annotations) | V1 | Done (Ctrl+S, Ctrl+Shift+S) as an incremental update with appearance streams, so other viewers show them; asks before closing with unsaved changes. Saving into encrypted PDFs not yet supported |
 | Import / export comments (FDF, XFDF) | Later | |
 | Flatten annotations | Later | |
 | Shared review / cloud commenting | Skip | Online |

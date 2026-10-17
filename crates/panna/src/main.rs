@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
-    button, center, column, container, image, mouse_area, opaque, operation, pin, row, scrollable, space,
-    stack, text, text_input,
+    Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, scrollable,
+    space, stack, text, text_input,
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
@@ -1447,49 +1447,47 @@ impl App {
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.pages_view(doc);
-                let pages = if self.annotate.open {
-                    row![container(self.annotate.rail()).padding(6), pages].into()
+                // The row is there either way, so opening the rail doesn't move the pages in
+                // the widget tree and reset their scroll position.
+                let rail: Element<'_, Message> = if self.annotate.open {
+                    container(self.annotate.rail()).padding(6).into()
                 } else {
-                    pages
+                    space().into()
                 };
+                let pages = row![rail, pages].into();
                 self.with_sidebar(doc, pages)
             }
             _ => self.welcome_view(),
         };
-        let body = match (&self.doc, self.show_properties) {
-            (Some(doc), true) => stack![body, properties_view(&doc.info)].into(),
-            _ => body,
-        };
-        let body = match self.annotate.editor() {
-            Some(card) => stack![body, modal(card, Message::Annotate(annotate::Event::EditCancel))].into(),
-            None => body,
-        };
-        let body = if self.confirm.is_some() {
-            stack![body, modal(self.confirm_view(), Message::Confirm(Choice::Cancel))].into()
-        } else {
-            body
-        };
-        let body = match &self.notice {
-            Some(notice) => stack![
-                body,
-                modal(
-                    container(
-                        column![
-                            text(notice.as_str()),
-                            button("OK").on_press(Message::DismissNotice)
-                        ]
-                        .spacing(12)
-                        .width(360)
-                    )
-                    .padding(16)
-                    .style(container::rounded_box)
-                    .into(),
-                    Message::DismissNotice
+        // Overlays always go in one stack above the body, so opening or closing one doesn't
+        // move the body in the widget tree and reset its scroll position.
+        let mut layers = vec![body];
+        if let (Some(doc), true) = (&self.doc, self.show_properties) {
+            layers.push(properties_view(&doc.info));
+        }
+        if let Some(card) = self.annotate.editor() {
+            layers.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
+        }
+        if self.confirm.is_some() {
+            layers.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
+        }
+        if let Some(notice) = &self.notice {
+            layers.push(modal(
+                container(
+                    column![
+                        text(notice.as_str()),
+                        button("OK").on_press(Message::DismissNotice)
+                    ]
+                    .spacing(12)
+                    .width(360),
                 )
-            ]
-            .into(),
-            None => body,
-        };
+                .padding(16)
+                .style(container::rounded_box)
+                .into(),
+                Message::DismissNotice,
+            ));
+        }
+        let body: Element<'_, Message> = Stack::with_children(layers).into();
 
         match self.toolbar.dock {
             Dock::Top => column![toolbar, body].into(),
