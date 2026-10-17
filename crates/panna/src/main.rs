@@ -265,6 +265,7 @@ impl App {
             hover: None,
             selecting: false,
         };
+        app.find.open = app.sidebar.showing_search();
         let scale = window::oldest()
             .and_then(window::scale_factor)
             .map(Message::ScaleFactor);
@@ -510,9 +511,6 @@ impl App {
             Message::CloseOverlays => {
                 if self.show_properties {
                     self.show_properties = false;
-                } else if self.find.open {
-                    self.find.open = false;
-                    self.find.rescan(&[]);
                 } else {
                     self.selection = None;
                 }
@@ -525,7 +523,8 @@ impl App {
                     self.settings.sidebar_tab = self.sidebar.tab;
                     self.settings.save();
                 }
-                self.request_thumbnails()
+                self.sync_search_panel();
+                Task::batch([self.request_thumbnails(), self.request_search_text()])
             }
             Message::GoToPage(index) => self.go_to_page(index),
             Message::ThumbRendered {
@@ -672,6 +671,14 @@ impl App {
     fn find_event(&mut self, event: find::Event) -> Task<Message> {
         match event {
             find::Event::Open => {
+                // Search lives in the sidebar, as in Word's navigation pane.
+                if !self.sidebar.showing_search() {
+                    self.sidebar.open = true;
+                    self.sidebar.tab = sidebar::Tab::Search;
+                    self.settings.sidebar_open = true;
+                    self.settings.sidebar_tab = sidebar::Tab::Search;
+                    self.settings.save();
+                }
                 self.find.open = true;
                 // Start with the selected word, as most viewers do.
                 if let Some(text) = self
@@ -688,11 +695,10 @@ impl App {
                     self.step_find(true),
                 ])
             }
-            find::Event::Close => {
-                self.find.open = false;
-                self.rescan_find();
-                Task::none()
-            }
+            find::Event::Select(i) => match self.find.select(i).cloned() {
+                Some(hit) => self.show_hit(hit),
+                None => Task::none(),
+            },
             find::Event::Query(query) => {
                 self.find.query = query;
                 self.rescan_find();
@@ -731,6 +737,20 @@ impl App {
         let Some(hit) = self.find.step(forward, from).cloned() else {
             return Task::none();
         };
+        self.show_hit(hit)
+    }
+
+    /// Search results are highlighted only while the search panel is showing.
+    fn sync_search_panel(&mut self) {
+        let showing = self.sidebar.showing_search();
+        if showing != self.find.open {
+            self.find.open = showing;
+            self.rescan_find();
+        }
+    }
+
+    /// Scrolls a search result into view, unless it is already comfortably visible.
+    fn show_hit(&mut self, hit: find::Hit) -> Task<Message> {
         let Some(text) = self.page_text(hit.page) else {
             return Task::none();
         };
@@ -1125,20 +1145,6 @@ impl App {
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.pages_view(doc);
-                let pages = if self.find.open {
-                    let total = doc.texts.len();
-                    let searched = doc.texts.iter().filter(|t| t.text.is_some()).count();
-                    stack![
-                        pages,
-                        container(opaque(self.find.view(searched, total)))
-                            .width(Fill)
-                            .align_x(iced::Right)
-                            .padding([10, 28]),
-                    ]
-                    .into()
-                } else {
-                    pages
-                };
                 self.with_sidebar(doc, pages)
             }
             _ => self.welcome_view(),
@@ -1196,6 +1202,11 @@ impl App {
             thumbs_images: &doc.thumbs,
             outline: &doc.info.outline,
             current: self.current_page(),
+            search: self.sidebar.showing_search().then(|| {
+                let total = doc.texts.len();
+                let searched = doc.texts.iter().filter(|t| t.text.is_some()).count();
+                self.find.panel(&doc.texts, searched, total)
+            }),
         });
         match self.sidebar.side {
             sidebar::Side::Left => row![bar, pages].into(),

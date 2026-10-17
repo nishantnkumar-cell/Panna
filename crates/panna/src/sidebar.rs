@@ -10,7 +10,7 @@ use panna_core::{OutlineItem, PageSize};
 use crate::Message;
 use crate::icons::{self, Icon};
 
-pub const WIDTH: f32 = 200.0;
+pub const WIDTH: f32 = 240.0;
 /// Widest thumbnail; tall pages are narrower so no thumbnail exceeds `THUMB_MAX_H`.
 pub const THUMB_W: f32 = 132.0;
 const THUMB_MAX_H: f32 = 200.0;
@@ -25,6 +25,7 @@ pub enum Tab {
     #[default]
     Thumbnails,
     Bookmarks,
+    Search,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -56,6 +57,7 @@ impl Tab {
         match self {
             Tab::Thumbnails => "thumbnails",
             Tab::Bookmarks => "bookmarks",
+            Tab::Search => "search",
         }
     }
 
@@ -63,6 +65,7 @@ impl Tab {
         match s {
             "thumbnails" => Some(Tab::Thumbnails),
             "bookmarks" => Some(Tab::Bookmarks),
+            "search" => Some(Tab::Search),
             _ => None,
         }
     }
@@ -187,10 +190,17 @@ pub struct ViewData<'a> {
     pub thumbs_images: &'a [crate::Thumb],
     pub outline: &'a [OutlineItem],
     pub current: usize,
+    /// The search panel, built only while the search tab is showing.
+    pub search: Option<Element<'a, Message>>,
 }
 
 impl Sidebar {
-    pub fn view<'a>(&self, data: ViewData<'a>) -> Element<'a, Message> {
+    /// Whether the search panel is on screen.
+    pub fn showing_search(&self) -> bool {
+        self.open && self.tab == Tab::Search
+    }
+
+    pub fn view<'a>(&self, mut data: ViewData<'a>) -> Element<'a, Message> {
         let ev = Message::Sidebar;
         let tab_button = |tab: Tab, icon: Icon, tip: &str| {
             // The active tab shows disabled, like a selected segment.
@@ -207,6 +217,7 @@ impl Sidebar {
         let header = row![
             tab_button(Tab::Thumbnails, Icon::Thumbnails, "Page thumbnails"),
             tab_button(Tab::Bookmarks, Icon::Bookmarks, "Bookmarks"),
+            tab_button(Tab::Search, Icon::Search, &format!("Search ({}F)", icons::MOD)),
             space::horizontal(),
             icons::button(Icon::SwapSide, side_tip, Some(ev(Event::SwapSide))),
             icons::button(Icon::Close, "Hide sidebar (F4)", Some(ev(Event::Toggle))),
@@ -218,6 +229,7 @@ impl Sidebar {
         let content = match self.tab {
             Tab::Thumbnails => self.thumbnails(&data),
             Tab::Bookmarks => bookmarks(data.outline),
+            Tab::Search => data.search.take().unwrap_or_else(|| space().into()),
         };
         container(column![header, content])
             .width(WIDTH)

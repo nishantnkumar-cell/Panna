@@ -17,7 +17,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Page thumbnails sidebar | V1 | Done (F4); left or right edge, remembered |
 | Bookmarks / outline panel | V1 | Done; nested, click to jump |
 | Go to page, next/previous page | V1 | Done |
-| Text search (find, find next, match case, whole word) | V1 | Done (Ctrl+F, F3/Shift+F3); includes hidden OCR text |
+| Text search (find, find next, match case, whole word) | V1 | Done: search panel in the sidebar listing every result in context, like Word (Ctrl+F, F3/Shift+F3); includes hidden OCR text |
 | Select and copy text | V1 | Done; drag or double-click, Ctrl+C; across pages; Linux middle-click paste |
 | Copy image / snapshot tool | Later | |
 | Internal links and cross-references | V1 | |

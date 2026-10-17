@@ -1,9 +1,10 @@
-//! The find bar: searches every page's text as it is extracted, and steps through matches.
+//! Document search: matches every page's text as it is extracted, steps through the matches,
+//! and lists them with their context in the sidebar.
 
 use std::ops::Range;
 
-use iced::widget::{container, row, text, text_input};
-use iced::{Center, Element, Theme};
+use iced::widget::{Column, button, column, rich_text, row, scrollable, space, span, text, text_input};
+use iced::{Center, Element, Fill, Font, Theme, font};
 use panna_core::{FindOptions, PageText};
 
 use crate::Message;
@@ -13,12 +14,38 @@ use crate::selection::TextSlot;
 #[derive(Debug, Clone)]
 pub enum Event {
     Open,
-    Close,
     Query(String),
     MatchCase,
     WholeWord,
     Next,
     Prev,
+    Select(usize),
+}
+
+/// Results listed in the panel. More are still highlighted and reachable with Next.
+const MAX_LISTED: usize = 500;
+/// Characters of context shown on each side of a match.
+const CONTEXT: usize = 32;
+
+/// The text around a match, on one line: (before, match, after).
+fn snippet(text: &PageText, range: Range<usize>) -> (String, String, String) {
+    let clean = |s: String| s.replace('\n', " ");
+    let start = range.start.saturating_sub(CONTEXT);
+    let mut before = clean(text.slice(start..range.start));
+    if start > 0 {
+        // Start at a word boundary.
+        if let Some(space) = before.find(' ') {
+            before = format!("…{}", &before[space + 1..]);
+        }
+    }
+    let end = range.end + CONTEXT;
+    let mut after = clean(text.slice(range.end..end));
+    if end < text.len()
+        && let Some(space) = after.rfind(' ')
+    {
+        after = format!("{}…", &after[..space]);
+    }
+    (before, clean(text.slice(range)), after)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +152,9 @@ impl Find {
         self.current.is_none() && !self.hits.is_empty()
     }
 
-    pub fn view(&self, searched: usize, total: usize) -> Element<'_, Message> {
+    /// The search panel in the sidebar: a search box, options, and every match with the text
+    /// around it, as in Word's navigation pane.
+    pub fn panel<'a>(&'a self, texts: &'a [TextSlot], searched: usize, total: usize) -> Element<'a, Message> {
         let ev = |e: Event| Message::Find(e);
         let status = if !self.active() {
             String::new()
@@ -136,19 +165,18 @@ impl Find {
         } else {
             let more = if searched < total { "+" } else { "" };
             match self.current {
-                Some(c) => format!("{} of {}{more}", c + 1, self.hits.len()),
-                None => format!("{}{more} matches", self.hits.len()),
+                Some(c) => format!("Result {} of {}{more}", c + 1, self.hits.len()),
+                None => format!("{}{more} results", self.hits.len()),
             }
         };
         let has_hits = !self.hits.is_empty();
-        let bar = row![
-            icons::glyph::<Message>(Icon::Search, true),
-            text_input("Find in document", &self.query)
-                .id(input_id())
-                .on_input(move |q| ev(Event::Query(q)))
-                .on_submit(ev(Event::Next))
-                .width(200),
-            text(status).size(12).width(90).style(text::secondary),
+        let input = text_input("Search document", &self.query)
+            .id(input_id())
+            .on_input(move |q| ev(Event::Query(q)))
+            .on_submit(ev(Event::Next))
+            .size(13)
+            .padding([4, 6]);
+        let controls = row![
             icons::toggle(
                 Icon::MatchCase,
                 "Match case",
@@ -161,33 +189,92 @@ impl Find {
                 self.options.whole_word,
                 ev(Event::WholeWord)
             ),
+            space::horizontal(),
             icons::button(
                 Icon::FindPrev,
-                "Previous match (Shift+F3)",
+                "Previous result (Shift+F3)",
                 has_hits.then(|| ev(Event::Prev))
             ),
             icons::button(
                 Icon::FindNext,
-                "Next match (Enter or F3)",
+                "Next result (Enter or F3)",
                 has_hits.then(|| ev(Event::Next))
             ),
-            icons::button(Icon::Close, "Close (Esc)", Some(ev(Event::Close))),
         ]
-        .spacing(4)
+        .spacing(2)
         .align_y(Center);
-        container(bar)
-            .padding([4, 8])
-            .style(|theme: &Theme| {
-                let palette = theme.extended_palette();
-                container::Style::default()
-                    .background(palette.background.base.color)
-                    .border(iced::Border {
-                        color: palette.background.strong.color,
-                        width: 1.0,
-                        radius: 8.0.into(),
+
+        let mut list = Column::new().spacing(2);
+        for (i, hit) in self.hits.iter().enumerate().take(MAX_LISTED) {
+            let Some(page_text) = texts.get(hit.page).and_then(|t| t.text.as_deref()) else {
+                continue;
+            };
+            let (before, found, after) = snippet(page_text, hit.range.clone());
+            let current = self.current == Some(i);
+            let line: text::Rich<'_, (), Message> = rich_text![
+                span(before),
+                span(found).font(Font {
+                    weight: font::Weight::Bold,
+                    ..Font::DEFAULT
+                }),
+                span(after),
+            ]
+            .size(12);
+            let entry = column![
+                text(format!("Page {}", hit.page + 1))
+                    .size(11)
+                    .style(text::secondary),
+                line
+            ]
+            .spacing(1);
+            list = list.push(
+                button(entry)
+                    .padding([4, 6])
+                    .width(Fill)
+                    .style(move |theme: &Theme, status| {
+                        let palette = theme.extended_palette();
+                        let background = if current {
+                            Some(palette.primary.weak.color.into())
+                        } else if matches!(status, button::Status::Hovered) {
+                            Some(palette.background.strong.color.into())
+                        } else {
+                            None
+                        };
+                        button::Style {
+                            background,
+                            text_color: palette.background.base.text,
+                            border: iced::Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }
                     })
-            })
-            .into()
+                    .on_press(ev(Event::Select(i))),
+            );
+        }
+        if self.hits.len() > MAX_LISTED {
+            list = list.push(
+                text(format!("Showing the first {MAX_LISTED} results."))
+                    .size(11)
+                    .style(text::secondary),
+            );
+        }
+        column![
+            column![input, controls, text(status).size(12).style(text::secondary)]
+                .spacing(4)
+                .padding([4, 8]),
+            scrollable(list.padding([0, 6])).height(Fill),
+        ]
+        .spacing(2)
+        .into()
+    }
+
+    /// Makes result `i` current. Returns it.
+    pub fn select(&mut self, i: usize) -> Option<&Hit> {
+        let hit = self.hits.get(i)?;
+        self.current = Some(i);
+        Some(hit)
     }
 
     pub fn update_options(&mut self, event: &Event) {

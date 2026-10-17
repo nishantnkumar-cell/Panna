@@ -1,16 +1,23 @@
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 
-use crate::{Document, DocumentInfo, Limits, OpenError, PageText, RenderError, RenderedPage};
+use crate::{
+    Annotation, Document, DocumentInfo, Limits, OpenError, PageText, RenderError, RenderedPage, SaveError,
+};
 
 type OpenReply = Box<dyn FnOnce(Result<DocumentInfo, OpenError>) + Send>;
 type RenderReply = Box<dyn FnOnce(Result<RenderedPage, RenderError>) + Send>;
 type TextReply = Box<dyn FnOnce(Result<PageText, RenderError>) + Send>;
+type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 
 /// Work kinds, in the order a batch runs them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
+    /// Edits go first so that later renders show them.
+    Edit,
+    Save,
     Page,
     Thumbnail,
     Text,
@@ -23,6 +30,8 @@ enum Reply {
         reply: RenderReply,
     },
     Text(TextReply),
+    Edit(Vec<Annotation>, EditReply),
+    Save(PathBuf, EditReply),
 }
 
 struct Job {
@@ -91,6 +100,31 @@ impl RenderWorker {
         });
     }
 
+    /// Replaces the unsaved annotations. Pages render with them from then on; until saved,
+    /// the file on disk is untouched. Only the newest pending list is applied.
+    pub fn set_annotations(
+        &self,
+        annotations: Vec<Annotation>,
+        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: 0,
+            kind: Kind::Edit,
+            reply: Reply::Edit(annotations, Box::new(reply)),
+        });
+    }
+
+    /// Writes the document, with its annotations, to `path`. On success the annotations become
+    /// part of the document, so the next [`set_annotations`](Self::set_annotations) list
+    /// should start empty.
+    pub fn save(&self, path: PathBuf, reply: impl FnOnce(Result<(), SaveError>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: 0,
+            kind: Kind::Save,
+            reply: Reply::Save(path, Box::new(reply)),
+        });
+    }
+
     fn send(&self, index: usize, kind: Kind, scale: f32, rotation: u8, reply: RenderReply) {
         let _ = self.jobs.send(Job {
             index,
@@ -104,6 +138,40 @@ impl RenderWorker {
     }
 }
 
+enum Swap {
+    Edit(Vec<Annotation>, EditReply),
+    /// The live document was saved and becomes the base.
+    Promote,
+}
+
+/// Writes to a temporary file next to `path`, then renames it over `path`, so a failed write
+/// never leaves a half-written PDF behind.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
+    let io = |e: std::io::Error| SaveError::Io(e.to_string());
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| SaveError::Io("No file name".into()))?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(".panna-saving");
+    let tmp = dir.join(tmp_name);
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(io)
+}
+
 fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenReply, queue: Receiver<Job>) {
     let document = match Document::open(&path, password.as_deref(), limits) {
         Ok(document) => document,
@@ -114,41 +182,83 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
         Err(e) => return on_open(Err(e)),
     }
 
-    let cache = document.new_cache();
+    // `base` is the document as last saved; `live` adds the unsaved annotations to it.
+    let mut base = document;
+    let mut live: Option<Document> = None;
     let mut pending: Vec<Job> = Vec::new();
     loop {
-        if pending.is_empty() {
-            match queue.recv() {
-                Ok(job) => pending.push(job),
-                Err(_) => return,
-            }
-        }
-        // Collapse a burst of requests (fast scrolling, repeated zooms) so that only the
-        // newest request per page and kind is done. Superseded replies are dropped unanswered.
-        loop {
-            match queue.try_recv() {
-                Ok(job) => {
-                    pending.retain(|queued| queued.index != job.index || queued.kind != job.kind);
-                    pending.push(job);
+        let current = live.as_ref().unwrap_or(&base);
+        let cache = current.new_cache();
+        // Render from `current` until an edit or save needs to swap documents.
+        let swap = loop {
+            if pending.is_empty() {
+                match queue.recv() {
+                    Ok(job) => pending.push(job),
+                    Err(_) => return,
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return,
             }
-        }
-        // Stable sort: pages, then thumbnails, then text; otherwise in request order. Only one
-        // job runs before the queue is checked again, so new page renders overtake text work.
-        pending.sort_by_key(|job| job.kind);
-        let job = pending.remove(0);
-        match job.reply {
-            Reply::Render {
-                scale,
-                rotation,
-                reply,
-            } => {
-                let page = document.render_page(&cache, job.index, scale);
-                reply(page.map(|p| p.rotated(rotation)));
+            // Collapse a burst of requests (fast scrolling, repeated zooms) so that only the
+            // newest request per page and kind is done. Superseded replies are dropped unanswered.
+            loop {
+                match queue.try_recv() {
+                    Ok(job) => {
+                        pending.retain(|queued| queued.index != job.index || queued.kind != job.kind);
+                        pending.push(job);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return,
+                }
             }
-            Reply::Text(reply) => reply(document.page_text(job.index)),
+            // Stable sort: edits, saves, pages, thumbnails, then text; otherwise in request
+            // order. Only one job runs before the queue is checked again, so new page renders
+            // overtake text work.
+            pending.sort_by_key(|job| job.kind);
+            let job = pending.remove(0);
+            match job.reply {
+                Reply::Render {
+                    scale,
+                    rotation,
+                    reply,
+                } => {
+                    let page = current.render_page(&cache, job.index, scale);
+                    reply(page.map(|p| p.rotated(rotation)));
+                }
+                Reply::Text(reply) => reply(current.page_text(job.index)),
+                Reply::Save(path, reply) => {
+                    let result = write_atomically(&path, current.bytes());
+                    let saved = result.is_ok();
+                    reply(result);
+                    if saved && live.is_some() {
+                        break Swap::Promote;
+                    }
+                }
+                Reply::Edit(list, reply) => break Swap::Edit(list, reply),
+            }
+        };
+        drop(cache);
+        match swap {
+            Swap::Promote => {
+                if let Some(saved) = live.take() {
+                    base = saved;
+                }
+            }
+            Swap::Edit(list, reply) => {
+                if list.is_empty() {
+                    live = None;
+                    reply(Ok(()));
+                    continue;
+                }
+                let result = base.with_annotations(&list).and_then(|bytes| {
+                    Document::from_bytes(bytes, None, base.limits()).map_err(|_| SaveError::Damaged)
+                });
+                match result {
+                    Ok(doc) => {
+                        live = Some(doc);
+                        reply(Ok(()));
+                    }
+                    Err(e) => reply(Err(e)),
+                }
+            }
         }
     }
 }

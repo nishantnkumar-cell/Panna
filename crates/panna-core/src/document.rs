@@ -283,6 +283,10 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
+
     /// The bytes this document was opened from.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
