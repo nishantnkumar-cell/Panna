@@ -13,8 +13,8 @@ use std::path::PathBuf;
 
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
-    button, center, column, container, image, opaque, operation, pin, row, scrollable, space, stack, text,
-    text_input,
+    button, center, column, container, image, mouse_area, opaque, operation, pin, row, scrollable, space,
+    stack, text, text_input,
 };
 use iced::{Center, Element, Fill, Length, Size, Subscription, Task, event, mouse, window};
 use panna_core::{DocumentInfo, Limits, OpenError, PageSize, RenderError, RenderWorker, RenderedPage};
@@ -87,6 +87,10 @@ enum Message {
     PageSubmit,
     Toolbar(toolbar::Event),
     WindowResized(Size),
+    PasswordInput(String),
+    PasswordSubmit,
+    ToggleProperties,
+    CloseOverlays,
     Ignore,
 }
 
@@ -103,17 +107,25 @@ struct App {
     settings: Settings,
     toolbar: Toolbar,
     window_size: Size,
+    show_properties: bool,
 }
 
 enum Status {
     Idle,
     Loading(PathBuf),
     Error(String),
+    Password {
+        path: PathBuf,
+        input: String,
+        /// A password was tried and rejected.
+        wrong: bool,
+    },
 }
 
 struct OpenDoc {
     id: u64,
     path: PathBuf,
+    used_password: bool,
     info: DocumentInfo,
     worker: RenderWorker,
     layout: PageLayout,
@@ -140,6 +152,41 @@ fn scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("pages")
 }
 
+/// A card listing document properties, centred over the page view. Clicking outside closes it.
+fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
+    let rows = info.properties.iter().map(|(label, value)| {
+        row![
+            text(*label).width(110).style(text::secondary),
+            text(value.as_str()).width(Fill)
+        ]
+        .spacing(12)
+        .into()
+    });
+    let card = container(
+        column![
+            text("Document properties").size(18),
+            iced::widget::Column::with_children(rows).spacing(6),
+            button("Close").on_press(Message::ToggleProperties),
+        ]
+        .spacing(14)
+        .width(460),
+    )
+    .padding(20)
+    .style(container::rounded_box);
+    opaque(
+        mouse_area(
+            center(opaque(card)).style(|_| {
+                container::Style::default().background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.35))
+            }),
+        )
+        .on_press(Message::ToggleProperties),
+    )
+}
+
+fn password_id() -> iced::widget::Id {
+    iced::widget::Id::new("password")
+}
+
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
@@ -159,12 +206,13 @@ impl App {
             toolbar: Toolbar::new(settings.toolbar_dock, settings.toolbar_pos),
             settings,
             window_size: INITIAL_SIZE,
+            show_properties: false,
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
             .map(Message::ScaleFactor);
         let open = match std::env::args_os().nth(1) {
-            Some(arg) => app.open(PathBuf::from(arg)),
+            Some(arg) => app.open(PathBuf::from(arg), None),
             None => Task::none(),
         };
         (app, Task::batch([scale, open]))
@@ -222,7 +270,7 @@ impl App {
                 },
                 Message::FileChosen,
             ),
-            Message::FileChosen(Some(path)) => self.open(path),
+            Message::FileChosen(Some(path)) => self.open(path, None),
             Message::FileChosen(None) | Message::Ignore => Task::none(),
             Message::Opened(id, result) => {
                 let Some(doc) = self.doc.as_mut().filter(|d| d.id == id) else {
@@ -230,6 +278,8 @@ impl App {
                 };
                 match result {
                     Ok(info) => {
+                        self.settings.add_recent(doc.path.clone());
+                        self.settings.save();
                         self.rotation = 0;
                         doc.layout = PageLayout::new(&info.pages);
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
@@ -241,6 +291,15 @@ impl App {
                             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y: 0.0 }),
                             self.request_visible(),
                         ])
+                    }
+                    Err(OpenError::PasswordRequired) => {
+                        self.status = Status::Password {
+                            path: doc.path.clone(),
+                            input: String::new(),
+                            wrong: doc.used_password,
+                        };
+                        self.doc = None;
+                        operation::focus(password_id())
                     }
                     Err(e) => {
                         self.doc = None;
@@ -354,14 +413,37 @@ impl App {
                 self.window_size = size;
                 Task::none()
             }
+            Message::PasswordInput(value) => {
+                if let Status::Password { input, .. } = &mut self.status {
+                    *input = value;
+                }
+                Task::none()
+            }
+            Message::PasswordSubmit => {
+                let Status::Password { path, input, .. } = &mut self.status else {
+                    return Task::none();
+                };
+                let (path, password) = (path.clone(), std::mem::take(input));
+                self.open(path, Some(password))
+            }
+            Message::ToggleProperties => {
+                self.show_properties = !self.show_properties && self.doc.is_some();
+                Task::none()
+            }
+            Message::CloseOverlays => {
+                self.show_properties = false;
+                Task::none()
+            }
         }
     }
 
-    fn open(&mut self, path: PathBuf) -> Task<Message> {
+    fn open(&mut self, path: PathBuf, password: Option<String>) -> Task<Message> {
         let id = self.next_doc_id;
         self.next_doc_id += 1;
+        self.show_properties = false;
+        let used_password = password.is_some();
         let (tx, rx) = futures_channel::oneshot::channel();
-        let worker = match RenderWorker::open(path.clone(), None, Limits::default(), move |result| {
+        let worker = match RenderWorker::open(path.clone(), password, Limits::default(), move |result| {
             let _ = tx.send(result);
         }) {
             Ok(worker) => worker,
@@ -374,9 +456,11 @@ impl App {
         self.doc = Some(OpenDoc {
             id,
             path,
+            used_password,
             info: DocumentInfo {
                 pages: Vec::new(),
                 title: None,
+                properties: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -549,6 +633,10 @@ impl App {
             button("↻")
                 .on_press_maybe(has_doc.then_some(Message::RotateCw))
                 .into(),
+            gap(),
+            button("Properties")
+                .on_press_maybe(has_doc.then_some(Message::ToggleProperties))
+                .into(),
         ];
         let toolbar = self.toolbar.view(items, Message::Toolbar);
 
@@ -563,16 +651,39 @@ impl App {
             )
             .into(),
             (Status::Loading(path), _) => center(text(format!("Opening {}…", path.display()))).into(),
-            (Status::Idle, Some(doc)) if has_doc => self.pages_view(doc),
-            _ => center(
+            (Status::Password { path, input, wrong }, _) => center(
                 column![
-                    text("Open a PDF to get started").size(20),
-                    text("Use the Open button, press Ctrl+O, or drop a file on this window."),
+                    text(format!(
+                        "“{}” is password-protected.",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    )),
+                    text(if *wrong {
+                        "That password didn't work. Try again."
+                    } else {
+                        "Enter the password to open it."
+                    }),
+                    text_input("Password", input)
+                        .id(password_id())
+                        .secure(true)
+                        .on_input(Message::PasswordInput)
+                        .on_submit(Message::PasswordSubmit)
+                        .width(280),
+                    row![
+                        button("Open").on_press(Message::PasswordSubmit),
+                        button("Choose another file").on_press(Message::OpenDialog),
+                    ]
+                    .spacing(8),
                 ]
-                .spacing(8)
+                .spacing(12)
                 .align_x(Center),
             )
             .into(),
+            (Status::Idle, Some(doc)) if has_doc => self.pages_view(doc),
+            _ => self.welcome_view(),
+        };
+        let body = match (&self.doc, self.show_properties) {
+            (Some(doc), true) => stack![body, properties_view(&doc.info)].into(),
+            _ => body,
         };
 
         match self.toolbar.dock {
@@ -586,6 +697,32 @@ impl App {
             ]
             .into(),
         }
+    }
+
+    fn welcome_view(&self) -> Element<'_, Message> {
+        let mut content = column![
+            text("Open a PDF to get started").size(20),
+            text("Use the Open button, press Ctrl+O, or drop a file on this window."),
+        ]
+        .spacing(8)
+        .align_x(Center);
+        if !self.settings.recent.is_empty() {
+            content = content
+                .push(space().height(16))
+                .push(text("Recent files").size(16));
+            for path in &self.settings.recent {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                content = content.push(
+                    button(column![
+                        text(name).size(15),
+                        text(path.display().to_string()).size(11)
+                    ])
+                    .style(button::text)
+                    .on_press(Message::FileChosen(Some(path.clone()))),
+                );
+            }
+        }
+        center(scrollable(content)).into()
     }
 
     fn pages_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {

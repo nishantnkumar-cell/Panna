@@ -24,11 +24,11 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Tabs / multiple documents open | Later | |
 | Full-screen / presentation mode | Later | |
 | Night mode / custom page colours (accessibility) | Later | |
-| Recent files list | V1 | Stored locally only |
+| Recent files list | V1 | Done; stored locally only |
 | Toolbars dock to any edge or float; position remembered | V1 | Done |
 | Print | Later | Uses OS print dialog |
-| Document properties (title, author, page size, PDF version) | V1 | |
-| Password-protected (encrypted) PDFs | V1 | Engine supports decryption; needs a password prompt |
+| Document properties (title, author, page size, PDF version) | V1 | Done (Ctrl+D) |
+| Password-protected (encrypted) PDFs | V1 | Done |
 | Read-aloud | Later | Uses OS speech engine only |
 | Attachments panel (embedded files) | Later | |
 | Layers (optional content) toggle | Later | |

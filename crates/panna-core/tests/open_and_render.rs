@@ -89,6 +89,24 @@ fn rotation_moves_pixels_clockwise() {
 }
 
 #[test]
+fn encrypted_file_needs_the_right_password() {
+    let bytes = include_bytes!("fixtures/encrypted-rc4.pdf").to_vec();
+    for wrong in [None, Some("nope")] {
+        assert!(matches!(
+            Document::from_bytes(bytes.clone(), wrong, Limits::default()),
+            Err(OpenError::PasswordRequired)
+        ));
+    }
+    let doc = Document::from_bytes(bytes, Some("secret"), Limits::default()).unwrap();
+    let cache = doc.new_cache();
+    let page = doc.render_page(&cache, 0, 1.0).unwrap();
+    assert!(
+        page.rgba.as_chunks::<4>().0.iter().any(|px| px[0] < 128),
+        "decrypted text draws dark pixels"
+    );
+}
+
+#[test]
 fn missing_page_is_an_error() {
     let doc = Document::from_bytes(sample_pdf(1), None, Limits::default()).unwrap();
     let cache = doc.new_cache();

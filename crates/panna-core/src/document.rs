@@ -25,6 +25,8 @@ pub struct PageSize {
 pub struct DocumentInfo {
     pub pages: Vec<PageSize>,
     pub title: Option<String>,
+    /// Label/value pairs for a document properties dialog, in display order.
+    pub properties: Vec<(&'static str, String)>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -135,6 +137,7 @@ pub struct Document {
     pdf: Pdf,
     limits: Limits,
     settings: InterpreterSettings,
+    file_len: u64,
 }
 
 impl Document {
@@ -170,6 +173,7 @@ impl Document {
                 limit: limits.max_file_bytes,
             });
         }
+        let file_len = bytes.len() as u64;
         let password = password.unwrap_or("");
         let parsed = catch_unwind(AssertUnwindSafe(|| {
             Pdf::new_with_password(Arc::new(bytes), password)
@@ -191,6 +195,7 @@ impl Document {
             pdf,
             limits,
             settings: InterpreterSettings::default(),
+            file_len,
         })
     }
 
@@ -210,14 +215,43 @@ impl Document {
                     PageSize { width, height }
                 })
                 .collect();
-            let title = self
-                .pdf
-                .metadata()
-                .title
-                .as_deref()
-                .map(|t| String::from_utf8_lossy(t).trim().to_owned())
-                .filter(|t| !t.is_empty());
-            DocumentInfo { pages, title }
+            let meta = self.pdf.metadata();
+            let text = |v: &Option<Vec<u8>>| {
+                v.as_deref()
+                    .map(|t| decode_text_string(t).trim().to_owned())
+                    .filter(|t| !t.is_empty())
+            };
+            let title = text(&meta.title);
+            let mut properties = Vec::new();
+            for (label, value) in [
+                ("Title", title.clone()),
+                ("Author", text(&meta.author)),
+                ("Subject", text(&meta.subject)),
+                ("Keywords", text(&meta.keywords)),
+                ("Creator", text(&meta.creator)),
+                ("Producer", text(&meta.producer)),
+                ("Created", meta.creation_date.as_ref().map(format_date)),
+                ("Modified", meta.modification_date.as_ref().map(format_date)),
+            ] {
+                if let Some(value) = value {
+                    properties.push((label, value));
+                }
+            }
+            properties.push(("PDF version", pdf_version(self.pdf.version()).to_owned()));
+            properties.push(("Pages", self.pdf.pages().len().to_string()));
+            if let Some(first) = self.pdf.pages().first() {
+                let (w, h) = first.render_dimensions();
+                properties.push((
+                    "Page size",
+                    format!("{:.1} × {:.1} in ({w:.0} × {h:.0} pt)", w / 72.0, h / 72.0),
+                ));
+            }
+            properties.push(("File size", format_bytes(self.file_len)));
+            DocumentInfo {
+                pages,
+                title,
+                properties,
+            }
         }))
         .map_err(|_| OpenError::EngineCrashed)
     }
@@ -270,5 +304,85 @@ fn decryption_error(e: hayro::hayro_syntax::DecryptionError) -> OpenError {
         D::PasswordProtected => OpenError::PasswordRequired,
         D::UnsupportedAlgorithm => OpenError::UnsupportedEncryption,
         _ => OpenError::Invalid,
+    }
+}
+
+/// Decodes a PDF text string:UTF-16BE or UTF-8 with a byte-order mark, otherwise
+/// PDFDocEncoding.
+pub(crate) fn decode_text_string(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        let units = rest
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair));
+        return char::decode_utf16(units)
+            .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect();
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    // ponytail: Latin-1 approximation of PDFDocEncoding; only 0x18–0x1F and 0x80–0x9F differ.
+    bytes.iter().map(|&b| char::from(b)).collect()
+}
+
+fn format_date(d: &hayro::hayro_syntax::object::DateTime) -> String {
+    let sign = if d.utc_offset_hour < 0 { '-' } else { '+' };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC{sign}{:02}:{:02}",
+        d.year,
+        d.month,
+        d.day,
+        d.hour,
+        d.minute,
+        d.second,
+        d.utc_offset_hour.unsigned_abs(),
+        d.utc_offset_minute
+    )
+}
+
+fn pdf_version(v: hayro::hayro_syntax::PdfVersion) -> &'static str {
+    use hayro::hayro_syntax::PdfVersion as V;
+    match v {
+        V::Pdf10 => "1.0",
+        V::Pdf11 => "1.1",
+        V::Pdf12 => "1.2",
+        V::Pdf13 => "1.3",
+        V::Pdf14 => "1.4",
+        V::Pdf15 => "1.5",
+        V::Pdf16 => "1.6",
+        V::Pdf17 => "1.7",
+        V::Pdf20 => "2.0",
+    }
+}
+
+fn format_bytes(n: u64) -> String {
+    match n {
+        0..1_000 => format!("{n} bytes"),
+        1_000..1_000_000 => format!("{:.1} KB", n as f64 / 1e3),
+        _ => format!("{:.1} MB", n as f64 / 1e6),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_text_strings() {
+        assert_eq!(decode_text_string(b"Plain"), "Plain");
+        assert_eq!(decode_text_string(&[0xFE, 0xFF, 0x00, 0x48, 0x00, 0xE9]), "Hé");
+        assert_eq!(decode_text_string(&[0xEF, 0xBB, 0xBF, 0xC3, 0xA9]), "é");
+        assert_eq!(decode_text_string(&[0xE9]), "é");
+        // Lone surrogate and odd trailing byte don't panic.
+        assert_eq!(decode_text_string(&[0xFE, 0xFF, 0xD8, 0x00, 0x41]), "\u{FFFD}");
+    }
+
+    #[test]
+    fn formats_sizes() {
+        assert_eq!(format_bytes(512), "512 bytes");
+        assert_eq!(format_bytes(2_500), "2.5 KB");
+        assert_eq!(format_bytes(3_400_000), "3.4 MB");
     }
 }

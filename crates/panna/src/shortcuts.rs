@@ -19,6 +19,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     if modifiers.command() {
         return match key.as_ref() {
             Key::Character("o") => Some(Message::OpenDialog),
+            Key::Character("d") => Some(Message::ToggleProperties),
             Key::Character("=" | "+") => Some(Message::ZoomIn),
             Key::Character("-") => Some(Message::ZoomOut),
             Key::Character("0") => Some(Message::FitPage),
@@ -30,6 +31,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     match key.as_ref() {
         Key::Named(Named::PageDown) => Some(Message::NextPage),
         Key::Named(Named::PageUp) => Some(Message::PrevPage),
+        Key::Named(Named::Escape) => Some(Message::CloseOverlays),
         _ => None,
     }
 }
