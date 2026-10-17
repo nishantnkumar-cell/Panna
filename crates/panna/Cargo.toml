@@ -18,3 +18,7 @@ futures-channel = "0.3"
 
 [lints]
 workspace = true
+
+# Embeds the app icon and version details in the Windows executable.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

@@ -6,6 +6,7 @@
   <key>CFBundleDisplayName</key><string>Panna</string>
   <key>CFBundleIdentifier</key><string>io.github.nishantnkumar-cell.Panna</string>
   <key>CFBundleExecutable</key><string>panna</string>
+  <key>CFBundleIconFile</key><string>Panna</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>

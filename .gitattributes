@@ -1,1 +1,4 @@
 *.pdf binary
+*.ico binary
+*.icns binary
+*.rgba binary

@@ -129,11 +129,12 @@ jobs:
           cargo build --release --locked -p panna --target aarch64-apple-darwin
           cargo build --release --locked -p panna --target x86_64-apple-darwin
           APP="Panna.app"
-          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           lipo -create -output "$APP/Contents/MacOS/panna" \
             target/aarch64-apple-darwin/release/panna \
             target/x86_64-apple-darwin/release/panna
           cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          cp packaging/macos/Panna.icns "$APP/Contents/Resources/Panna.icns"
           # Ad-hoc signature so Apple Silicon will run it. Notarisation needs a developer account.
           codesign --force --deep --sign - "$APP"
           ditto -c -k --keepParent "$APP" panna-${{ matrix.name }}.zip

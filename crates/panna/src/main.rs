@@ -57,9 +57,14 @@ const INITIAL_SIZE: Size = Size::new(1100.0, 850.0);
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const APP_ID: &str = "io.github.nishantnkumar_cell.Panna";
 
+/// The app icon as 64×64 RGBA, for the title bar and task switcher. Generated from the SVG
+/// icon; see `packaging/icon/README.md`.
+const WINDOW_ICON: &[u8] = include_bytes!("../assets/icon-64.rgba");
+
 fn window_settings() -> window::Settings {
     window::Settings {
         size: INITIAL_SIZE,
+        icon: window::icon::from_rgba(WINDOW_ICON.to_vec(), 64, 64).ok(),
         min_size: Some(iced::Size::new(480.0, 360.0)),
         #[cfg(target_os = "linux")]
         platform_specific: window::settings::PlatformSpecific {
