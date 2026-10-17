@@ -76,3 +76,13 @@ fn hidden_text_layers_are_searchable() {
     let text = page_text("BT 3 Tr /F1 12 Tf 50 50 Td (scanned words) Tj ET", 0);
     assert_eq!(text.find("scanned", FindOptions::default()).len(), 1);
 }
+
+#[test]
+fn text_under_marked_areas() {
+    let text = page_text(TWO_LINES, 0);
+    // Mark "World" on the first line and "Second" on the next, as a two-line highlight would.
+    let mut areas = text.rects(text.find("world", FindOptions::default())[0].clone());
+    areas.extend(text.rects(text.find("second", FindOptions::default())[0].clone()));
+    assert_eq!(text.text_in(&areas), "World Second");
+    assert_eq!(text.text_in(&[]), "");
+}

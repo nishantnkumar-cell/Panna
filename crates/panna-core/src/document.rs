@@ -29,6 +29,8 @@ pub struct DocumentInfo {
     pub properties: Vec<(&'static str, String)>,
     /// Bookmarks, flattened in reading order.
     pub outline: Vec<crate::OutlineItem>,
+    /// Comments already in the file, in page order.
+    pub comments: Vec<crate::Comment>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -256,11 +258,14 @@ impl Document {
             // A malformed outline shouldn't stop the document opening.
             let outline =
                 catch_unwind(AssertUnwindSafe(|| crate::outline::read(&self.pdf))).unwrap_or_default();
+            let comments =
+                catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default();
             DocumentInfo {
                 pages,
                 title,
                 properties,
                 outline,
+                comments,
             }
         }))
         .map_err(|_| OpenError::EngineCrashed)

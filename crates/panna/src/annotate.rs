@@ -118,6 +118,8 @@ pub enum Event {
     Color(usize),
     Undo,
     Redo,
+    /// Removes the unsaved annotation at this index.
+    Delete(usize),
     Edit(text_editor::Action),
     EditDone,
     EditCancel,
@@ -146,7 +148,9 @@ pub struct Annotate {
     colors: [Option<Color>; Tool::ALL.len()],
     /// Unsaved annotations, oldest first.
     pub items: Vec<Annotation>,
-    redo: Vec<Annotation>,
+    /// Earlier versions of `items`, for undo and redo.
+    undo: Vec<Vec<Annotation>>,
+    redo: Vec<Vec<Annotation>>,
     pub draft: Option<Draft>,
     pub editing: Option<Editing>,
     author: String,
@@ -181,13 +185,20 @@ impl Annotate {
     /// Forgets unsaved annotations once they are saved (or discarded, or a new file opens).
     pub fn saved(&mut self) {
         self.items.clear();
+        self.undo.clear();
         self.redo.clear();
         self.draft = None;
         self.editing = None;
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.items.is_empty()
+        !self.undo.is_empty()
+    }
+
+    /// Keeps the current list for undo, before changing it.
+    fn record(&mut self) {
+        self.undo.push(self.items.clone());
+        self.redo.clear();
     }
 
     pub fn can_redo(&self) -> bool {
@@ -213,14 +224,21 @@ impl Annotate {
                 }
             }
             Event::Undo => {
-                if let Some(a) = self.items.pop() {
-                    self.redo.push(a);
+                if let Some(before) = self.undo.pop() {
+                    self.redo.push(std::mem::replace(&mut self.items, before));
                     return Outcome::Changed;
                 }
             }
             Event::Redo => {
-                if let Some(a) = self.redo.pop() {
-                    self.items.push(a);
+                if let Some(after) = self.redo.pop() {
+                    self.undo.push(std::mem::replace(&mut self.items, after));
+                    return Outcome::Changed;
+                }
+            }
+            Event::Delete(index) => {
+                if index < self.items.len() {
+                    self.record();
+                    self.items.remove(index);
                     return Outcome::Changed;
                 }
             }
@@ -246,6 +264,7 @@ impl Annotate {
                             size: TEXT_SIZE,
                         }
                     };
+                    self.record();
                     self.push(editing.page, kind, editing.tool, text);
                     return Outcome::Changed;
                 }
@@ -272,31 +291,28 @@ impl Annotate {
             contents,
             author: self.author.clone(),
         });
-        self.redo.clear();
     }
 
     /// Marks selected text with the current markup tool: one annotation per page.
     pub fn mark_text(&mut self, per_page: Vec<(usize, Vec<TextBox>)>) -> Outcome {
         let tool = self.tool;
-        let mut changed = false;
+        if !matches!(tool, Tool::Highlight | Tool::Underline | Tool::StrikeOut)
+            || per_page.iter().all(|(_, b)| b.is_empty())
+        {
+            return Outcome::Nothing;
+        }
+        // One undo step, even when the selection spans pages.
+        self.record();
         for (page, boxes) in per_page {
-            if boxes.is_empty() {
-                continue;
-            }
             let kind = match tool {
+                _ if boxes.is_empty() => continue,
                 Tool::Highlight => Kind::Highlight(boxes),
                 Tool::Underline => Kind::Underline(boxes),
-                Tool::StrikeOut => Kind::StrikeOut(boxes),
-                _ => return Outcome::Nothing,
+                _ => Kind::StrikeOut(boxes),
             };
             self.push(page, kind, tool, String::new());
-            changed = true;
         }
-        if changed {
-            Outcome::Changed
-        } else {
-            Outcome::Nothing
-        }
+        Outcome::Changed
     }
 
     /// Starts drawing at a point on `page`, for tools that draw.
@@ -373,6 +389,7 @@ impl Annotate {
             },
             Tool::Select | Tool::Highlight | Tool::Underline | Tool::StrikeOut => return Outcome::Nothing,
         };
+        self.record();
         self.push(draft.page, kind, draft.tool, String::new());
         Outcome::Changed
     }
@@ -657,5 +674,37 @@ mod tests {
         a.release();
         assert!(matches!(a.update(Event::EditDone), Outcome::Nothing));
         assert!(a.items.is_empty());
+    }
+
+    #[test]
+    fn deleting_can_be_undone() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Rect));
+        for x in [10.0, 100.0] {
+            a.press(0, (x, 10.0));
+            a.drag(0, (x + 50.0, 40.0));
+            a.release();
+        }
+        assert!(matches!(a.update(Event::Delete(0)), Outcome::Changed));
+        assert!(matches!(a.items.as_slice(), [i] if matches!(i.kind, Kind::Rect(r) if r.x0 == 100.0)));
+        a.update(Event::Undo);
+        assert_eq!(a.items.len(), 2);
+        assert!(matches!(a.update(Event::Delete(9)), Outcome::Nothing));
+    }
+
+    #[test]
+    fn marking_across_pages_is_one_undo_step() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Highlight));
+        let line = TextBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 10.0,
+            y1: 10.0,
+        };
+        a.mark_text(vec![(0, vec![line]), (1, vec![line])]);
+        assert_eq!(a.items.len(), 2);
+        a.update(Event::Undo);
+        assert!(a.items.is_empty() && !a.can_undo());
     }
 }

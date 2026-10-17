@@ -5,6 +5,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod annotate;
+mod comments;
 mod find;
 mod icons;
 mod layout;
@@ -24,7 +25,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
-    DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker, RenderedPage, SaveError,
+    Comment, DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker, RenderedPage,
+    SaveError, TextBox,
 };
 
 use icons::Icon;
@@ -111,6 +113,8 @@ enum Message {
     CloseOverlays,
     Sidebar(sidebar::Event),
     GoToPage(usize),
+    /// Scroll to a comment, from the comments list.
+    ShowComment(usize, TextBox),
     ThumbRendered {
         doc: u64,
         index: usize,
@@ -436,6 +440,7 @@ impl App {
                             self.request_visible(),
                             self.request_thumbnails(),
                             self.request_search_text(),
+                            self.request_comment_text(),
                         ])
                     }
                     Err(OpenError::PasswordRequired) => {
@@ -592,9 +597,10 @@ impl App {
                 if self.sidebar.update(event) {
                     self.save_sidebar();
                 }
-                self.request_thumbnails()
+                Task::batch([self.request_thumbnails(), self.request_comment_text()])
             }
             Message::GoToPage(index) => self.go_to_page(index),
+            Message::ShowComment(page, at) => self.reveal(page, at),
             Message::ThumbRendered {
                 doc,
                 index,
@@ -790,6 +796,11 @@ impl App {
                 match result {
                     Ok(()) => {
                         open.path = path.clone();
+                        // What was just saved is now part of the file's comments.
+                        open.info
+                            .comments
+                            .extend(self.annotate.items.iter().map(Comment::from));
+                        open.info.comments.sort_by_key(|c| c.page);
                         self.annotate.saved();
                         self.settings.add_recent(path);
                         self.settings.save();
@@ -1044,16 +1055,17 @@ impl App {
         let Some(first) = text.rects(hit.range.clone()).first().copied() else {
             return self.go_to_page(hit.page);
         };
+        self.reveal(hit.page, first)
+    }
+
+    /// Scrolls a spot on a page (in page points) into view unless it is already on screen.
+    fn reveal(&mut self, page: usize, spot: TextBox) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
-        let (x, y, _, _) = self.page_map(hit.page).rect(&first);
-        let page_w = doc
-            .layout
-            .sizes()
-            .get(hit.page)
-            .map_or(0.0, |s| s.width * self.zoom);
+        let (x, y, _, _) = self.page_map(page).rect(&spot);
+        let page_w = doc.layout.sizes().get(page).map_or(0.0, |s| s.width * self.zoom);
         let content_w = (doc.layout.max_width() * self.zoom + 2.0 * PAGE_GAP).max(self.viewport.width);
         let page_left = (content_w - page_w) / 2.0;
-        let top = doc.layout.page_top(hit.page, self.zoom) + PAGE_GAP + y;
+        let top = doc.layout.page_top(page, self.zoom) + PAGE_GAP + y;
         // Leave the match where it is if it is already comfortably on screen.
         let on_screen = top > self.viewport.offset_y + 40.0
             && top < self.viewport.offset_y + self.viewport.height - 60.0
@@ -1152,6 +1164,7 @@ impl App {
                 title: None,
                 properties: Vec::new(),
                 outline: Vec::new(),
+                comments: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -1288,6 +1301,28 @@ impl App {
     }
 
     /// Requests thumbnails for the sidebar's visible range and drops ones far outside it.
+    /// Loads the text of pages with highlights, so the comments list can quote what they mark.
+    fn request_comment_text(&mut self) -> Task<Message> {
+        if !(self.sidebar.open && self.sidebar.tab == sidebar::Tab::Comments) {
+            return Task::none();
+        }
+        let Some(doc) = &self.doc else { return Task::none() };
+        let mut pages: Vec<usize> = doc
+            .info
+            .comments
+            .iter()
+            .filter(|c| !c.marked.is_empty())
+            .map(|c| c.page)
+            .collect();
+        pages.dedup();
+        Task::batch(
+            pages
+                .into_iter()
+                .map(|p| self.request_text(p..p + 1))
+                .collect::<Vec<_>>(),
+        )
+    }
+
     fn request_thumbnails(&mut self) -> Task<Message> {
         if !self.sidebar.showing_thumbnails() {
             return Task::none();
@@ -1561,17 +1596,22 @@ impl App {
     }
 
     fn with_sidebar<'a>(&'a self, doc: &'a OpenDoc, pages: Element<'a, Message>) -> Element<'a, Message> {
-        if !self.sidebar.open {
-            return pages;
-        }
-        let bar = self.sidebar.view(sidebar::ViewData {
-            layout: &doc.thumb_layout,
-            thumbs_images: &doc.thumbs,
-            outline: &doc.info.outline,
-            current: self.current_page(),
-            find: &self.find,
-            texts: &doc.texts,
-        });
+        // Closed, the bar is an empty space rather than missing, so toggling it doesn't move the
+        // pages in the widget tree and reset their scroll position.
+        let bar = if !self.sidebar.open {
+            space().into()
+        } else {
+            self.sidebar.view(sidebar::ViewData {
+                layout: &doc.thumb_layout,
+                thumbs_images: &doc.thumbs,
+                outline: &doc.info.outline,
+                current: self.current_page(),
+                find: &self.find,
+                texts: &doc.texts,
+                comments: &doc.info.comments,
+                unsaved: &self.annotate.items,
+            })
+        };
         match self.sidebar.side {
             sidebar::Side::Left => row![bar, pages].into(),
             sidebar::Side::Right => row![pages, bar].into(),

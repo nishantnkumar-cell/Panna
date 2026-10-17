@@ -6,14 +6,14 @@ use std::ops::Range;
 use iced::widget::scrollable::Viewport;
 use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
 use iced::{Center, Element, Fill, Length, Theme};
-use panna_core::{OutlineItem, PageSize};
+use panna_core::{Annotation, Comment, OutlineItem, PageSize};
 
 use crate::Message;
 use crate::find::Find;
 use crate::icons::{self, Icon};
 use crate::selection::TextSlot;
 
-pub const WIDTH: f32 = 248.0;
+pub const WIDTH: f32 = 288.0;
 /// Widest thumbnail; tall pages are narrower so no thumbnail exceeds `THUMB_MAX_H`.
 pub const THUMB_W: f32 = 132.0;
 const THUMB_MAX_H: f32 = 200.0;
@@ -29,6 +29,7 @@ pub enum Tab {
     Thumbnails,
     Bookmarks,
     Results,
+    Comments,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -61,6 +62,7 @@ impl Tab {
             Tab::Thumbnails => "thumbnails",
             Tab::Bookmarks => "bookmarks",
             Tab::Results => "results",
+            Tab::Comments => "comments",
         }
     }
 
@@ -69,6 +71,7 @@ impl Tab {
             "thumbnails" => Some(Tab::Thumbnails),
             "bookmarks" => Some(Tab::Bookmarks),
             "results" => Some(Tab::Results),
+            "comments" => Some(Tab::Comments),
             _ => None,
         }
     }
@@ -195,6 +198,8 @@ pub struct ViewData<'a> {
     pub current: usize,
     pub find: &'a Find,
     pub texts: &'a [TextSlot],
+    pub comments: &'a [Comment],
+    pub unsaved: &'a [Annotation],
 }
 
 impl Sidebar {
@@ -204,7 +209,7 @@ impl Sidebar {
         let tab_button = |tab: Tab, label: &'static str| {
             let active = self.tab == tab;
             button(text(label).size(13))
-                .padding([4, 8])
+                .padding([4, 5])
                 .style(move |theme: &Theme, status| {
                     let palette = theme.extended_palette();
                     let mut style = button::text(theme, status);
@@ -251,6 +256,7 @@ impl Sidebar {
             tab(Tab::Bookmarks, "Bookmarks"),
             tab(Tab::Thumbnails, "Pages"),
             tab(Tab::Results, "Results"),
+            tab(Tab::Comments, "Comments"),
         ]
         .spacing(2)
         .padding([0, 6]);
@@ -265,6 +271,7 @@ impl Sidebar {
             Tab::Thumbnails => self.thumbnails(&data),
             Tab::Bookmarks => bookmarks(data.outline, data.find),
             Tab::Results => data.find.results(data.texts),
+            Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.texts),
         };
         container(column![header, content])
             .width(WIDTH)

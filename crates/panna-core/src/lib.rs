@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod comments;
 mod document;
 mod edit;
 mod limits;
@@ -12,6 +13,7 @@ mod outline;
 mod text;
 mod worker;
 
+pub use comments::{Comment, CommentKind};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, SaveError, text_width, wrap};
 pub use limits::Limits;

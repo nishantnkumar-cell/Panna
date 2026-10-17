@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
-use panna_core::{Annotation, Color, Document, Kind, Limits, TextBox};
+use panna_core::{Annotation, Color, Comment, CommentKind, Document, Kind, Limits, TextBox};
 
 /// Assembles numbered objects (1-based) into a PDF with a classic xref table.
 fn build(objects: &[String]) -> Vec<u8> {
@@ -186,4 +186,60 @@ fn nothing_to_add_returns_the_original() {
     let bytes = build(&objects(false));
     let doc = reopen(bytes.clone());
     assert_eq!(doc.with_annotations(&[]).unwrap(), bytes);
+}
+
+#[test]
+fn saved_comments_are_listed_after_reopening() {
+    let doc = reopen(build(&objects(true)));
+    // The existing sticky note sits at PDF y 0–1, the bottom of a 100pt page: view y 99–100.
+    let before = doc.info().unwrap().comments;
+    assert_eq!(before.len(), 1);
+    assert_eq!(
+        (&before[0].kind, before[0].contents.as_str()),
+        (&CommentKind::Note, "old")
+    );
+    assert!((before[0].at.y0 - 99.0).abs() < 0.01, "{:?}", before[0].at);
+
+    let rect = TextBox {
+        x0: 40.0,
+        y0: 10.0,
+        x1: 160.0,
+        y1: 30.0,
+    };
+    let added = annotation(Kind::Rect(rect));
+    let saved = doc.with_annotations(std::slice::from_ref(&added)).unwrap();
+    let after = reopen(saved).info().unwrap().comments;
+    assert_eq!(after.len(), 2);
+    let listed = &after[1];
+    assert_eq!(listed.kind, CommentKind::Rect);
+    assert_eq!(
+        (listed.contents.as_str(), listed.author.as_str()),
+        ("Hello (world)", "Tester")
+    );
+    // What the app shows before saving matches what the file says afterwards, within the
+    // appearance's padding for the stroke.
+    let fresh = Comment::from(&added);
+    assert!((fresh.at.x0 - listed.at.x0).abs() <= 3.0 && (fresh.at.y1 - listed.at.y1).abs() <= 3.0);
+}
+
+#[test]
+fn highlights_keep_their_marked_areas() {
+    let doc = reopen(build(&objects(false)));
+    let line = TextBox {
+        x0: 20.0,
+        y0: 30.0,
+        x1: 120.0,
+        y1: 42.0,
+    };
+    let saved = doc
+        .with_annotations(&[annotation(Kind::Highlight(vec![line]))])
+        .unwrap();
+    let listed = reopen(saved).info().unwrap().comments;
+    let marked = &listed[0].marked;
+    assert_eq!(marked.len(), 1, "{listed:?}");
+    let m = marked[0];
+    assert!(
+        (m.x0 - line.x0).abs() < 0.01 && (m.y0 - line.y0).abs() < 0.01 && (m.y1 - line.y1).abs() < 0.01,
+        "{m:?}"
+    );
 }

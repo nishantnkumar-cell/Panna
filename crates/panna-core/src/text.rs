@@ -91,6 +91,28 @@ impl PageText {
         self.chars.get(start..end).unwrap_or_default().iter().collect()
     }
 
+    /// The text under `areas` (a highlight's boxes, say), in reading order with whitespace
+    /// runs collapsed to single spaces.
+    pub fn text_in(&self, areas: &[TextBox]) -> String {
+        let mut out = String::new();
+        for (c, b) in self.chars.iter().zip(&self.boxes) {
+            let (x, y) = b.center();
+            if areas.iter().any(|a| a.contains(x, y)) {
+                if c.is_whitespace() {
+                    if !out.is_empty() && !out.ends_with(' ') {
+                        out.push(' ');
+                    }
+                } else {
+                    out.push(*c);
+                }
+            } else if !out.is_empty() && !out.ends_with(' ') {
+                // A gap in the marked text, such as the end of a line.
+                out.push(' ');
+            }
+        }
+        out.trim_end().to_owned()
+    }
+
     /// Every match of `query`, as character ranges. Any run of whitespace in the query matches
     /// one space or line break, so a phrase is found across a line wrap.
     pub fn find(&self, query: &str, options: FindOptions) -> Vec<Range<usize>> {
