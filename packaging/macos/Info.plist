@@ -2,10 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>PDF Viewer</string>
-  <key>CFBundleDisplayName</key><string>PDF Viewer</string>
-  <key>CFBundleIdentifier</key><string>io.github.nishantnkumar-cell.PdfViewer</string>
-  <key>CFBundleExecutable</key><string>pdf-viewer</string>
+  <key>CFBundleName</key><string>Panna</string>
+  <key>CFBundleDisplayName</key><string>Panna</string>
+  <key>CFBundleIdentifier</key><string>io.github.nishantnkumar-cell.Panna</string>
+  <key>CFBundleExecutable</key><string>panna</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>

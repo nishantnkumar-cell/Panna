@@ -1,4 +1,4 @@
-use pdf_core::{Document, Limits, OpenError, RenderWorker};
+use panna_core::{Document, Limits, OpenError, RenderWorker};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -139,7 +139,7 @@ fn enforces_size_and_page_limits() {
 
 #[test]
 fn worker_opens_and_renders_from_disk() {
-    let dir = std::env::temp_dir().join(format!("pdf-core-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("panna-core-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("sample.pdf");
     std::fs::write(&path, sample_pdf(2)).unwrap();

@@ -1,6 +1,6 @@
 //! Inputs found by the fuzzer. Each must open or fail cleanly, never crash the process.
 
-use pdf_core::{Document, Limits};
+use panna_core::{Document, Limits};
 
 fn exercise(bytes: &[u8]) {
     if let Ok(doc) = Document::from_bytes(bytes.to_vec(), None, Limits::default()) {

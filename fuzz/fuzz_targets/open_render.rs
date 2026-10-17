@@ -3,7 +3,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use pdf_core::{Document, Limits};
+use panna_core::{Document, Limits};
 
 fuzz_target!(|data: &[u8]| {
     // Small bitmaps keep each run fast; limits are what we're testing, not resolution.

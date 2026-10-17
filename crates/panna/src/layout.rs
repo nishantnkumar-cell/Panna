@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use pdf_core::PageSize;
+use panna_core::PageSize;
 
 /// Space between pages and around the page column, in logical pixels.
 pub const PAGE_GAP: f32 = 16.0;

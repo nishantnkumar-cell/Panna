@@ -1,14 +1,14 @@
 [Desktop Entry]
 Type=Application
-Name=PDF Viewer
+Name=Panna
 GenericName=Document Viewer
 Comment=View, annotate and fill in PDF files, fully offline
-Exec=pdf-viewer %f
-Icon=io.github.nishantnkumar_cell.PdfViewer
+Exec=panna %f
+Icon=io.github.nishantnkumar_cell.Panna
 Terminal=false
 Categories=Office;Viewer;
 MimeType=application/pdf;application/x-pdf;
 Keywords=pdf;document;viewer;annotate;form;
 StartupNotify=true
-StartupWMClass=io.github.nishantnkumar_cell.PdfViewer
+StartupWMClass=io.github.nishantnkumar_cell.Panna
 SingleMainWindow=false

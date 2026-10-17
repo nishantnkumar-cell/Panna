@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.nishantnkumar_cell.PdfViewer</id>
-  <name>PDF Viewer</name>
+  <id>io.github.nishantnkumar_cell.Panna</id>
+  <name>Panna</name>
   <summary>View, annotate and fill in PDF files, fully offline</summary>
   <developer id="io.github.nishantnkumar_cell">
     <name>Nishant</name>
@@ -20,9 +20,9 @@
       <li>Uses your desktop's own file dialogs</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.nishantnkumar_cell.PdfViewer.desktop</launchable>
+  <launchable type="desktop-id">io.github.nishantnkumar_cell.Panna.desktop</launchable>
   <provides>
-    <binary>pdf-viewer</binary>
+    <binary>panna</binary>
     <mediatype>application/pdf</mediatype>
   </provides>
   <supports>

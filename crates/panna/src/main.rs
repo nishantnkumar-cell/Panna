@@ -1,4 +1,4 @@
-//! Offline, memory-safe PDF viewer.
+//! Panna: an offline, memory-safe PDF viewer.
 
 #![forbid(unsafe_code)]
 // Hide the console window on Windows release builds.
@@ -14,7 +14,7 @@ use iced::widget::{
     button, center, column, container, image, operation, row, scrollable, space, text, text_input,
 };
 use iced::{Center, Element, Fill, Length, Subscription, Task, event, window};
-use pdf_core::{DocumentInfo, Limits, OpenError, RenderError, RenderWorker, RenderedPage};
+use panna_core::{DocumentInfo, Limits, OpenError, RenderError, RenderWorker, RenderedPage};
 
 use layout::{PAGE_GAP, PageLayout};
 
@@ -38,7 +38,7 @@ fn main() -> iced::Result {
 /// Reverse-DNS app ID. On Linux it must match the `.desktop` file name so GNOME and KDE show
 /// the right icon and group windows correctly.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const APP_ID: &str = "io.github.nishantnkumar_cell.PdfViewer";
+const APP_ID: &str = "io.github.nishantnkumar_cell.Panna";
 
 fn window_settings() -> window::Settings {
     window::Settings {
@@ -156,9 +156,9 @@ impl App {
                     .clone()
                     .or_else(|| doc.path.file_name().map(|n| n.to_string_lossy().into_owned()))
                     .unwrap_or_default();
-                format!("{name} — PDF Viewer")
+                format!("{name} — Panna")
             }
-            None => "PDF Viewer".into(),
+            None => "Panna".into(),
         }
     }
 

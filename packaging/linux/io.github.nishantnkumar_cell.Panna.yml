@@ -4,14 +4,14 @@
 #
 # Build (from the repository root):
 #   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/cargo-sources.json
-#   flatpak-builder --user --install --force-clean build-dir packaging/linux/io.github.nishantnkumar_cell.PdfViewer.yml
-id: io.github.nishantnkumar_cell.PdfViewer
+#   flatpak-builder --user --install --force-clean build-dir packaging/linux/io.github.nishantnkumar_cell.Panna.yml
+id: io.github.nishantnkumar_cell.Panna
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: pdf-viewer
+command: panna
 
 finish-args:
   # Display: native Wayland, X11 only as a fallback (XWayland or X11 sessions).
@@ -27,15 +27,15 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/pdf-viewer/cargo
+    CARGO_HOME: /run/build/panna/cargo
     CARGO_NET_OFFLINE: 'true'
 
 modules:
-  - name: pdf-viewer
+  - name: panna
     buildsystem: simple
     build-commands:
-      - cargo --offline build --release --locked -p pdf-app
-      - install -Dm755 target/release/pdf-viewer /app/bin/pdf-viewer
+      - cargo --offline build --release --locked -p panna
+      - install -Dm755 target/release/panna /app/bin/panna
       - install -Dm644 packaging/linux/${FLATPAK_ID}.desktop /app/share/applications/${FLATPAK_ID}.desktop
       - install -Dm644 packaging/linux/${FLATPAK_ID}.metainfo.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
       - install -Dm644 packaging/linux/${FLATPAK_ID}.svg /app/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg

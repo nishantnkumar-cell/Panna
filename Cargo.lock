@@ -2396,6 +2396,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "panna"
+version = "0.1.0"
+dependencies = [
+ "futures-channel",
+ "iced",
+ "panna-core",
+ "rfd",
+]
+
+[[package]]
+name = "panna-core"
+version = "0.1.0"
+dependencies = [
+ "hayro",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2429,23 +2446,6 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
-name = "pdf-app"
-version = "0.1.0"
-dependencies = [
- "futures-channel",
- "iced",
- "pdf-core",
- "rfd",
-]
-
-[[package]]
-name = "pdf-core"
-version = "0.1.0"
-dependencies = [
- "hayro",
-]
 
 [[package]]
 name = "peniko"

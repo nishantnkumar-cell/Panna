@@ -14,4 +14,4 @@ mkdir -p corpus/open_render && cp ~/Documents/*.pdf corpus/open_render/
 ```
 
 Any crash is written to `artifacts/open_render/`. Add a regression test for it in
-`crates/pdf-core/tests/` before fixing.
+`crates/panna-core/tests/` before fixing.

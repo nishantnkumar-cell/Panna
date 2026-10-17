@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pdf-core", "crates/pdf-app"]
+members = ["crates/panna-core", "crates/panna"]
 exclude = ["fuzz"]
 
 [workspace.package]

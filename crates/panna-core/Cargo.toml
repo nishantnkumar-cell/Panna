@@ -1,5 +1,5 @@
 [package]
-name = "pdf-core"
+name = "panna-core"
 description = "Document loading and rendering for the PDF viewer (no GUI dependencies)"
 version.workspace = true
 edition.workspace = true

@@ -1,5 +1,5 @@
 [package]
-name = "pdf-fuzz"
+name = "panna-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-pdf-core = { path = "../crates/pdf-core" }
+panna-core = { path = "../crates/panna-core" }
 
 [[bin]]
 name = "open_render"

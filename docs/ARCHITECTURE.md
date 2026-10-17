@@ -23,13 +23,13 @@ If hayro can't keep up, the fallback is PDFium running in a separate sandboxed p
 
 ```
 crates/
-  pdf-core/   document loading, limits, rendering, background render worker (no GUI deps)
-  pdf-app/    iced desktop app (binary: pdf-viewer)
+  panna-core/   document loading, limits, rendering, background render worker (no GUI deps)
+  panna/    iced desktop app (binary: panna)
 fuzz/         cargo-fuzz targets that feed random bytes through open + render
 docs/         this file, the feature map
 ```
 
-`pdf-core` has no GUI dependencies. It can be tested, fuzzed and reused (for example in a CLI)
+`panna-core` has no GUI dependencies. It can be tested, fuzzed and reused (for example in a CLI)
 without iced.
 
 ## Threading model

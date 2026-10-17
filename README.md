@@ -1,4 +1,7 @@
-# PDF Viewer
+# Panna (पन्ना)
+
+*Panna* is Hindi for both "page" and "emerald".
+
 
 An offline PDF viewer and editor for Windows, macOS and Linux, written in memory-safe Rust.
 It has no cloud features, no accounts and no telemetry. The app never touches the network.
@@ -13,7 +16,7 @@ and page navigation. Annotation and form filling come next. See [docs/FEATURES.m
 You need Rust 1.88 or newer (install it from [rustup.rs](https://rustup.rs)).
 
 ```sh
-cargo run --release -p pdf-app -- path/to/file.pdf
+cargo run --release -p panna -- path/to/file.pdf
 ```
 
 Linux builds need no system libraries to compile. At runtime the app uses Wayland, or X11
@@ -43,7 +46,7 @@ A single build works natively on both desktops. Nothing needs to be built separa
 Install options:
 
 - **Flatpak** (recommended; sandboxed with no network and no file access beyond the files you open):
-  see `packaging/linux/io.github.nishantnkumar_cell.PdfViewer.yml`. CI builds a `.flatpak` bundle.
+  see `packaging/linux/io.github.nishantnkumar_cell.Panna.yml`. CI builds a `.flatpak` bundle.
 - **Local install** to `~/.local`: `packaging/linux/install-local.sh`.
 - **Tarball** for x86_64 and ARM64 from the CI artifacts.
 
@@ -66,8 +69,8 @@ cd fuzz && cargo +nightly fuzz run open_render
 ## Layout
 
 ```
-crates/pdf-core   parsing, rendering, limits, render worker (no GUI)
-crates/pdf-app    iced desktop app
+crates/panna-core   parsing, rendering, limits, render worker (no GUI)
+crates/panna    iced desktop app
 fuzz/             fuzz targets
 packaging/        Linux (Flatpak, .desktop, AppStream) and macOS bundle files
 ```

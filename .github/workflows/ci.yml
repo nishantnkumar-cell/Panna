@@ -101,15 +101,15 @@ jobs:
 
       - name: Build (Linux, Windows)
         if: matrix.target != 'universal'
-        run: cargo build --release --locked -p pdf-app --target ${{ matrix.target }}
+        run: cargo build --release --locked -p panna --target ${{ matrix.target }}
 
       - name: Package Linux tarball
         if: runner.os == 'Linux'
         run: |
-          ID=io.github.nishantnkumar_cell.PdfViewer
-          D=pdf-viewer-${{ matrix.name }}
+          ID=io.github.nishantnkumar_cell.Panna
+          D=panna-${{ matrix.name }}
           mkdir -p $D/share/applications $D/share/metainfo $D/share/icons/hicolor/scalable/apps $D/bin
-          cp target/${{ matrix.target }}/release/pdf-viewer $D/bin/
+          cp target/${{ matrix.target }}/release/panna $D/bin/
           cp packaging/linux/$ID.desktop $D/share/applications/
           cp packaging/linux/$ID.metainfo.xml $D/share/metainfo/
           cp packaging/linux/$ID.svg $D/share/icons/hicolor/scalable/apps/
@@ -119,31 +119,31 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory pdf-viewer-${{ matrix.name }}
-          Copy-Item target/${{ matrix.target }}/release/pdf-viewer.exe pdf-viewer-${{ matrix.name }}/
-          Compress-Archive pdf-viewer-${{ matrix.name }} pdf-viewer-${{ matrix.name }}.zip
+          New-Item -ItemType Directory panna-${{ matrix.name }}
+          Copy-Item target/${{ matrix.target }}/release/panna.exe panna-${{ matrix.name }}/
+          Compress-Archive panna-${{ matrix.name }} panna-${{ matrix.name }}.zip
 
       - name: Build and bundle macOS app (Apple Silicon + Intel)
         if: matrix.target == 'universal'
         run: |
-          cargo build --release --locked -p pdf-app --target aarch64-apple-darwin
-          cargo build --release --locked -p pdf-app --target x86_64-apple-darwin
-          APP="PDF Viewer.app"
+          cargo build --release --locked -p panna --target aarch64-apple-darwin
+          cargo build --release --locked -p panna --target x86_64-apple-darwin
+          APP="Panna.app"
           mkdir -p "$APP/Contents/MacOS"
-          lipo -create -output "$APP/Contents/MacOS/pdf-viewer" \
-            target/aarch64-apple-darwin/release/pdf-viewer \
-            target/x86_64-apple-darwin/release/pdf-viewer
+          lipo -create -output "$APP/Contents/MacOS/panna" \
+            target/aarch64-apple-darwin/release/panna \
+            target/x86_64-apple-darwin/release/panna
           cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
           # Ad-hoc signature so Apple Silicon will run it. Notarisation needs a developer account.
           codesign --force --deep --sign - "$APP"
-          ditto -c -k --keepParent "$APP" pdf-viewer-${{ matrix.name }}.zip
+          ditto -c -k --keepParent "$APP" panna-${{ matrix.name }}.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pdf-viewer-${{ matrix.name }}
+          name: panna-${{ matrix.name }}
           path: |
-            pdf-viewer-${{ matrix.name }}.tar.gz
-            pdf-viewer-${{ matrix.name }}.zip
+            panna-${{ matrix.name }}.tar.gz
+            panna-${{ matrix.name }}.zip
           if-no-files-found: error
 
   flatpak:
@@ -162,6 +162,6 @@ jobs:
           python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/cargo-sources.json
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: pdf-viewer.flatpak
-          manifest-path: packaging/linux/io.github.nishantnkumar_cell.PdfViewer.yml
+          bundle: panna.flatpak
+          manifest-path: packaging/linux/io.github.nishantnkumar_cell.Panna.yml
           cache-key: flatpak-builder-${{ github.sha }}
