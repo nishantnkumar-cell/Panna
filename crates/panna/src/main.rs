@@ -4,6 +4,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod icons;
 mod layout;
 mod settings;
 mod shortcuts;
@@ -19,6 +20,7 @@ use iced::widget::{
 use iced::{Center, Element, Fill, Length, Size, Subscription, Task, event, mouse, window};
 use panna_core::{DocumentInfo, Limits, OpenError, PageSize, RenderError, RenderWorker, RenderedPage};
 
+use icons::Icon;
 use layout::{PAGE_GAP, PageLayout};
 use settings::Settings;
 use toolbar::{Dock, Toolbar};
@@ -599,44 +601,39 @@ impl App {
             .width(56);
 
         let gap = || space().width(10).height(10).into();
+        let on = |m: Message| has_doc.then_some(m);
+        let m = icons::MOD;
         let items: Vec<Element<'_, Message>> = vec![
-            button("Open").on_press(Message::OpenDialog).into(),
+            icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
             gap(),
-            button("‹")
-                .on_press_maybe(has_doc.then_some(Message::PrevPage))
-                .into(),
-            page_box.into(),
+            icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
+            icons::with_tip(page_box, "Go to page"),
             text(format!("of {page_count}")).into(),
-            button("›")
-                .on_press_maybe(has_doc.then_some(Message::NextPage))
-                .into(),
+            icons::button(Icon::NextPage, "Next page (Page Down)", on(Message::NextPage)),
             gap(),
-            button("−")
-                .on_press_maybe(has_doc.then_some(Message::ZoomOut))
-                .into(),
-            button(text(format!("{:.0}%", self.zoom * 100.0)))
-                .on_press_maybe(has_doc.then_some(Message::ZoomReset))
-                .into(),
-            button("+")
-                .on_press_maybe(has_doc.then_some(Message::ZoomIn))
-                .into(),
-            button("Fit width")
-                .on_press_maybe(has_doc.then_some(Message::FitWidth))
-                .into(),
-            button("Fit page")
-                .on_press_maybe(has_doc.then_some(Message::FitPage))
-                .into(),
+            icons::button(
+                Icon::ZoomOut,
+                format!("Zoom out ({m}Minus)"),
+                on(Message::ZoomOut),
+            ),
+            icons::with_tip(
+                button(text(format!("{:.0}%", self.zoom * 100.0)).size(13))
+                    .style(button::text)
+                    .on_press_maybe(on(Message::ZoomReset)),
+                format!("Actual size ({m}1)"),
+            ),
+            icons::button(Icon::ZoomIn, format!("Zoom in ({m}Plus)"), on(Message::ZoomIn)),
+            icons::button(Icon::FitWidth, format!("Fit width ({m}2)"), on(Message::FitWidth)),
+            icons::button(Icon::FitPage, format!("Fit page ({m}0)"), on(Message::FitPage)),
             gap(),
-            button("↺")
-                .on_press_maybe(has_doc.then_some(Message::RotateCcw))
-                .into(),
-            button("↻")
-                .on_press_maybe(has_doc.then_some(Message::RotateCw))
-                .into(),
+            icons::button(Icon::RotateCcw, "Rotate left", on(Message::RotateCcw)),
+            icons::button(Icon::RotateCw, "Rotate right", on(Message::RotateCw)),
             gap(),
-            button("Properties")
-                .on_press_maybe(has_doc.then_some(Message::ToggleProperties))
-                .into(),
+            icons::button(
+                Icon::Properties,
+                format!("Document properties ({m}D)"),
+                on(Message::ToggleProperties),
+            ),
         ];
         let toolbar = self.toolbar.view(items, Message::Toolbar);
 

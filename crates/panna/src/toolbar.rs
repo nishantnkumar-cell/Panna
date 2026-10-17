@@ -5,8 +5,10 @@
 
 use std::fmt;
 
-use iced::widget::{Column, Row, container, mouse_area, pick_list, text};
+use iced::widget::{Column, Row, container, mouse_area};
 use iced::{Center, Element, Point, Size, Vector, mouse};
+
+use crate::icons::{self, Icon};
 
 /// Where a toolbar sits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -29,6 +31,16 @@ impl Dock {
             Dock::Left => "left",
             Dock::Right => "right",
             Dock::Floating => "floating",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Dock::Top => Icon::DockTop,
+            Dock::Bottom => Icon::DockBottom,
+            Dock::Left => Icon::DockLeft,
+            Dock::Right => Icon::DockRight,
+            Dock::Floating => Icon::Float,
         }
     }
 
@@ -65,11 +77,14 @@ pub struct Toolbar {
     grip_hover: Vector,
     /// Offset from the cursor to the toolbar origin while being dragged.
     drag: Option<Vector>,
+    /// Whether the dock choices are showing.
+    menu_open: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Event {
     SetDock(Dock),
+    ToggleMenu,
     GripMoved(Point),
     GripPressed,
     CursorMoved(Point),
@@ -83,6 +98,7 @@ impl Toolbar {
             pos,
             grip_hover: Vector::ZERO,
             drag: None,
+            menu_open: false,
         }
     }
 
@@ -100,7 +116,12 @@ impl Toolbar {
                 }
                 self.dock = dock;
                 self.drag = None;
+                self.menu_open = false;
                 true
+            }
+            Event::ToggleMenu => {
+                self.menu_open = !self.menu_open;
+                false
             }
             Event::GripMoved(p) => {
                 self.grip_hover = Vector::new(p.x, p.y);
@@ -138,7 +159,15 @@ impl Toolbar {
         on_event: impl Fn(Event) -> M + Clone + 'a,
     ) -> Element<'a, M> {
         let vertical = self.dock.vertical();
-        let grip = mouse_area(container(text(if vertical { "⋯" } else { "⋮⋮" }).size(16)).padding(GRIP_PAD))
+        let grip_icon = icons::glyph(
+            if vertical {
+                Icon::GripHorizontal
+            } else {
+                Icon::GripVertical
+            },
+            true,
+        );
+        let grip = mouse_area(container(grip_icon).padding(GRIP_PAD))
             .on_move({
                 let on_event = on_event.clone();
                 move |p| on_event(Event::GripMoved(p))
@@ -149,16 +178,23 @@ impl Toolbar {
             } else {
                 mouse::Interaction::Grab
             });
-        let menu = pick_list(&Dock::ALL[..], Some(self.dock), move |d| {
-            on_event(Event::SetDock(d))
-        })
-        .placeholder("Dock")
-        .text_size(13);
+        let grip = icons::with_tip(grip, "Drag to move · drop near an edge to dock");
 
-        let mut all = Vec::with_capacity(items.len() + 2);
-        all.push(grip.into());
+        let mut all = Vec::with_capacity(items.len() + 8);
+        all.push(grip);
         all.extend(items);
-        all.push(menu.into());
+        all.push(icons::button(
+            Icon::DockMenu,
+            "Toolbar position",
+            Some(on_event(Event::ToggleMenu)),
+        ));
+        if self.menu_open {
+            for dock in Dock::ALL {
+                // The current position shows disabled, so the choices read as "move to …".
+                let press = (dock != self.dock).then(|| on_event(Event::SetDock(dock)));
+                all.push(icons::button(dock.icon(), dock.to_string(), press));
+            }
+        }
 
         let bar: Element<'a, M> = if vertical {
             Column::with_children(all)
