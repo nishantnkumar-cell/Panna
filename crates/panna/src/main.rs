@@ -721,6 +721,7 @@ impl App {
             }
             Message::PagePress(page) => {
                 self.selecting = false;
+                self.form.leave();
                 // With the comment tools open, pressing on a comment selects it for moving.
                 if self.annotate.open
                     && !self.saving
@@ -804,8 +805,14 @@ impl App {
                 }
                 Task::none()
             }
-            Message::FocusNext => operation::focus_next(),
-            Message::FocusPrevious => operation::focus_previous(),
+            Message::FocusNext => {
+                self.form.leave();
+                operation::focus_next()
+            }
+            Message::FocusPrevious => {
+                self.form.leave();
+                operation::focus_previous()
+            }
             Message::Annotate(event) => {
                 // Choosing a markup tool with text selected marks it straight away.
                 let marks_now = matches!(

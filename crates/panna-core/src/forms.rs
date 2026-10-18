@@ -90,6 +90,8 @@ pub struct Field {
     pub color: Color,
     /// 0 left, 1 centred, 2 right.
     pub align: u8,
+    /// For text fields: a standard number, date or other format the form asks for.
+    pub format: Option<crate::Format>,
     pub widgets: Vec<Widget>,
 }
 
@@ -316,8 +318,30 @@ fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widget
         font_size,
         color,
         align: here.q.unwrap_or(ctx.default_q),
+        format: format(node),
         widgets: placed,
     });
+}
+
+/// The format set by the field's format (or, failing that, keystroke) script, when it is a
+/// standard one. The script itself is never run.
+fn format(node: &Dict<'_>) -> Option<crate::Format> {
+    let actions = node.get::<Dict<'_>>(b"AA")?;
+    [b"F".as_slice(), b"K"].iter().find_map(|key| {
+        let js = actions.get::<Dict<'_>>(*key)?;
+        let script = js
+            .get::<hayro::hayro_syntax::object::String<'_>>(b"JS")
+            .map(|s| decode_text_string(s.as_bytes()))
+            .or_else(|| {
+                js.get::<hayro::hayro_syntax::object::Stream<'_>>(b"JS")
+                    .and_then(|s| s.decoded().ok())
+                    .map(|b| {
+                        String::from_utf8_lossy(b.get(..b.len().min(MAX_TEXT)).unwrap_or_default())
+                            .into_owned()
+                    })
+            })?;
+        crate::Format::from_script(&script)
+    })
 }
 
 /// A choice field's options: plain strings, or [export label] pairs.

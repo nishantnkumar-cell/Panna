@@ -58,7 +58,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Feature | Priority | Notes |
 |---|---|---|
 | Fill AcroForm fields: text, checkbox, radio, list, dropdown | V1 | Done: fields drawn as inputs over the page (single and multiline text, password, max length, checkboxes, radio groups, drop-downs and lists). Multi-select lists keep their first choice only. Saved appearances use Helvetica, so characters outside Western European show as ? in other viewers until they redraw the field |
-| Tab between fields, field validation and formatting | V1 | Tab / Shift+Tab done. Validation and formats (number, date) next |
+| Tab between fields, field validation and formatting | V1 | Done: Tab / Shift+Tab; the standard Acrobat formats (number, currency, percent, date, ZIP, phone, SSN) are recognised from their script calls without running any script. Typing is filtered, values are formatted when you move on, and invalid ones are outlined in red. Time formats and custom scripts are not supported |
 | Save filled form | V1 | Done: values and fresh appearances written as an incremental update |
 | Reset form | V1 | Done: eraser button in the toolbar, with a confirmation; fields return to their /DV defaults |
 | Flatten form | Later | |

@@ -20,6 +20,7 @@ pub(crate) fn value(field: &Field, value: &FieldValue) -> String {
                 } => t.chars().take(*max).collect(),
                 _ => t.clone(),
             };
+            let t = field.format.as_ref().map_or(t.clone(), |f| f.saved(&t));
             text_string(&t)
         }
         FieldValue::State(Some(state)) => name(state),
@@ -68,6 +69,11 @@ pub(crate) fn name(s: &str) -> String {
 fn shown(field: &Field, value: &str) -> String {
     match &field.kind {
         FieldKind::Text { password: true, .. } => "*".repeat(value.chars().count()),
+        FieldKind::Text { .. } if field.format.is_some() => field
+            .format
+            .as_ref()
+            .and_then(|f| f.display(value))
+            .unwrap_or_else(|| value.to_owned()),
         FieldKind::Choice { options, .. } => options
             .iter()
             .find(|o| o.export == value)

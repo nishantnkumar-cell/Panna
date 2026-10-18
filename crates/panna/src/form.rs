@@ -14,6 +14,8 @@ use crate::selection::PageMap;
 /// The light blue Acrobat uses to show where fields are.
 const FIELD_FILL: Color = Color::from_rgb(0.86, 0.9, 1.0);
 const FIELD_EDGE: Color = Color::from_rgb(0.55, 0.65, 0.9);
+/// The outline of a value that doesn't fit the field's format.
+const INVALID: Color = Color::from_rgb(0.85, 0.15, 0.15);
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -32,6 +34,8 @@ pub struct Form {
     values: Vec<FieldValue>,
     /// Editors for multiline fields, by field index.
     editors: HashMap<usize, text_editor::Content>,
+    /// The field being typed in, shown as typed; the others show their formatted values.
+    active: Option<usize>,
 }
 
 /// A choice in a drop-down: what it shows, and the value it saves.
@@ -79,6 +83,11 @@ impl Form {
         self.load(&fields);
     }
 
+    /// Typing moved on (Tab, or a click elsewhere), so the last field shows its formatted value.
+    pub fn leave(&mut self) {
+        self.active = None;
+    }
+
     /// Whether resetting would change anything.
     pub fn can_reset(&self) -> bool {
         self.fields
@@ -124,6 +133,10 @@ impl Form {
         };
         let new = match event {
             Event::Text(_, mut text) => {
+                self.active = Some(index);
+                if let Some(format) = &field.format {
+                    text.retain(|c| format.allows(c));
+                }
                 if let FieldKind::Text {
                     max_len: Some(max), ..
                 } = field.kind
@@ -209,6 +222,12 @@ impl Form {
             FieldValue::Text(t) => t.as_str(),
             FieldValue::State(_) => "",
         };
+        let valid = field.format.as_ref().is_none_or(|f| f.accepts(text));
+        // Formatted once typing has moved on: "1234.5" becomes "$1,234.50".
+        let shown = match &field.format {
+            Some(f) if self.active != Some(index) => f.display(text).unwrap_or_else(|| text.to_owned()),
+            _ => text.to_owned(),
+        };
         match &field.kind {
             FieldKind::Text { multiline: true, .. } => {
                 let Some(content) = self.editors.get(&index) else {
@@ -236,7 +255,7 @@ impl Form {
                 editor.into()
             }
             FieldKind::Text { password, .. } => {
-                let mut input = text_input("", text)
+                let mut input = text_input("", &shown)
                     .size(size)
                     .padding([0.0, 2.0])
                     .width(Fill)
@@ -256,7 +275,12 @@ impl Form {
                 if editable {
                     input = input.on_input(move |t| ev(Event::Text(index, t)));
                 }
-                container(input).height(Fill).align_y(Center).style(fill).into()
+                let boxed = container(input).height(Fill).align_y(Center);
+                if valid {
+                    boxed.style(fill).into()
+                } else {
+                    boxed.style(invalid).into()
+                }
             }
             FieldKind::CheckBox | FieldKind::Radio => {
                 let set = matches!(value, FieldValue::State(Some(s)) if Some(s.as_str()) == on);
@@ -357,6 +381,14 @@ fn fill(_: &Theme) -> container::Style {
     })
 }
 
+fn invalid(theme: &Theme) -> container::Style {
+    fill(theme).border(Border {
+        color: INVALID,
+        width: 2.0,
+        radius: 0.0.into(),
+    })
+}
+
 fn box_only<'a>() -> Element<'a, Message> {
     container(iced::widget::space())
         .width(Length::Fill)
@@ -389,6 +421,7 @@ mod tests {
             font_size: 0.0,
             color: Ink::BLACK,
             align: 0,
+            format: None,
             widgets: on
                 .iter()
                 .map(|s| Widget {
@@ -479,6 +512,28 @@ mod tests {
         f.reset();
         assert_eq!(f.values[2], FieldValue::State(None));
         assert!(!f.can_reset() && f.dirty());
+    }
+
+    #[test]
+    fn formatted_fields_filter_typing() {
+        let mut f = Form::default();
+        let mut amount = field(
+            5,
+            FieldKind::Text {
+                multiline: false,
+                password: false,
+                max_len: None,
+            },
+            FieldValue::Text(String::new()),
+            &[""],
+        );
+        amount.format = Some(panna_core::Format::Special(2));
+        f.load(&[amount]);
+        f.update(Event::Text(0, "555-12ab34".into()));
+        assert_eq!(f.values[0], FieldValue::Text("555-1234".into()));
+        assert_eq!(f.active, Some(0));
+        f.leave();
+        assert_eq!(f.active, None);
     }
 
     #[test]
