@@ -22,6 +22,7 @@ pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_l
 pub use picture::StampImage;
 
 pub use convert::{MAX_PICTURES, pictures_to_pdf};
+pub use crypt::Protection;
 pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer};
 pub use rebuild::{Margins, PageSource};
 
@@ -57,6 +58,8 @@ pub enum SaveError {
     PrintingNotAllowed,
     /// Cropping would leave too little of a page.
     CropTooLarge,
+    /// Changing the password protection needs the owner password.
+    ProtectionLocked,
 }
 
 impl fmt::Display for SaveError {
@@ -74,6 +77,11 @@ impl fmt::Display for SaveError {
             Self::EngineCrashed => write!(f, "The PDF engine failed while preparing the changes."),
             Self::Io(e) => write!(f, "Couldn't write the file: {e}"),
             Self::CropTooLarge => write!(f, "Those margins would leave too little of the page."),
+            Self::ProtectionLocked => write!(
+                f,
+                "Only the owner can change this PDF's password protection. Open it with the \
+                 owner password first."
+            ),
             Self::PrintingNotAllowed => write!(
                 f,
                 "This PDF's author doesn't allow it to be printed. Opening it with the owner \
@@ -218,7 +226,7 @@ pub(crate) type Input<'a> = (&'a Pdf, &'a [u8], &'a str);
 /// A whole new file with the pages in `plan`, taken from `docs` (the first is the one being
 /// changed, whose catalog, document information and password the new file keeps).
 pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u8>, SaveError> {
-    rebuild_from(docs, plan, &[], true)
+    rebuild_from(docs, plan, &[], Output::Keep)
 }
 
 /// Every page of `doc`, unchanged and unturned.
@@ -245,7 +253,7 @@ pub(crate) fn crop(
             ..rebuild::Extra::default()
         })
         .collect();
-    rebuild_from(&[doc], &every_page(count), &extras, true)
+    rebuild_from(&[doc], &every_page(count), &extras, Output::Keep)
 }
 
 /// Every page of `doc`, with `marks` drawn on the pages at `pages`, numbered in that order.
@@ -265,7 +273,21 @@ pub(crate) fn header_footer(
                 .push(marks::Drawing::Lines(marks.for_page(number, pages.len(), &date)));
         }
     }
-    rebuild_from(&[doc], &every_page(count), &extras, true)
+    rebuild_from(&[doc], &every_page(count), &extras, Output::Keep)
+}
+
+/// Whether the file `bytes` has password protection.
+pub(crate) fn protected(bytes: &[u8]) -> bool {
+    update::read_trailer(bytes).is_ok_and(|t| t.encrypt.is_some())
+}
+
+/// Every page of `doc` with new password protection, or none.
+pub(crate) fn protect(
+    doc: Input<'_>,
+    count: usize,
+    protection: Option<&Protection>,
+) -> Result<Vec<u8>, SaveError> {
+    rebuild_from(&[doc], &every_page(count), &[], Output::Change(protection))
 }
 
 /// Every page of `doc`, with its comments, its form fields or both drawn into the pages. With
@@ -280,7 +302,7 @@ pub(crate) fn flatten(
         flatten: rebuild::Flatten { comments, fields },
         ..rebuild::Extra::default()
     };
-    rebuild_from(&[doc], &every_page(count), &vec![extra; count], true)
+    rebuild_from(&[doc], &every_page(count), &vec![extra; count], Output::Keep)
 }
 
 /// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order.
@@ -299,20 +321,31 @@ pub(crate) fn watermark(
             extra.over.extend(over);
         }
     }
-    rebuild_from(&[doc], &every_page(count), &extras, true)
+    rebuild_from(&[doc], &every_page(count), &extras, Output::Keep)
 }
 
 /// Every page of `doc` in a file without password protection, to hand to the printing
 /// system, if the file's permissions allow printing.
 pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveError> {
-    rebuild_from(&[doc], &every_page(pages), &[], false)
+    rebuild_from(&[doc], &every_page(pages), &[], Output::Print)
+}
+
+/// What password protection a rebuilt file gets.
+#[derive(Clone, Copy)]
+enum Output<'a> {
+    /// The first document's, as it was.
+    Keep,
+    /// None, for the printing system, if the permissions allow printing.
+    Print,
+    /// This, or none, if the owner (or the permissions) allow changing it.
+    Change(Option<&'a Protection>),
 }
 
 fn rebuild_from(
     docs: &[Input<'_>],
     plan: &[PageSource],
     extras: &[rebuild::Extra],
-    keep_password: bool,
+    output: Output<'_>,
 ) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
     let mut first = None;
@@ -323,16 +356,26 @@ fn rebuild_from(
             None => None,
         };
         if i == 0 {
-            if !keep_password && crypt.as_ref().is_some_and(|c| !c.may_print()) {
-                return Err(SaveError::PrintingNotAllowed);
-            }
-            let encryption = match (&trailer.encrypt, &crypt, &trailer.id) {
-                (Some(raw), Some(crypt), Some(id)) if keep_password => Some(rebuild::Encryption {
-                    crypt: crypt.clone(),
-                    dict: encrypt_dict(pdf, raw)?,
-                    id: id.clone(),
-                }),
-                _ => None,
+            let encryption = match output {
+                Output::Print if crypt.as_ref().is_some_and(|c| !c.may_print()) => {
+                    return Err(SaveError::PrintingNotAllowed);
+                }
+                Output::Change(_) if crypt.as_ref().is_some_and(|c| !c.may_change_protection()) => {
+                    return Err(SaveError::ProtectionLocked);
+                }
+                Output::Change(Some(protection)) => {
+                    let (crypt, dict, id) = protection.seal()?;
+                    Some(rebuild::Encryption { crypt, dict, id })
+                }
+                Output::Keep => match (&trailer.encrypt, &crypt, &trailer.id) {
+                    (Some(raw), Some(crypt), Some(id)) => Some(rebuild::Encryption {
+                        crypt: crypt.clone(),
+                        dict: encrypt_dict(pdf, raw)?,
+                        id: id.clone(),
+                    }),
+                    _ => None,
+                },
+                Output::Print | Output::Change(None) => None,
             };
             let info = trailer.info.as_deref().and_then(lex::reference);
             first = Some((info, encryption));

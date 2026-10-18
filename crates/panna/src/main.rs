@@ -15,6 +15,7 @@ mod layout;
 mod links;
 mod pages;
 mod print;
+mod protect;
 mod selection;
 mod settings;
 mod shortcuts;
@@ -132,6 +133,8 @@ enum Message {
     Export(export::Event),
     /// The Flatten card.
     Flatten(pages::FlattenEvent),
+    /// The Password protection card.
+    Protect(protect::Event),
     /// Where to export pages to: a text file, or a folder for pictures.
     ExportChosen(Option<PathBuf>),
     /// Asks for pictures to make a new PDF of.
@@ -272,6 +275,8 @@ struct App {
     exporting: Option<export::Exporting>,
     /// Choosing what to flatten.
     flattening: Option<pages::Flattening>,
+    /// Choosing password protection.
+    protecting: Option<protect::Protecting>,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
     /// The pages being extracted, while their file or folder is chosen.
@@ -569,6 +574,7 @@ impl App {
             watermarking: None,
             exporting: None,
             flattening: None,
+            protecting: None,
             pictures: Vec::new(),
             extract_pages: Vec::new(),
             confirm: None,
@@ -914,6 +920,8 @@ impl App {
                     self.exporting = None;
                 } else if self.flattening.is_some() {
                     self.flattening = None;
+                } else if self.protecting.is_some() {
+                    self.protecting = None;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1213,6 +1221,7 @@ impl App {
             }
             Message::Extract(event) => self.extract(event),
             Message::Export(event) => self.export(event),
+            Message::Protect(event) => self.protect(event),
             Message::Flatten(event) => {
                 let Some(state) = &mut self.flattening else {
                     return Task::none();
@@ -1847,6 +1856,69 @@ impl App {
         })
     }
 
+    /// The Password protection card's events.
+    fn protect(&mut self, event: protect::Event) -> Task<Message> {
+        if let protect::Event::Open = event {
+            let Some(doc) = &self.doc else { return Task::none() };
+            self.protecting = Some(protect::Protecting::new(doc.info.protected));
+            return iced::widget::operation::focus(protect::input_id());
+        }
+        let Some(state) = &mut self.protecting else {
+            return Task::none();
+        };
+        let clean = |v: String| v.chars().filter(|c| !c.is_control()).take(127).collect();
+        let protection = match event {
+            protect::Event::Open => return Task::none(),
+            protect::Event::OpenPassword(v) => {
+                state.open = clean(v);
+                return Task::none();
+            }
+            protect::Event::OpenAgain(v) => {
+                state.open_again = clean(v);
+                return Task::none();
+            }
+            protect::Event::Restrict(v) => {
+                state.restrict = v;
+                return Task::none();
+            }
+            protect::Event::Owner(v) => {
+                state.owner = clean(v);
+                return Task::none();
+            }
+            protect::Event::OwnerAgain(v) => {
+                state.owner_again = clean(v);
+                return Task::none();
+            }
+            protect::Event::Print(v) => {
+                state.print = v;
+                return Task::none();
+            }
+            protect::Event::Change(v) => {
+                state.change = v;
+                return Task::none();
+            }
+            protect::Event::Copy(v) => {
+                state.copy = v;
+                return Task::none();
+            }
+            protect::Event::Cancel => {
+                self.protecting = None;
+                return Task::none();
+            }
+            protect::Event::Remove => None,
+            protect::Event::Go => match protect::settings(state) {
+                Ok(p) => Some(p),
+                Err(_) => return Task::none(),
+            },
+        };
+        self.protecting = None;
+        if self.pages_busy || self.saving {
+            return Task::none();
+        }
+        let current = self.current_page();
+        self.edit_pages(PageEdit::Protect(protection), current, false)
+    }
+
     /// The Export card's events.
     fn export(&mut self, event: export::Event) -> Task<Message> {
         let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
@@ -2274,6 +2346,7 @@ impl App {
                 comments: Vec::new(),
                 fields: Vec::new(),
                 links: Vec::new(),
+                protected: false,
             },
             worker,
             layout: PageLayout::default(),
@@ -2563,6 +2636,11 @@ impl App {
                 "Export as text or pictures…",
                 on(Message::Export(export::Event::Open)),
             ),
+            icons::button(
+                Icon::Protect,
+                "Password protection…",
+                on(Message::Protect(protect::Event::Open)),
+            ),
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
             icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
@@ -2725,6 +2803,12 @@ impl App {
             layers.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
+            ));
+        }
+        if let Some(state) = &self.protecting {
+            layers.push(modal(
+                protect::card(state),
+                Message::Protect(protect::Event::Cancel),
             ));
         }
         if let Some(state) = self.flattening {

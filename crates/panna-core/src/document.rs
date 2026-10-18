@@ -35,6 +35,8 @@ pub struct DocumentInfo {
     pub fields: Vec<crate::Field>,
     /// Links on the pages, in page order.
     pub links: Vec<crate::Link>,
+    /// Whether the file has password protection.
+    pub protected: bool,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -268,9 +270,15 @@ impl Document {
             let comments = self.comments();
             let fields = catch_unwind(AssertUnwindSafe(|| crate::forms::read(&self.pdf))).unwrap_or_default();
             let links = catch_unwind(AssertUnwindSafe(|| crate::links::read(&self.pdf))).unwrap_or_default();
+            let protected = crate::edit::protected(&self.bytes);
+            properties.push((
+                "Password protection",
+                if protected { "Yes" } else { "None" }.to_owned(),
+            ));
             DocumentInfo {
                 fields,
                 links,
+                protected,
                 pages,
                 title,
                 properties,
@@ -419,6 +427,29 @@ impl Document {
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with new password protection, or none, as a new file, and the password
+    /// that opens it with full rights. Fails unless this document was opened with the owner
+    /// password or allows changes.
+    pub fn protected(
+        &self,
+        protection: Option<&crate::Protection>,
+    ) -> Result<(Vec<u8>, String), crate::SaveError> {
+        let bytes = catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::protect(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                protection,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)??;
+        let password = match protection {
+            Some(p) if !p.owner_password.is_empty() => p.owner_password.clone(),
+            Some(p) => p.open_password.clone(),
+            None => String::new(),
+        };
+        Ok((bytes, password))
     }
 
     /// The whole document, without password protection, for the printing system. Fails when

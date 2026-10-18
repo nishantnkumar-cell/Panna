@@ -435,3 +435,46 @@ fn pages_are_exported_as_text_and_pictures() {
     assert_eq!(&std::fs::read(&jpg).unwrap()[..2], [0xFF, 0xD8]);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn password_protection_is_added_changed_and_removed() {
+    use panna_core::{Protection, SaveError};
+    let doc = open(three_pages(), None);
+    let protection = Protection {
+        open_password: "open sesame".into(),
+        owner_password: "boss".into(),
+        allow_printing: true,
+        ..Protection::default()
+    };
+    let (bytes, password) = doc.protected(Some(&protection)).unwrap();
+    assert_eq!(password, "boss");
+    assert!(Document::from_bytes(bytes.clone(), None, Limits::default()).is_err());
+    assert!(Document::from_bytes(bytes.clone(), Some("wrong"), Limits::default()).is_err());
+
+    // The open password reads it, may print it, but may not lift the protection.
+    let user = open(bytes.clone(), Some("open sesame"));
+    assert!(text(&user, 2).contains("Page 3"));
+    assert_eq!(user.info().unwrap().outline.len(), 1);
+    assert!(user.print_copy().is_ok());
+    assert_eq!(user.protected(None).unwrap_err(), SaveError::ProtectionLocked);
+
+    // The owner password lifts it.
+    let owner = open(bytes, Some("boss"));
+    let (plain, password) = owner.protected(None).unwrap();
+    assert!(password.is_empty());
+    assert!(text(&open(plain, None), 0).contains("Page 1"));
+
+    // No printing, and no owner password: nobody can print it or lift that.
+    let locked = Protection {
+        open_password: "x".into(),
+        ..Protection::default()
+    };
+    let (bytes, password) = doc.protected(Some(&locked)).unwrap();
+    assert_eq!(password, "x");
+    let user = open(bytes, Some("x"));
+    assert_eq!(user.print_copy().unwrap_err(), SaveError::PrintingNotAllowed);
+
+    // No open password: anyone can read it, under the restrictions.
+    let (bytes, _) = doc.protected(Some(&Protection::default())).unwrap();
+    assert!(text(&open(bytes, None), 1).contains("Page 2"));
+}

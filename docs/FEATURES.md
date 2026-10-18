@@ -111,7 +111,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Feature | Priority | Notes |
 |---|---|---|
 | Open encrypted PDFs | V1 | Done (see above); changes save back into them encrypted |
-| Encrypt with password, set permissions | Later | AES-256 only |
+| Encrypt with password, set permissions | Later | Done: AES-256 (revision 6) with an open password, a permissions password and print/change/copy limits; removing or changing it needs the owner password. Checked against poppler |
 | Digitally sign with a local certificate (PKCS#12 / OS store) | Later | |
 | Validate signatures | Later | Revocation checks (OCSP/CRL) are online, so they stay optional and off by default |
 | Certify document | Later | |

@@ -44,6 +44,8 @@ pub enum PageEdit {
         pages: Vec<usize>,
         mark: crate::Watermark,
     },
+    /// Gives the document new password protection, or removes it.
+    Protect(Option<crate::Protection>),
     /// Draws comments, form fields or both into the pages.
     Flatten { comments: bool, fields: bool },
     /// Goes back to before the last page change.
@@ -388,6 +390,14 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     PageEdit::HeaderFooter { pages, marks } => current
                         .with_header_footer(&pages, &marks)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::Protect(protection) => {
+                        current
+                            .protected(protection.as_ref())
+                            .and_then(|(bytes, password)| {
+                                Document::from_bytes(bytes, Some(&password), current.limits())
+                                    .map_err(|_| SaveError::Damaged)
+                            })
+                    }
                     PageEdit::Flatten { comments, fields } => current
                         .flattened(comments, fields)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),

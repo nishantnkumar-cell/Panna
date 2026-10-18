@@ -162,6 +162,12 @@ impl Crypt {
         self.owner || self.p & 0b100 != 0
     }
 
+    /// Whether the file's protection may be changed or removed: opened with the owner
+    /// password, or a file that allows changes (bit 4 of /P) anyway.
+    pub(crate) fn may_change_protection(&self) -> bool {
+        self.owner || self.p & 0b1000 != 0
+    }
+
     /// Encrypts every string and the stream data in a new object's body.
     pub(crate) fn seal(&self, num: u32, generation: u16, body: &[u8]) -> Result<Vec<u8>, SaveError> {
         let (dict, data) = match find(body, b"\nstream\n") {
@@ -268,6 +274,116 @@ impl Crypt {
             .get(..(self.key.len() + 5).min(16))
             .unwrap_or_default()
             .to_vec()
+    }
+}
+
+/// Password protection to give a file: AES-256 (revision 6, ISO 32000-2).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Protection {
+    /// Needed to open the file; empty opens it without one.
+    pub open_password: String,
+    /// Lifts the restrictions below. Empty makes one up that nobody knows, so they can't be
+    /// lifted.
+    pub owner_password: String,
+    pub allow_printing: bool,
+    /// Changing pages, comments and form fields.
+    pub allow_changes: bool,
+    /// Copying text and pictures (screen readers may always read it).
+    pub allow_copying: bool,
+}
+
+impl Protection {
+    /// The permission flags (/P): bits 3 (print) and 12 (print well), 4 (change), 6
+    /// (comment), 9 (fill forms), 11 (assemble), 5 (copy); 10 (accessibility) always, and
+    /// the reserved bits set.
+    pub(crate) fn flags(&self) -> i32 {
+        let bit = |n: u32| 1u32 << (n - 1);
+        let mut p: u32 = 0xFFFF_F0C0 | bit(10);
+        if self.allow_printing {
+            p |= bit(3) | bit(12);
+        }
+        if self.allow_changes {
+            p |= bit(4) | bit(6) | bit(9) | bit(11);
+        }
+        if self.allow_copying {
+            p |= bit(5);
+        }
+        p as i32
+    }
+
+    /// The file key and encryption dictionary for a new file, and its /ID array.
+    pub(crate) fn seal(&self) -> Result<(Crypt, Vec<u8>, Vec<u8>), SaveError> {
+        let random = |n: usize| -> Result<Vec<u8>, SaveError> {
+            let mut out = vec![0u8; n];
+            getrandom::fill(&mut out).map_err(|e| SaveError::Io(e.to_string()))?;
+            Ok(out)
+        };
+        let limit = |p: &str| p.as_bytes().get(..p.len().min(127)).unwrap_or_default().to_vec();
+        let user = limit(&self.open_password);
+        let owner = if self.owner_password.is_empty() {
+            random(32)?
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+                .into_bytes()
+        } else {
+            limit(&self.owner_password)
+        };
+        let key = random(32)?;
+        let wrap = |with: &[u8]| -> Result<Vec<u8>, SaveError> {
+            // AES-256 in CBC mode with a zero IV and no padding.
+            let cipher = Aes256::new_from_slice(with).map_err(|_| SaveError::Damaged)?;
+            let mut prev = [0u8; 16];
+            let mut out = Vec::with_capacity(32);
+            for chunk in key.as_chunks::<16>().0 {
+                let mut block = GenericArray::clone_from_slice(chunk);
+                block.iter_mut().zip(prev).for_each(|(a, b)| *a ^= b);
+                cipher.encrypt_block(&mut block);
+                prev.copy_from_slice(&block);
+                out.extend_from_slice(&block);
+            }
+            Ok(out)
+        };
+        // Algorithms 8 and 9.
+        let (uvs, uks) = (random(8)?, random(8)?);
+        let mut u = hash(6, &user, &uvs, &[]);
+        u.extend_from_slice(&uvs);
+        u.extend_from_slice(&uks);
+        let ue = wrap(&hash(6, &user, &uks, &[]))?;
+        let (ovs, oks) = (random(8)?, random(8)?);
+        let mut o = hash(6, &owner, &ovs, &u);
+        o.extend_from_slice(&ovs);
+        o.extend_from_slice(&oks);
+        let oe = wrap(&hash(6, &owner, &oks, &u))?;
+        // Algorithm 10: the permissions, sealed so they can be checked.
+        let p = self.flags();
+        let mut perms = p.to_le_bytes().to_vec();
+        perms.extend_from_slice(&[0xFF; 4]);
+        perms.extend_from_slice(b"Tadb");
+        perms.extend_from_slice(&random(4)?);
+        let cipher = Aes256::new_from_slice(&key).map_err(|_| SaveError::Damaged)?;
+        let mut block = GenericArray::clone_from_slice(&perms);
+        cipher.encrypt_block(&mut block);
+        let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+        let dict = format!(
+            "<< /Filter /Standard /V 5 /R 6 /Length 256 \
+             /CF << /StdCF << /Type /CryptFilter /AuthEvent /DocOpen /CFM /AESV3 /Length 32 >> >> \
+             /StmF /StdCF /StrF /StdCF /P {p} /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> >>",
+            hex(&o),
+            hex(&u),
+            hex(&oe),
+            hex(&ue),
+            hex(&block)
+        );
+        let id = hex(&random(16)?);
+        let crypt = Crypt {
+            key,
+            strings: Method::Aes256,
+            streams: Method::Aes256,
+            p,
+            owner: true,
+        };
+        Ok((crypt, dict.into_bytes(), format!("[<{id}> <{id}>]").into_bytes()))
     }
 }
 
