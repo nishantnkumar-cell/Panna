@@ -201,6 +201,10 @@ pub struct ViewData<'a> {
     pub comments: &'a [Comment],
     pub unsaved: &'a [Annotation],
     pub removed: &'a [CommentId],
+    /// Page changes can be undone.
+    pub can_undo_pages: bool,
+    /// A page change is in progress.
+    pub pages_busy: bool,
 }
 
 impl Sidebar {
@@ -342,7 +346,7 @@ impl Sidebar {
                 .on_press(Message::GoToPage(index))
                 .into()
         });
-        scrollable(
+        let list = scrollable(
             Column::with_children(items)
                 .spacing(GAP - 2.0)
                 .padding(PAD)
@@ -351,7 +355,17 @@ impl Sidebar {
         )
         .id(thumbs_id())
         .on_scroll(|v| Message::Sidebar(Event::Scrolled(v)))
-        .height(Fill)
+        .height(Fill);
+        column![
+            crate::pages::tools(
+                data.layout.len(),
+                data.current,
+                data.can_undo_pages,
+                data.pages_busy
+            ),
+            rule::horizontal(1),
+            list
+        ]
         .into()
     }
 }

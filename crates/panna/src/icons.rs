@@ -62,6 +62,11 @@ pub enum Icon {
     FullScreen,
     Present,
     Stamp,
+    PageAdd,
+    PageInsertFile,
+    PageExtract,
+    MoveUp,
+    MoveDown,
 }
 
 impl Icon {
@@ -121,6 +126,11 @@ impl Icon {
             Icon::FullScreen => include_bytes!("../icons/fullscreen.svg"),
             Icon::Present => include_bytes!("../icons/presentation.svg"),
             Icon::Stamp => include_bytes!("../icons/stamp.svg"),
+            Icon::PageAdd => include_bytes!("../icons/file-plus.svg"),
+            Icon::PageInsertFile => include_bytes!("../icons/file-input.svg"),
+            Icon::PageExtract => include_bytes!("../icons/file-output.svg"),
+            Icon::MoveUp => include_bytes!("../icons/arrow-up.svg"),
+            Icon::MoveDown => include_bytes!("../icons/arrow-down.svg"),
         }
     }
 }
@@ -215,7 +225,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 54] = [
+    const ALL: [Icon; 59] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -270,6 +280,11 @@ mod tests {
         Icon::FullScreen,
         Icon::Present,
         Icon::Stamp,
+        Icon::PageAdd,
+        Icon::PageInsertFile,
+        Icon::PageExtract,
+        Icon::MoveUp,
+        Icon::MoveDown,
     ];
 
     #[test]

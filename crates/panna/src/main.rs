@@ -12,6 +12,7 @@ mod form;
 mod icons;
 mod layout;
 mod links;
+mod pages;
 mod selection;
 mod settings;
 mod shortcuts;
@@ -28,7 +29,7 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
-    Changes, Comment, DocumentInfo, Limits, LinkTarget, OpenError, PageSize, PageText, RenderError,
+    Changes, Comment, DocumentInfo, Limits, LinkTarget, OpenError, PageEdit, PageSize, PageText, RenderError,
     RenderWorker, RenderedPage, SaveError, TextBox,
 };
 
@@ -113,6 +114,20 @@ enum Message {
     Present,
     /// Next or previous page while presenting; ignored otherwise.
     Advance(bool),
+    /// A page tool from the Pages tab.
+    Pages(pages::Op),
+    /// The PDF to insert pages from, once chosen.
+    InsertFileChosen(Option<PathBuf>),
+    /// Where to save extracted pages, once chosen.
+    ExtractChosen(Option<PathBuf>),
+    PagesChanged {
+        doc: u64,
+        /// The page to show.
+        show: usize,
+        undo: bool,
+        result: Result<DocumentInfo, SaveError>,
+    },
+    Extracted(Result<(), SaveError>),
     RotateCcw,
     PrevPage,
     NextPage,
@@ -215,6 +230,10 @@ struct App {
     /// A problem to show the user, such as a failed save.
     notice: Option<String>,
     screen: Screen,
+    /// Unsaved page changes, for undo and "Save changes?".
+    page_edits: usize,
+    /// A page change is being made; the tools wait for it.
+    pages_busy: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -438,6 +457,8 @@ impl App {
             settings,
             window_size: INITIAL_SIZE,
             screen: Screen::Windowed,
+            page_edits: 0,
+            pages_busy: false,
             show_properties: false,
             find: find::Find::default(),
             selection: None,
@@ -1026,6 +1047,9 @@ impl App {
                 self.form.leave();
                 operation::focus_previous()
             }
+            Message::Annotate(annotate::Event::Undo) if !self.annotate.can_undo() && self.page_edits > 0 => {
+                self.page_tool(pages::Op::Undo)
+            }
             Message::Annotate(event) => {
                 // Choosing a markup tool with text selected marks it straight away.
                 let marks_now = matches!(
@@ -1069,6 +1093,78 @@ impl App {
                 }
                 Task::batch([self.request_visible(), self.request_thumbnails()])
             }
+            Message::Pages(op) => self.page_tool(op),
+            Message::InsertFileChosen(Some(path)) => {
+                let at = self.current_page() + 1;
+                self.edit_pages(PageEdit::InsertFile { at, path }, at, false)
+            }
+            Message::ExtractChosen(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = panna_core::PageSource::Page {
+                    doc: 0,
+                    index: self.current_page(),
+                    turns: 0,
+                };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.extract(vec![page], path, move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::InsertFileChosen(None) | Message::ExtractChosen(None) => Task::none(),
+            Message::Extracted(result) => {
+                if let Err(e) = result {
+                    self.notice = Some(e.to_string());
+                }
+                Task::none()
+            }
+            Message::PagesChanged {
+                doc,
+                show,
+                undo,
+                result,
+            } => {
+                self.pages_busy = false;
+                let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
+                    return Task::none();
+                };
+                let info = match result {
+                    Ok(info) => info,
+                    Err(e) => {
+                        self.notice = Some(format!("The pages couldn't be changed: {e}"));
+                        return Task::none();
+                    }
+                };
+                self.page_edits = if undo {
+                    self.page_edits.saturating_sub(1)
+                } else {
+                    self.page_edits + 1
+                };
+                // Unsaved comments and form entries are now part of the document.
+                let sizes = rotated_sizes(&info.pages, self.rotation);
+                open.layout = PageLayout::new(&sizes, self.settings.spread);
+                open.pages = info.pages.iter().map(|_| Slot::default()).collect();
+                open.thumb_layout = ThumbLayout::new(&sizes);
+                open.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
+                open.texts = info.pages.iter().map(|_| TextSlot::default()).collect();
+                open.info = info;
+                self.selection = None;
+                self.hover = None;
+                self.annotate.saved(&open.info.comments);
+                self.form.load(&open.info.fields);
+                self.find.rescan(&open.texts);
+                Task::batch([
+                    self.go_to_page(show),
+                    self.request_thumbnails(),
+                    self.request_search_text(),
+                    self.request_comment_text(),
+                ])
+            }
             Message::Save => {
                 let Some(path) = self.doc.as_ref().map(|d| d.path.clone()) else {
                     return Task::none();
@@ -1110,6 +1206,7 @@ impl App {
                 };
                 match result {
                     Ok(comments) => {
+                        self.page_edits = 0;
                         open.path = path.clone();
                         // Saved comments are listed from the file, so new ones can now be
                         // removed like any other.
@@ -1144,6 +1241,7 @@ impl App {
                 match choice {
                     Choice::Cancel => Task::none(),
                     Choice::Discard => {
+                        self.page_edits = 0;
                         self.annotate
                             .saved(self.doc.as_ref().map_or(&[], |d| d.info.comments.as_slice()));
                         self.form.discard();
@@ -1168,7 +1266,80 @@ impl App {
 
     /// Whether there are annotations that haven't been saved.
     fn dirty(&self) -> bool {
-        self.doc.is_some() && (self.annotate.dirty() || self.form.dirty())
+        self.doc.is_some() && (self.annotate.dirty() || self.form.dirty() || self.page_edits > 0)
+    }
+
+    fn page_tool(&mut self, op: pages::Op) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        if self.pages_busy || self.saving {
+            return Task::none();
+        }
+        let current = self.current_page();
+        match op {
+            pages::Op::Undo if self.page_edits > 0 => self.edit_pages(PageEdit::Undo, current, true),
+            pages::Op::Undo => Task::none(),
+            pages::Op::InsertFile => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Insert pages from")
+                        .add_filter("PDF documents", &["pdf", "PDF"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::InsertFileChosen,
+            ),
+            pages::Op::Extract => {
+                let stem = doc
+                    .path
+                    .file_stem()
+                    .map_or_else(|| "document".into(), |s| s.to_string_lossy().into_owned());
+                let name = format!("{stem} page {}.pdf", current + 1);
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save page as")
+                            .add_filter("PDF documents", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::ExtractChosen,
+                )
+            }
+            _ => {
+                let size = doc.info.pages.get(current).copied().unwrap_or(PageSize {
+                    width: 612.0,
+                    height: 792.0,
+                });
+                match pages::plan(op, doc.pages.len(), current, size) {
+                    Some((plan, show)) => self.edit_pages(PageEdit::Plan(plan), show, false),
+                    None => Task::none(),
+                }
+            }
+        }
+    }
+
+    /// Sends a page change to the worker, with unsaved comments and form entries first so
+    /// they go along.
+    fn edit_pages(&mut self, edit: PageEdit, show: usize, undo: bool) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        if self.dirty() {
+            doc.worker.set_changes(self.changes(), |_| {});
+        }
+        self.pages_busy = true;
+        let (tx, rx) = futures_channel::oneshot::channel();
+        doc.worker.edit_pages(edit, move |result| {
+            let _ = tx.send(result);
+        });
+        let id = doc.id;
+        Task::perform(rx, move |result| Message::PagesChanged {
+            doc: id,
+            show,
+            undo,
+            result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+        })
     }
 
     /// Carries out an action that was waiting on "Save changes?".
@@ -1573,21 +1744,7 @@ impl App {
             return Task::none();
         };
         self.rotation = (self.rotation + turns) % 4;
-        let sizes: Vec<PageSize> = doc
-            .info
-            .pages
-            .iter()
-            .map(|s| {
-                if self.rotation % 2 == 1 {
-                    PageSize {
-                        width: s.height,
-                        height: s.width,
-                    }
-                } else {
-                    *s
-                }
-            })
-            .collect();
+        let sizes = rotated_sizes(&doc.info.pages, self.rotation);
         doc.layout = PageLayout::new(&sizes, self.settings.spread);
         doc.thumb_layout = ThumbLayout::new(&sizes);
         doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
@@ -2097,6 +2254,8 @@ impl App {
                 comments: &doc.info.comments,
                 unsaved: &self.annotate.items,
                 removed: &self.annotate.removed,
+                can_undo_pages: self.page_edits > 0,
+                pages_busy: self.pages_busy,
             })
         };
         match self.sidebar.side {
@@ -2332,4 +2491,21 @@ impl App {
 
 fn set_window_mode(mode: window::Mode) -> Task<Message> {
     window::oldest().and_then(move |id| window::set_mode(id, mode))
+}
+
+/// Page sizes as shown, turned by the view's rotation.
+fn rotated_sizes(pages: &[PageSize], rotation: u8) -> Vec<PageSize> {
+    pages
+        .iter()
+        .map(|s| {
+            if rotation % 2 == 1 {
+                PageSize {
+                    width: s.height,
+                    height: s.width,
+                }
+            } else {
+                *s
+            }
+        })
+        .collect()
 }
