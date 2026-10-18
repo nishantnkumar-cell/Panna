@@ -130,6 +130,8 @@ enum Message {
     Watermark(pages::WatermarkEvent),
     /// The Export card.
     Export(export::Event),
+    /// The Flatten card.
+    Flatten(pages::FlattenEvent),
     /// Where to export pages to: a text file, or a folder for pictures.
     ExportChosen(Option<PathBuf>),
     /// Asks for pictures to make a new PDF of.
@@ -268,6 +270,8 @@ struct App {
     watermarking: Option<pages::Watermarking>,
     /// Choosing pages to export, then where.
     exporting: Option<export::Exporting>,
+    /// Choosing what to flatten.
+    flattening: Option<pages::Flattening>,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
     /// The pages being extracted, while their file or folder is chosen.
@@ -564,6 +568,7 @@ impl App {
             marking: None,
             watermarking: None,
             exporting: None,
+            flattening: None,
             pictures: Vec::new(),
             extract_pages: Vec::new(),
             confirm: None,
@@ -907,6 +912,8 @@ impl App {
                     self.watermarking = None;
                 } else if self.exporting.is_some() {
                     self.exporting = None;
+                } else if self.flattening.is_some() {
+                    self.flattening = None;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1206,6 +1213,26 @@ impl App {
             }
             Message::Extract(event) => self.extract(event),
             Message::Export(event) => self.export(event),
+            Message::Flatten(event) => {
+                let Some(state) = &mut self.flattening else {
+                    return Task::none();
+                };
+                match event {
+                    pages::FlattenEvent::Comments(v) => state.comments = v,
+                    pages::FlattenEvent::Fields(v) => state.fields = v,
+                    pages::FlattenEvent::Cancel => self.flattening = None,
+                    pages::FlattenEvent::Go => {
+                        let pages::Flattening { comments, fields } = *state;
+                        self.flattening = None;
+                        if !(comments || fields) || self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(PageEdit::Flatten { comments, fields }, current, false);
+                    }
+                }
+                Task::none()
+            }
             Message::FromPictures => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -1699,6 +1726,13 @@ impl App {
                 },
                 Message::InsertFileChosen,
             ),
+            pages::Op::Flatten => {
+                self.flattening = Some(pages::Flattening {
+                    comments: true,
+                    fields: true,
+                });
+                Task::none()
+            }
             pages::Op::Watermark => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
                 self.watermarking = Some(pages::Watermarking::new(count));
@@ -2691,6 +2725,12 @@ impl App {
             layers.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
+            ));
+        }
+        if let Some(state) = self.flattening {
+            layers.push(modal(
+                pages::flatten_card(state),
+                Message::Flatten(pages::FlattenEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.exporting, &self.doc) {

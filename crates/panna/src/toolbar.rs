@@ -204,9 +204,11 @@ impl Toolbar {
                 .into()
         } else {
             Row::with_children(all)
-                .spacing(6)
+                .spacing(4)
                 .padding(6)
                 .align_y(Center)
+                // Onto a second line when the window is too narrow for every button.
+                .wrap()
                 .into()
         };
         let floating = self.dock == Dock::Floating;

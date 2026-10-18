@@ -50,7 +50,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Undo / redo | V1 | Done (Ctrl+Z, Ctrl+Y) |
 | Save annotations back into the PDF (standard annotations) | V1 | Done (Ctrl+S, Ctrl+Shift+S) as an incremental update with appearance streams, so other viewers show them; asks before closing with unsaved changes. Also saves into password-protected PDFs (RC4, AES-128, AES-256), keeping their encryption |
 | Import / export comments (FDF, XFDF) | Later | |
-| Flatten annotations | Later | |
+| Flatten annotations | Later | Done: comments are drawn into the pages (links stay links), from the page tools |
 | Shared review / cloud commenting | Skip | Online |
 
 ## 3. Forms
@@ -61,7 +61,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Tab between fields, field validation and formatting | V1 | Done: Tab / Shift+Tab; the standard Acrobat formats (number, currency, percent, date, ZIP, phone, SSN) are recognised from their script calls without running any script. Typing is filtered, values are formatted when you move on, and invalid ones are outlined in red. Time formats and custom scripts are not supported |
 | Save filled form | V1 | Done: values and fresh appearances written as an incremental update |
 | Reset form | V1 | Done: eraser button in the toolbar, with a confirmation; fields return to their /DV defaults |
-| Flatten form | Later | |
+| Flatten form | Later | Done: fields are drawn with their values and the form is removed |
 | Import / export form data (FDF, XFDF) | Later | |
 | Create and edit form fields | Later | |
 | Auto-detect form fields | Later | Offline heuristic only |

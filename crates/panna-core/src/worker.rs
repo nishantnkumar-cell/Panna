@@ -44,6 +44,8 @@ pub enum PageEdit {
         pages: Vec<usize>,
         mark: crate::Watermark,
     },
+    /// Draws comments, form fields or both into the pages.
+    Flatten { comments: bool, fields: bool },
     /// Goes back to before the last page change.
     Undo,
 }
@@ -385,6 +387,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::HeaderFooter { pages, marks } => current
                         .with_header_footer(&pages, &marks)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::Flatten { comments, fields } => current
+                        .flattened(comments, fields)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Watermark { pages, mark } => current
                         .with_watermark(&pages, &mark)

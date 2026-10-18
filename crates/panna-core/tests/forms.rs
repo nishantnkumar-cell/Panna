@@ -132,3 +132,63 @@ fn filled_values_save_and_show() {
     });
     assert!(blue, "no text drawn in the name field");
 }
+
+#[test]
+fn flattened_fields_and_comments_stay_drawn() {
+    use panna_core::{Annotation, Color, Kind, TextBox};
+    let doc = open(form());
+    let fields = doc.info().unwrap().fields;
+    let changes = Changes {
+        fields: vec![
+            (fields[0].id, FieldValue::Text("Ada".into())),
+            (fields[1].id, FieldValue::State(Some("Yes".into()))),
+        ],
+        add: vec![Annotation {
+            page: 0,
+            kind: Kind::Rect(TextBox {
+                x0: 150.0,
+                y0: 150.0,
+                x1: 190.0,
+                y1: 190.0,
+            }),
+            color: Color([1.0, 0.0, 0.0]),
+            opacity: 1.0,
+            width: 4.0,
+            contents: "Look".into(),
+            author: String::new(),
+        }],
+        ..Changes::default()
+    };
+    let filled = open(doc.with_changes(&changes).unwrap());
+    let before = (pixel(&filled, 17, 62), pixel(&filled, 151, 170));
+    assert_eq!(filled.comments().len(), 1);
+
+    // Fields only: the form is gone, the comment stays a comment.
+    let fields_only = open(filled.flattened(false, true).unwrap());
+    assert!(fields_only.info().unwrap().fields.is_empty());
+    assert_eq!(fields_only.comments().len(), 1);
+    assert_eq!(
+        (pixel(&fields_only, 17, 62), pixel(&fields_only, 151, 170)),
+        before
+    );
+
+    // Both: nothing left to change, everything still drawn.
+    let flat = open(filled.flattened(true, true).unwrap());
+    assert!(flat.comments().is_empty());
+    assert!(flat.info().unwrap().fields.is_empty());
+    assert_eq!((pixel(&flat, 17, 62), pixel(&flat, 151, 170)), before);
+    assert_eq!(before.1[..3], [255, 0, 0]);
+    assert_eq!(before.0[0], 0);
+    let blue = |doc: &Document| {
+        (22..38).any(|y| {
+            (10..80).any(|x| {
+                let [r, _, b, _] = pixel(doc, x, y);
+                b > 150 && r < 100
+            })
+        })
+    };
+    assert!(blue(&flat), "the filled-in name was lost");
+    // A field the viewer was left to draw gets drawn when flattened.
+    let untouched = open(open(form()).flattened(false, true).unwrap());
+    assert!(blue(&untouched), "the unfilled name field's value was lost");
+}

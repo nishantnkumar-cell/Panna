@@ -268,6 +268,21 @@ pub(crate) fn header_footer(
     rebuild_from(&[doc], &every_page(count), &extras, true)
 }
 
+/// Every page of `doc`, with its comments, its form fields or both drawn into the pages. With
+/// the fields flattened, the document no longer has a form.
+pub(crate) fn flatten(
+    doc: Input<'_>,
+    count: usize,
+    comments: bool,
+    fields: bool,
+) -> Result<Vec<u8>, SaveError> {
+    let extra = rebuild::Extra {
+        flatten: rebuild::Flatten { comments, fields },
+        ..rebuild::Extra::default()
+    };
+    rebuild_from(&[doc], &every_page(count), &vec![extra; count], true)
+}
+
 /// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order.
 pub(crate) fn watermark(
     doc: Input<'_>,

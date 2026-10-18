@@ -376,6 +376,51 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with its comments (`comments`), form fields (`fields`) or both drawn into
+    /// the pages so they can no longer be changed, as a new file.
+    pub fn flattened(&self, comments: bool, fields: bool) -> Result<Vec<u8>, crate::SaveError> {
+        // Text and choice fields may rely on the viewer to draw them; writing their values
+        // again gives each one an appearance to flatten.
+        let drawn;
+        let source = if fields {
+            let info = self.info().map_err(|_| crate::SaveError::Damaged)?;
+            let values: Vec<_> = info
+                .fields
+                .iter()
+                .filter(|f| {
+                    matches!(
+                        f.kind,
+                        crate::FieldKind::Text { .. } | crate::FieldKind::Choice { .. }
+                    )
+                })
+                .map(|f| (f.id, f.value.clone()))
+                .collect();
+            if values.is_empty() {
+                self
+            } else {
+                let changes = crate::Changes {
+                    fields: values,
+                    ..crate::Changes::default()
+                };
+                drawn = self
+                    .reopen(self.with_changes(&changes)?)
+                    .map_err(|_| crate::SaveError::Damaged)?;
+                &drawn
+            }
+        } else {
+            self
+        };
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::flatten(
+                (&source.pdf, &source.bytes, &source.password),
+                source.page_count(),
+                comments,
+                fields,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The whole document, without password protection, for the printing system. Fails when
     /// the file's permissions don't allow printing.
     pub fn print_copy(&self) -> Result<Vec<u8>, crate::SaveError> {

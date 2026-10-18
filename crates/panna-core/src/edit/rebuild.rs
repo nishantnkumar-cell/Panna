@@ -258,6 +258,85 @@ pub(crate) struct Extra {
     /// What to draw behind the page's content, and over it.
     pub under: Vec<super::marks::Drawing>,
     pub over: Vec<super::marks::Drawing>,
+    /// Annotations to draw into the page's content and remove.
+    pub flatten: Flatten,
+}
+
+/// Which annotations become part of the page's content.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Flatten {
+    /// Comments, markup, stamps and drawings.
+    pub comments: bool,
+    /// Form fields.
+    pub fields: bool,
+}
+
+impl Flatten {
+    fn any(self) -> bool {
+        self.comments || self.fields
+    }
+
+    /// Whether an annotation of `subtype` is flattened. Links stay links, and pop-ups go with
+    /// the comments they belong to.
+    fn takes(self, subtype: &str) -> bool {
+        match subtype {
+            "Link" => false,
+            "Widget" => self.fields,
+            _ => self.comments,
+        }
+    }
+}
+
+/// An annotation drawn into the page: its appearance stream and the matrix placing it.
+struct Flattened {
+    appearance: ObjRef,
+    matrix: [f64; 6],
+}
+
+/// Hidden (2) or not shown on screen (32): left out when flattening.
+const HIDDEN_FLAGS: i64 = 2 | 32;
+
+/// The annotation `annot` as it would be drawn: its appearance (for its current state) placed
+/// on its rectangle (ISO 32000-2, 12.5.5). `None` when it has nothing to draw.
+fn appearance(pdf: &Pdf, annot: &Dict<'_>) -> Option<Flattened> {
+    use hayro::hayro_syntax::object::{Array, Name, Stream};
+    let numbers = |dict: &Dict<'_>, key: &[u8]| -> Option<Vec<f64>> {
+        Some(dict.get::<Array<'_>>(key)?.iter::<f64>().take(6).collect())
+    };
+    let ap = annot.get::<Dict<'_>>(b"AP")?;
+    let appearance = match ap.get_ref(b"N") {
+        Some(r) => r,
+        None => {
+            let states = ap.get::<Dict<'_>>(b"N")?;
+            let state = annot.get::<Name<'_>>(b"AS")?;
+            states.get_ref(state.as_str().as_bytes())?
+        }
+    };
+    let appearance = ObjRef::new(appearance.obj_number, appearance.gen_number)?;
+    let form = pdf.xref().get::<Stream<'_>>(id(appearance))?;
+    let form = form.dict();
+    let [bx0, by0, bx1, by1]: [f64; 4] = numbers(form, b"BBox")?.try_into().ok()?;
+    let [a, b, c, d, e, f]: [f64; 6] = numbers(form, b"Matrix")
+        .and_then(|m| m.try_into().ok())
+        .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    // The box the form's matrix turns its bounding box into.
+    let corners =
+        [(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)].map(|(x, y)| (a * x + c * y + e, b * x + d * y + f));
+    let xs = corners.map(|(x, _)| x);
+    let ys = corners.map(|(_, y)| y);
+    let low = |v: [f64; 4]| v.into_iter().fold(f64::INFINITY, f64::min);
+    let high = |v: [f64; 4]| v.into_iter().fold(f64::NEG_INFINITY, f64::max);
+    let (tx0, tx1, ty0, ty1) = (low(xs), high(xs), low(ys), high(ys));
+    let [rx0, ry0, rx1, ry1]: [f64; 4] = numbers(annot, b"Rect")?.get(..4)?.try_into().ok()?;
+    let (rx0, rx1, ry0, ry1) = (rx0.min(rx1), rx0.max(rx1), ry0.min(ry1), ry0.max(ry1));
+    if tx1 - tx0 <= 0.0 || ty1 - ty0 <= 0.0 || !(tx0 + tx1 + ty0 + ty1).is_finite() {
+        return None;
+    }
+    let (sx, sy) = ((rx1 - rx0) / (tx1 - tx0), (ry1 - ry0) / (ty1 - ty0));
+    Some(Flattened {
+        appearance,
+        matrix: [sx, 0.0, 0.0, sy, rx0 - sx * tx0, ry0 - sy * ty0],
+    })
 }
 
 /// The smallest a cropped page may be, in points a side.
@@ -442,11 +521,47 @@ pub(crate) fn rebuild(
                 let data = dict.data();
                 let mut body = b"<<".to_vec();
                 let mut contents = None;
+                // Annotations drawn into the page, and the ones left as they are.
+                let mut flattened = Vec::new();
+                let mut kept = String::new();
+                if extra.flatten.any()
+                    && let Some(annots) = dict.get::<hayro::hayro_syntax::object::Array<'_>>(b"Annots")
+                {
+                    for annot in annots.iter::<Dict<'_>>().take(20_000) {
+                        let Some(r) = annot.obj_id().and_then(obj_ref) else {
+                            continue;
+                        };
+                        let subtype = annot
+                            .get::<hayro::hayro_syntax::object::Name<'_>>(b"Subtype")
+                            .map(|n| n.as_str().to_owned())
+                            .unwrap_or_default();
+                        if subtype == "Popup" && extra.flatten.comments {
+                            continue;
+                        }
+                        if extra.flatten.takes(&subtype) {
+                            let hidden = annot.get::<i64>(b"F").unwrap_or(0) & HIDDEN_FLAGS != 0;
+                            if hidden {
+                                continue;
+                            }
+                            // Without an appearance there's nothing to draw; it stays.
+                            if let Some(f) = appearance(pdf, &annot) {
+                                flattened.push(f);
+                                continue;
+                            }
+                        }
+                        if let Some(num) = w.map(doc, r) {
+                            kept.push_str(&format!("{num} 0 R "));
+                        }
+                    }
+                }
+                let drawn = !extra.under.is_empty() || !extra.over.is_empty() || !flattened.is_empty();
                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
                     if key == b"Parent" || INHERITED.contains(&key) {
                         continue;
                     }
-                    let drawn = !extra.under.is_empty() || !extra.over.is_empty();
+                    if key == b"Annots" && extra.flatten.any() {
+                        continue;
+                    }
                     if key == b"Contents" && drawn {
                         let value = data.get(value).ok_or(SaveError::Damaged)?;
                         contents = Some(copy_syntax(&mut w, sources, doc, *r, value)?);
@@ -464,7 +579,7 @@ pub(crate) fn rebuild(
                     let Some((owner, value)) = inherited(pdf, *r, dict, key) else {
                         continue;
                     };
-                    if key == b"Resources" && (!extra.under.is_empty() || !extra.over.is_empty()) {
+                    if key == b"Resources" && drawn {
                         resources = Some((owner, value));
                         continue;
                     }
@@ -494,13 +609,18 @@ pub(crate) fn rebuild(
                     }
                     None => cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media),
                 };
-                if !extra.under.is_empty() || !extra.over.is_empty() {
+                if extra.flatten.any() && !kept.is_empty() {
+                    body.extend_from_slice(format!("/Annots [{}]\n", kept.trim_end()).as_bytes());
+                }
+                if drawn {
                     let (matrix, width, height) = shown_space(shown, rotate);
                     let stream = |dict: &str, data: &str| {
                         format!("<< {dict}/Length {} >>\nstream\n{data}\nendstream", data.len()).into_bytes()
                     };
                     let mut forms = Vec::new();
-                    let mut draw = |w: &mut Writer, drawings: &[super::marks::Drawing]| {
+                    let draw = |w: &mut Writer,
+                                forms: &mut Vec<(String, u32)>,
+                                drawings: &[super::marks::Drawing]| {
                         let mut ops = String::new();
                         for drawing in drawings {
                             let form = w.alloc();
@@ -525,8 +645,17 @@ pub(crate) fn rebuild(
                     };
                     // The page's own drawing is kept apart in q ... Q, so whatever state it
                     // leaves behind doesn't move what's drawn over it.
-                    let under = draw(&mut w, &extra.under);
-                    let over = draw(&mut w, &extra.over);
+                    let under = draw(&mut w, &mut forms, &extra.under);
+                    let mut over = String::new();
+                    for f in &flattened {
+                        let Some(num) = w.map(doc, f.appearance) else {
+                            continue;
+                        };
+                        let name = format!("PannaAnnot{num}");
+                        over.push_str(&format!("q {} cm /{name} Do Q ", f.matrix.map(n).join(" ")));
+                        forms.push((name, num));
+                    }
+                    over.push_str(&draw(&mut w, &mut forms, &extra.over));
                     let (before, after) = (w.alloc(), w.alloc());
                     w.set(before, stream("", &format!("{under}q")));
                     w.set(after, stream("", &format!("Q {over}")));
@@ -574,7 +703,9 @@ pub(crate) fn rebuild(
     let data = catalog.data();
     let mut body = b"<<".to_vec();
     for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
-        if key == b"Pages" || (key == b"PageLabels" && !same_pages) {
+        // Flattened form fields are page content now, so the form goes.
+        let flattened_form = key == b"AcroForm" && extras.iter().any(|e| e.flatten.fields);
+        if key == b"Pages" || (key == b"PageLabels" && !same_pages) || flattened_form {
             continue;
         }
         body.push(b'/');

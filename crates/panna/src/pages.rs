@@ -28,6 +28,8 @@ pub enum Op {
     HeaderFooter,
     /// Asks what watermark or page colour to add.
     Watermark,
+    /// Asks whether to draw comments and form fields into the pages.
+    Flatten,
     Delete,
     Undo,
 }
@@ -118,6 +120,11 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             Icon::Watermark,
             "Add a watermark or page colour",
             ev(Op::Watermark, true)
+        ),
+        icons::button(
+            Icon::Flatten,
+            "Flatten comments and form fields into the pages",
+            ev(Op::Flatten, true)
         ),
         icons::button(Icon::Delete, "Delete this page", ev(Op::Delete, count > 1)),
         icons::button(
@@ -502,6 +509,56 @@ pub fn mark_card<'a>(state: &Marking, count: usize) -> Element<'a, Message> {
         ]
         .spacing(10)
         .width(580),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
+/// The Flatten card: what to draw into the pages.
+#[derive(Debug, Clone, Copy)]
+pub struct Flattening {
+    pub comments: bool,
+    pub fields: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FlattenEvent {
+    Comments(bool),
+    Fields(bool),
+    Go,
+    Cancel,
+}
+
+/// The Flatten card.
+pub fn flatten_card<'a>(state: Flattening) -> Element<'a, Message> {
+    let ev = Message::Flatten;
+    let any = state.comments || state.fields;
+    container(
+        column![
+            text("Flatten into the pages").size(16),
+            text(
+                "They become part of the pages: they look the same in every app and when \
+                 printed, but can't be changed any more. Undo brings them back until you save."
+            )
+            .size(13),
+            checkbox(state.comments)
+                .label("Comments, highlights, drawings and stamps")
+                .on_toggle(move |v| ev(FlattenEvent::Comments(v))),
+            checkbox(state.fields)
+                .label("Form fields, with what's filled in")
+                .on_toggle(move |v| ev(FlattenEvent::Fields(v))),
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(FlattenEvent::Cancel)),
+                button("Flatten").on_press_maybe(any.then_some(ev(FlattenEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(380),
     )
     .padding(16)
     .style(container::rounded_box)
