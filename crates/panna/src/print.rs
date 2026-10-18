@@ -2,28 +2,96 @@
 //!
 //! The document, with any unsaved changes, goes to the system as a PDF without its password.
 //! On Linux that is the desktop's print portal, which shows the KDE or GNOME print dialog and
-//! also works inside Flatpak. Elsewhere the copy opens in the default PDF app to print from.
+//! also works inside Flatpak. Windows and macOS show their own print dialogs through the
+//! `panna-print` crate.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use iced::Task;
 
-/// Numbers print jobs so that no two share a temporary file or portal request.
-static JOBS: AtomicUsize = AtomicUsize::new(0);
+use crate::Message;
 
-/// Prints `pdf` named `title`, on a thread of its own because the dialog stays up until the
-/// user chooses.
-pub async fn print(pdf: Vec<u8>, title: String) -> Result<(), String> {
+/// Prints `pdf` named `title`, with page `current` as the one on screen.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn start(pdf: Vec<u8>, title: String, _current: usize) -> Task<Message> {
+    Task::perform(on_thread(move || system::print(&pdf, &title)), Message::Printed)
+}
+
+/// Prints `pdf` named `title`, with page `current` as the one on screen. The dialog belongs to
+/// the main window, and the pages are drawn on a thread of their own.
+#[cfg(windows)]
+pub fn start(pdf: Vec<u8>, title: String, current: usize) -> Task<Message> {
+    use iced::window;
+    use raw_window_handle::RawWindowHandle;
+
+    window::oldest()
+        .and_then(|id| {
+            window::run(id, |w| match w.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(h)) => Some(h.hwnd.get()),
+                _ => None,
+            })
+        })
+        .then(move |owner| {
+            let (pdf, title) = (pdf.clone(), title.clone());
+            Task::perform(
+                on_thread(move || native(&pdf, &title, current, owner)),
+                Message::Printed,
+            )
+        })
+}
+
+/// Prints `pdf` named `title`, with page `current` as the one on screen. The print panel is
+/// AppKit's, which has to run on the main thread, so this waits for it.
+#[cfg(target_os = "macos")]
+pub fn start(pdf: Vec<u8>, title: String, current: usize) -> Task<Message> {
+    Task::done(Message::Printed(native(&pdf, &title, current, None)))
+}
+
+/// Runs `work` on a thread of its own, because a print dialog stays up until the user chooses.
+#[cfg(not(target_os = "macos"))]
+async fn on_thread(work: impl FnOnce() -> Result<(), String> + Send + 'static) -> Result<(), String> {
     let (tx, rx) = futures_channel::oneshot::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(system::print(&pdf, &title));
+        let _ = tx.send(work());
     });
     rx.await
         .unwrap_or_else(|_| Err("Printing stopped unexpectedly.".into()))
 }
 
-/// A temporary file name for print job `job`.
-fn temp_path(job: usize) -> PathBuf {
-    std::env::temp_dir().join(format!("panna-print-{}-{job}.pdf", std::process::id()))
+/// The system print dialog from `panna-print`, drawing pages from the print copy itself.
+#[cfg(any(windows, target_os = "macos"))]
+fn native(pdf: &[u8], title: &str, current: usize, owner: Option<isize>) -> Result<(), String> {
+    use panna_core::{Document, Limits};
+    use panna_print::{Bitmap, Job, Page};
+
+    let doc = Document::from_bytes(pdf.to_vec(), None, Limits::default())
+        .map_err(|e| format!("The pages couldn't be prepared for printing: {e}"))?;
+    let info = doc
+        .info()
+        .map_err(|e| format!("The pages couldn't be prepared for printing: {e}"))?;
+    let pages: Vec<Page> = info
+        .pages
+        .iter()
+        .map(|p| Page {
+            width: p.width,
+            height: p.height,
+        })
+        .collect();
+    let cache = doc.new_cache();
+    let mut render = |index: usize, scale: f32| {
+        doc.render_page(&cache, index, scale).ok().map(|page| Bitmap {
+            width: page.width,
+            height: page.height,
+            rgba: page.rgba,
+        })
+    };
+    panna_print::print(Job {
+        title,
+        pdf,
+        pages: &pages,
+        current,
+        owner,
+        render: &mut render,
+    })
+    .map(drop)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -36,7 +104,11 @@ mod system {
     use zbus::blocking::{Connection, Proxy};
     use zbus::zvariant::{Fd, OwnedObjectPath, OwnedValue, Value};
 
-    use super::{JOBS, Ordering, temp_path};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Numbers print jobs so that no two share a temporary file or portal request.
+    static JOBS: AtomicUsize = AtomicUsize::new(0);
 
     const PORTAL: &str = "org.freedesktop.portal.Desktop";
 
@@ -55,7 +127,8 @@ mod system {
     /// `pdf` in a file only this user can read, already removed from the folder: the portal
     /// reads it through the open file, which lasts as long as anyone holds it.
     fn readable_copy(pdf: &[u8], job: usize) -> std::io::Result<File> {
-        let path = temp_path(job);
+        let path: PathBuf =
+            std::env::temp_dir().join(format!("panna-print-{}-{job}.pdf", std::process::id()));
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -102,31 +175,5 @@ mod system {
             .ok_or_else(|| zbus::Error::Failure("no answer from the portal".into()))?;
         let (code, _results): (u32, HashMap<String, OwnedValue>) = response.body().deserialize()?;
         Ok(code)
-    }
-}
-
-#[cfg(not(all(unix, not(target_os = "macos"))))]
-mod system {
-    use std::process::Command;
-
-    use super::{JOBS, Ordering, temp_path};
-
-    /// Writes `pdf` to a temporary file and opens it in the default PDF app, passing the path
-    /// as a single argument, never through a shell.
-    pub fn print(pdf: &[u8], _title: &str) -> Result<(), String> {
-        let path = temp_path(JOBS.fetch_add(1, Ordering::Relaxed));
-        std::fs::write(&path, pdf).map_err(|e| format!("Couldn't prepare the pages to print: {e}"))?;
-        let mut command = if cfg!(target_os = "windows") {
-            let mut c = Command::new("rundll32");
-            c.arg("url.dll,FileProtocolHandler");
-            c
-        } else {
-            Command::new("open")
-        };
-        command
-            .arg(&path)
-            .spawn()
-            .map(drop)
-            .map_err(|e| format!("Couldn't open the pages to print: {e}"))
     }
 }

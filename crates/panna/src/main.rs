@@ -1182,7 +1182,7 @@ impl App {
                 match result {
                     Ok(pdf) => {
                         let title = self.title().trim_end_matches(" — Panna").to_owned();
-                        Task::perform(print::print(pdf, title), Message::Printed)
+                        print::start(pdf, title, self.current_page())
                     }
                     Err(e) => {
                         self.notice = Some(e.to_string());
