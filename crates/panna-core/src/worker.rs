@@ -56,7 +56,7 @@ enum Reply {
     Edit(Changes, EditReply),
     Save(PathBuf, SaveReply),
     Pages(PageEdit, PagesReply),
-    Extract(Vec<PageSource>, PathBuf, ExtractReply),
+    Extract(Vec<(Vec<PageSource>, PathBuf)>, ExtractReply),
     Print(PrintReply),
 }
 
@@ -166,18 +166,17 @@ impl RenderWorker {
         });
     }
 
-    /// Writes some pages (with unsaved changes) to a new file at `path`, leaving this document
-    /// as it is.
+    /// Writes pages (with unsaved changes) to new files, each page list to its path, leaving
+    /// this document as it is. Stops at the first file that can't be written.
     pub fn extract(
         &self,
-        pages: Vec<PageSource>,
-        path: PathBuf,
+        files: Vec<(Vec<PageSource>, PathBuf)>,
         reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
     ) {
         let _ = self.jobs.send(Job {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
-            reply: Reply::Extract(pages, path, Box::new(reply)),
+            reply: Reply::Extract(files, Box::new(reply)),
         });
     }
 
@@ -302,12 +301,12 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 Reply::Print(reply) => reply(current.print_copy()),
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
-                Reply::Extract(pages, path, reply) => {
-                    reply(
+                Reply::Extract(files, reply) => {
+                    reply(files.iter().try_for_each(|(pages, path)| {
                         current
-                            .rearranged(&pages, &[])
-                            .and_then(|bytes| write_atomically(&path, &bytes)),
-                    );
+                            .rearranged(pages, &[])
+                            .and_then(|bytes| write_atomically(path, &bytes))
+                    }));
                 }
             }
         };

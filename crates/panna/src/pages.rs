@@ -3,8 +3,8 @@
 //! Each tool works on the current page and becomes a new page list for the worker, which
 //! rewrites the document in memory until it is saved.
 
-use iced::Element;
-use iced::widget::row;
+use iced::widget::{button, column, container, radio, row, space, text, text_input};
+use iced::{Element, Theme};
 use panna_core::{PageSize, PageSource};
 
 use crate::Message;
@@ -20,7 +20,7 @@ pub enum Op {
     InsertBlank,
     /// Asks for a PDF and puts its pages after the current one.
     InsertFile,
-    /// Asks where to save the current page as a new file.
+    /// Asks which pages to save as new files.
     Extract,
     Delete,
     Undo,
@@ -99,7 +99,7 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
         ),
         icons::button(
             Icon::PageExtract,
-            "Save this page as a new PDF",
+            "Save pages as a new PDF, or split into files",
             ev(Op::Extract, true)
         ),
         icons::button(Icon::Delete, "Delete this page", ev(Op::Delete, count > 1)),
@@ -111,6 +111,102 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
     ]
     .spacing(0)
     .padding([2, 4])
+    .into()
+}
+
+/// The Extract pages card: which pages, and whether to make one file of them or one each.
+#[derive(Debug, Clone, Default)]
+pub struct Extracting {
+    pub range: String,
+    pub split: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExtractEvent {
+    Range(String),
+    Split(bool),
+    Go,
+    Cancel,
+}
+
+pub fn extract_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("extract-range")
+}
+
+/// Page numbers like "1-3, 5, 8-" as page indices in the order given. A range may be open at
+/// either end ("8-" to the last page, "-3" from the first) and may count down.
+pub fn parse_range(spec: &str, count: usize) -> Result<Vec<usize>, String> {
+    let number = |part: &str, default: usize| -> Result<usize, String> {
+        let part = part.trim();
+        if part.is_empty() {
+            return Ok(default);
+        }
+        match part.parse::<usize>() {
+            Ok(n) if (1..=count).contains(&n) => Ok(n),
+            Ok(_) => Err(format!("Page numbers go from 1 to {count}.")),
+            Err(_) => Err(format!("“{part}” isn't a page number.")),
+        }
+    };
+    let mut pages = Vec::new();
+    for part in spec.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
+        match part.split_once(['-', '–']) {
+            Some((from, to)) => {
+                let (from, to) = (number(from, 1)?, number(to, count)?);
+                if from <= to {
+                    pages.extend(from - 1..to);
+                } else {
+                    pages.extend((to - 1..from).rev());
+                }
+            }
+            None => pages.push(number(part, 1)? - 1),
+        }
+    }
+    if pages.is_empty() {
+        return Err("Enter the pages, such as 1-3, 5.".into());
+    }
+    Ok(pages)
+}
+
+/// The Extract pages card for a document of `count` pages.
+pub fn extract_card<'a>(state: &Extracting, count: usize) -> Element<'a, Message> {
+    let ev = Message::Extract;
+    let parsed = parse_range(&state.range, count);
+    let hint = match &parsed {
+        Ok(pages) if pages.len() == 1 => text("1 page").size(13),
+        Ok(pages) => text(format!("{} pages", pages.len())).size(13),
+        Err(e) => text(e.clone()).size(13).style(|theme: &Theme| text::Style {
+            color: Some(theme.extended_palette().danger.base.color),
+        }),
+    };
+    let split = Some(state.split);
+    container(
+        column![
+            text("Extract pages").size(16),
+            text_input(&format!("Pages, such as 1-3, 5 (1 to {count})"), &state.range)
+                .id(extract_input_id())
+                .on_input(move |v| ev(ExtractEvent::Range(v)))
+                .on_submit(ev(ExtractEvent::Go)),
+            hint,
+            radio("Save them as one PDF", false, split, |v| ev(ExtractEvent::Split(
+                v
+            ))),
+            radio("Save each page as its own PDF", true, split, |v| {
+                ev(ExtractEvent::Split(v))
+            }),
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(ExtractEvent::Cancel)),
+                button("Extract…").on_press_maybe(parsed.is_ok().then_some(ev(ExtractEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(340),
+    )
+    .padding(16)
+    .style(container::rounded_box)
     .into()
 }
 
@@ -144,6 +240,18 @@ mod tests {
         assert_eq!((indices(&p), show), (vec![Some(0), None, Some(1)], 1));
         let (p, _) = plan(Op::RotateCcw, 2, 1, SIZE).unwrap();
         assert!(matches!(p[1], PageSource::Page { turns: 3, .. }));
+    }
+
+    #[test]
+    fn page_ranges() {
+        assert_eq!(parse_range("1-3, 5", 6), Ok(vec![0, 1, 2, 4]));
+        assert_eq!(parse_range(" 5- ;-2", 6), Ok(vec![4, 5, 0, 1]));
+        assert_eq!(parse_range("3–1", 6), Ok(vec![2, 1, 0]));
+        assert_eq!(parse_range("4", 6), Ok(vec![3]));
+        assert!(parse_range("0", 6).is_err());
+        assert!(parse_range("7", 6).is_err());
+        assert!(parse_range("two", 6).is_err());
+        assert!(parse_range(" , ", 6).is_err());
     }
 
     #[test]

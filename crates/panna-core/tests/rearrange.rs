@@ -238,12 +238,19 @@ fn the_worker_changes_pages_with_undo_and_saves() {
     assert_eq!(pages(PageEdit::Plan(vec![page(2, 1)])), Ok((1, 1)));
 
     let (tx, rx) = mpsc::channel();
-    let extracted = dir.join("extract.pdf");
-    worker.extract(vec![page(0, 0), page(0, 0)], extracted.clone(), move |r| {
-        let _ = tx.send(r);
-    });
+    let (one, two) = (dir.join("one.pdf"), dir.join("two.pdf"));
+    worker.extract(
+        vec![
+            (vec![page(0, 0)], one.clone()),
+            (vec![page(0, 0), page(0, 0)], two.clone()),
+        ],
+        move |r| {
+            let _ = tx.send(r);
+        },
+    );
     assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()));
-    assert_eq!(open(std::fs::read(&extracted).unwrap(), None).page_count(), 2);
+    assert_eq!(open(std::fs::read(&one).unwrap(), None).page_count(), 1);
+    assert_eq!(open(std::fs::read(&two).unwrap(), None).page_count(), 2);
 
     let (tx, rx) = mpsc::channel();
     worker.save(path.clone(), move |r| {

@@ -119,8 +119,12 @@ enum Message {
     Pages(pages::Op),
     /// The PDF to insert pages from, once chosen.
     InsertFileChosen(Option<PathBuf>),
-    /// Where to save extracted pages, once chosen.
+    /// The Extract pages card.
+    Extract(pages::ExtractEvent),
+    /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
+    /// The folder to save extracted pages to, a file each, once chosen.
+    ExtractFolder(Option<PathBuf>),
     PagesChanged {
         doc: u64,
         /// The page to show.
@@ -232,6 +236,10 @@ struct App {
     saving: bool,
     /// Making the copy to print.
     printing: bool,
+    /// Choosing pages to extract.
+    extracting: Option<pages::Extracting>,
+    /// The pages being extracted, while their file or folder is chosen.
+    extract_pages: Vec<usize>,
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
     after_save: Option<Pending>,
@@ -479,6 +487,8 @@ impl App {
             confirm_link: None,
             saving: false,
             printing: false,
+            extracting: None,
+            extract_pages: Vec::new(),
             confirm: None,
             after_save: None,
             notice: None,
@@ -810,6 +820,8 @@ impl App {
                 }
                 if self.confirm_link.is_some() {
                     self.confirm_link = None;
+                } else if self.extracting.is_some() {
+                    self.extracting = None;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1107,25 +1119,47 @@ impl App {
                 let at = self.current_page() + 1;
                 self.edit_pages(PageEdit::InsertFile { at, path }, at, false)
             }
+            Message::Extract(event) => self.extract(event),
             Message::ExtractChosen(Some(path)) => {
-                let Some(doc) = &self.doc else { return Task::none() };
-                let page = panna_core::PageSource::Page {
-                    doc: 0,
-                    index: self.current_page(),
-                    turns: 0,
-                };
-                if self.dirty() {
-                    doc.worker.set_changes(self.changes(), |_| {});
-                }
-                let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.extract(vec![page], path, move |result| {
-                    let _ = tx.send(result);
-                });
-                Task::perform(rx, |result| {
-                    Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
-                })
+                let pages = std::mem::take(&mut self.extract_pages)
+                    .into_iter()
+                    .map(|index| panna_core::PageSource::Page {
+                        doc: 0,
+                        index,
+                        turns: 0,
+                    })
+                    .collect();
+                self.write_extracted(vec![(pages, path)])
             }
-            Message::InsertFileChosen(None) | Message::ExtractChosen(None) => Task::none(),
+            Message::ExtractFolder(Some(dir)) => {
+                let stem = self.file_stem();
+                let mut files: Vec<(Vec<panna_core::PageSource>, PathBuf)> = Vec::new();
+                for index in std::mem::take(&mut self.extract_pages) {
+                    let path = dir.join(format!("{stem} page {}.pdf", index + 1));
+                    if files.iter().any(|(_, p)| *p == path) {
+                        continue;
+                    }
+                    if path.exists() {
+                        self.notice = Some(format!(
+                            "“{}” is already in that folder. Choose another folder, or move it first.",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ));
+                        return Task::none();
+                    }
+                    files.push((
+                        vec![panna_core::PageSource::Page {
+                            doc: 0,
+                            index,
+                            turns: 0,
+                        }],
+                        path,
+                    ));
+                }
+                self.write_extracted(files)
+            }
+            Message::InsertFileChosen(None) | Message::ExtractChosen(None) | Message::ExtractFolder(None) => {
+                Task::none()
+            }
             Message::Print => {
                 let Some(doc) = &self.doc else { return Task::none() };
                 if self.printing {
@@ -1335,23 +1369,12 @@ impl App {
                 Message::InsertFileChosen,
             ),
             pages::Op::Extract => {
-                let stem = doc
-                    .path
-                    .file_stem()
-                    .map_or_else(|| "document".into(), |s| s.to_string_lossy().into_owned());
-                let name = format!("{stem} page {}.pdf", current + 1);
-                Task::perform(
-                    async move {
-                        rfd::AsyncFileDialog::new()
-                            .set_title("Save page as")
-                            .add_filter("PDF documents", &["pdf"])
-                            .set_file_name(name)
-                            .save_file()
-                            .await
-                            .map(|f| f.path().to_path_buf())
-                    },
-                    Message::ExtractChosen,
-                )
+                self.extracting = Some(pages::Extracting {
+                    range: (current + 1).to_string(),
+                    split: false,
+                });
+                operation::focus(pages::extract_input_id())
+                    .chain(operation::select_all(pages::extract_input_id()))
             }
             _ => {
                 let size = doc.info.pages.get(current).copied().unwrap_or(PageSize {
@@ -1364,6 +1387,84 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The document's file name without its extension, for naming files made from it.
+    fn file_stem(&self) -> String {
+        self.doc
+            .as_ref()
+            .and_then(|d| d.path.file_stem())
+            .map_or_else(|| "document".into(), |s| s.to_string_lossy().into_owned())
+    }
+
+    fn extract(&mut self, event: pages::ExtractEvent) -> Task<Message> {
+        let Some(state) = &mut self.extracting else {
+            return Task::none();
+        };
+        match event {
+            pages::ExtractEvent::Range(range) => state.range = range,
+            pages::ExtractEvent::Split(split) => state.split = split,
+            pages::ExtractEvent::Cancel => self.extracting = None,
+            pages::ExtractEvent::Go => {
+                let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                let Ok(pages) = pages::parse_range(&state.range, count) else {
+                    return Task::none();
+                };
+                let split = state.split;
+                let label = if pages.len() == 1 {
+                    format!("page {}", pages.first().map_or(1, |p| p + 1))
+                } else {
+                    format!("pages {}", state.range.split_whitespace().collect::<String>())
+                };
+                self.extracting = None;
+                self.extract_pages = pages;
+                let name = format!("{} {label}.pdf", self.file_stem());
+                return if split {
+                    Task::perform(
+                        async {
+                            rfd::AsyncFileDialog::new()
+                                .set_title("Save each page in")
+                                .pick_folder()
+                                .await
+                                .map(|f| f.path().to_path_buf())
+                        },
+                        Message::ExtractFolder,
+                    )
+                } else {
+                    Task::perform(
+                        async move {
+                            rfd::AsyncFileDialog::new()
+                                .set_title("Save pages as")
+                                .add_filter("PDF documents", &["pdf"])
+                                .set_file_name(name)
+                                .save_file()
+                                .await
+                                .map(|f| f.path().to_path_buf())
+                        },
+                        Message::ExtractChosen,
+                    )
+                };
+            }
+        }
+        Task::none()
+    }
+
+    /// Writes extracted pages, with unsaved changes, each page list to its file.
+    fn write_extracted(&mut self, files: Vec<(Vec<panna_core::PageSource>, PathBuf)>) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        if files.is_empty() {
+            return Task::none();
+        }
+        if self.dirty() {
+            doc.worker.set_changes(self.changes(), |_| {});
+        }
+        let (tx, rx) = futures_channel::oneshot::channel();
+        doc.worker.extract(files, move |result| {
+            let _ = tx.send(result);
+        });
+        Task::perform(rx, |result| {
+            Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
+        })
     }
 
     /// Sends a page change to the worker, with unsaved comments and form entries first so
@@ -2168,6 +2269,12 @@ impl App {
         }
         if let Some(card) = self.annotate.editor() {
             layers.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
+        }
+        if let (Some(state), Some(doc)) = (&self.extracting, &self.doc) {
+            layers.push(modal(
+                pages::extract_card(state, doc.pages.len()),
+                Message::Extract(pages::ExtractEvent::Cancel),
+            ));
         }
         if self.confirm_reset {
             layers.push(modal(reset_view(), Message::ConfirmReset(false)));

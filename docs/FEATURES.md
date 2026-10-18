@@ -75,7 +75,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Feature | Priority | Notes |
 |---|---|---|
 | Insert, delete, reorder, rotate pages | Later | Done: tools above the page thumbnails, with undo (Ctrl+Z). Saving writes a fresh file, so deleted pages can't be recovered from it |
-| Extract pages, split document | Later | Partly done: save the current page as a new PDF. Page ranges and splitting to come |
+| Extract pages, split document | Later | Done: pick pages such as 1-3, 5, 8- and save them as one PDF or each as its own PDF |
 | Merge / combine files | Later | Done: insert another PDF's pages after the current page |
 | Crop pages | Later | |
 | Headers, footers, page numbers, Bates numbering | Later | |
