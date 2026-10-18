@@ -32,7 +32,7 @@ use panna_core::{
 };
 
 use icons::Icon;
-use layout::{PAGE_GAP, PageLayout};
+use layout::{PAGE_GAP, PageLayout, Spread};
 use selection::{Caret, PageMap, Selection, TextSlot};
 use settings::Settings;
 use sidebar::{Sidebar, ThumbLayout};
@@ -102,6 +102,7 @@ enum Message {
     FitWidth,
     FitPage,
     RotateCw,
+    NextSpread,
     RotateCcw,
     PrevPage,
     NextPage,
@@ -514,7 +515,7 @@ impl App {
                         self.settings.add_recent(doc.path.clone());
                         self.settings.save();
                         self.rotation = 0;
-                        doc.layout = PageLayout::new(&info.pages);
+                        doc.layout = PageLayout::new(&info.pages, self.settings.spread);
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
                         doc.thumb_layout = ThumbLayout::new(&info.pages);
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
@@ -607,29 +608,34 @@ impl App {
             }
             Message::ZoomReset => self.set_zoom(1.0),
             Message::FitWidth => {
-                let widest = self.doc.as_ref().map_or(0.0, |d| d.layout.max_width());
-                if widest > 0.0 {
-                    let available = (self.viewport.width - 2.0 * PAGE_GAP - 16.0).max(100.0);
-                    self.set_zoom(available / widest)
-                } else {
-                    Task::none()
+                let available = (self.viewport.width - 2.0 * PAGE_GAP - 16.0).max(100.0);
+                match self.doc.as_ref().and_then(|d| d.layout.fit_width(available)) {
+                    Some(zoom) => self.set_zoom(zoom),
+                    None => Task::none(),
                 }
             }
             Message::FitPage => {
                 let Some(doc) = &self.doc else { return Task::none() };
-                let Some(size) = doc.layout.sizes().get(self.current_page()).copied() else {
+                let page = self.current_page();
+                let Some((row_width, pages, row_height)) = doc.layout.row_size(page) else {
                     return Task::none();
                 };
-                let page = self.current_page();
-                let width = (self.viewport.width - 2.0 * PAGE_GAP - 16.0).max(100.0) / size.width;
-                let height = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / size.height;
+                let room =
+                    self.viewport.width - 2.0 * PAGE_GAP - 16.0 - pages.saturating_sub(1) as f32 * PAGE_GAP;
+                let width = room.max(100.0) / row_width.max(1.0);
+                let height = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / row_height.max(1.0);
                 let zoom_task = self.set_zoom(width.min(height));
                 Task::batch([zoom_task, self.go_to_page(page)])
             }
             Message::RotateCw => self.rotate(1),
+            Message::NextSpread => {
+                self.settings.spread = self.settings.spread.next();
+                self.settings.save();
+                self.relayout()
+            }
             Message::RotateCcw => self.rotate(3),
-            Message::PrevPage => self.go_to_page(self.current_page().saturating_sub(1)),
-            Message::NextPage => self.go_to_page(self.current_page() + 1),
+            Message::PrevPage => self.step_page(false),
+            Message::NextPage => self.step_page(true),
             Message::PageInput(value) => {
                 self.page_input = value.chars().filter(char::is_ascii_digit).take(6).collect();
                 Task::none()
@@ -1281,9 +1287,8 @@ impl App {
     fn reveal(&mut self, page: usize, spot: TextBox) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
         let (x, y, _, _) = self.page_map(page).rect(&spot);
-        let page_w = doc.layout.sizes().get(page).map_or(0.0, |s| s.width * self.zoom);
-        let content_w = (doc.layout.max_width() * self.zoom + 2.0 * PAGE_GAP).max(self.viewport.width);
-        let page_left = (content_w - page_w) / 2.0;
+        let content_w = doc.layout.content_width(self.zoom, self.viewport.width);
+        let page_left = doc.layout.page_left(page, self.zoom, content_w);
         let top = doc.layout.page_top(page, self.zoom) + PAGE_GAP + y;
         // Leave the match where it is if it is already comfortably on screen.
         let on_screen = top > self.viewport.offset_y + 40.0
@@ -1420,6 +1425,17 @@ impl App {
     }
 
     /// Turns the view clockwise by `turns` quarter turns, keeping the current page in view.
+    /// Regroups pages into rows after the spread changes, staying on the current page.
+    fn relayout(&mut self) -> Task<Message> {
+        let page = self.current_page();
+        let Some(doc) = &mut self.doc else {
+            return Task::none();
+        };
+        let sizes = doc.layout.sizes().to_vec();
+        doc.layout = PageLayout::new(&sizes, self.settings.spread);
+        self.go_to_page(page)
+    }
+
     fn rotate(&mut self, turns: u8) -> Task<Message> {
         let page = self.current_page();
         let Some(doc) = &mut self.doc else {
@@ -1441,11 +1457,17 @@ impl App {
                 }
             })
             .collect();
-        doc.layout = PageLayout::new(&sizes);
+        doc.layout = PageLayout::new(&sizes, self.settings.spread);
         doc.thumb_layout = ThumbLayout::new(&sizes);
         doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
         doc.thumbs.iter_mut().for_each(|thumb| *thumb = Thumb::default());
         Task::batch([self.go_to_page(page), self.request_thumbnails()])
+    }
+
+    fn step_page(&mut self, forward: bool) -> Task<Message> {
+        let page = self.current_page();
+        let target = self.doc.as_ref().map_or(page, |d| d.layout.step(page, forward));
+        self.go_to_page(target)
     }
 
     fn go_to_page(&mut self, index: usize) -> Task<Message> {
@@ -1638,6 +1660,19 @@ impl App {
             gap(),
             icons::button(Icon::RotateCcw, "Rotate left", on(Message::RotateCcw)),
             icons::button(Icon::RotateCw, "Rotate right", on(Message::RotateCw)),
+            icons::button(
+                match self.settings.spread {
+                    Spread::Single => Icon::SinglePage,
+                    Spread::Two => Icon::TwoPages,
+                    Spread::TwoCover => Icon::CoverPage,
+                },
+                match self.settings.spread {
+                    Spread::Single => "Single page: click for two pages side by side",
+                    Spread::Two => "Two pages: click to show the cover page alone",
+                    Spread::TwoCover => "Two pages with cover: click for single page",
+                },
+                on(Message::NextSpread),
+            ),
             gap(),
             icons::button(
                 Icon::Search,
@@ -1995,8 +2030,16 @@ impl App {
                     .into()
             });
         // Fixed content width: at least the viewport (so pages stay centred), wider when zoomed in.
-        let content_width = (doc.layout.max_width() * self.zoom + 2.0 * PAGE_GAP).max(self.viewport.width);
-        let column = iced::widget::Column::with_children(pages)
+        let content_width = doc.layout.content_width(self.zoom, self.viewport.width);
+        let mut pages = pages;
+        let rows = doc.layout.rows().iter().map(|row| {
+            iced::widget::Row::with_children(pages.by_ref().take(row.len()))
+                .spacing(PAGE_GAP)
+                .align_y(iced::alignment::Vertical::Top)
+                .into()
+        });
+        let rows: Vec<Element<'_, Message>> = rows.collect();
+        let column = iced::widget::Column::with_children(rows)
             .spacing(PAGE_GAP)
             .padding(PAGE_GAP)
             .align_x(Center)

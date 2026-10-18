@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use iced::Point;
 
+use crate::layout::Spread;
 use crate::sidebar::{Side, Tab};
 use crate::toolbar::Dock;
 
@@ -19,6 +20,7 @@ pub struct Settings {
     pub sidebar_open: bool,
     pub sidebar_side: Side,
     pub sidebar_tab: Tab,
+    pub spread: Spread,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -31,6 +33,7 @@ impl Default for Settings {
             sidebar_open: false,
             sidebar_side: Side::Left,
             sidebar_tab: Tab::Thumbnails,
+            spread: Spread::Single,
             recent: Vec::new(),
         }
     }
@@ -87,6 +90,7 @@ impl Settings {
                 "sidebar.open" => out.sidebar_open = value.trim() == "true",
                 "sidebar.side" => out.sidebar_side = Side::parse(value.trim()).unwrap_or(out.sidebar_side),
                 "sidebar.tab" => out.sidebar_tab = Tab::parse(value.trim()).unwrap_or(out.sidebar_tab),
+                "view.spread" => out.spread = Spread::parse(value.trim()).unwrap_or(out.spread),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
                     out.recent.push(PathBuf::from(value));
@@ -99,13 +103,14 @@ impl Settings {
 
     fn serialize(&self) -> String {
         let mut out = format!(
-            "toolbar.dock={}\ntoolbar.x={}\ntoolbar.y={}\nsidebar.open={}\nsidebar.side={}\nsidebar.tab={}\n",
+            "toolbar.dock={}\ntoolbar.x={}\ntoolbar.y={}\nsidebar.open={}\nsidebar.side={}\nsidebar.tab={}\nview.spread={}\n",
             self.toolbar_dock.as_str(),
             self.toolbar_pos.x,
             self.toolbar_pos.y,
             self.sidebar_open,
             self.sidebar_side.as_str(),
             self.sidebar_tab.as_str(),
+            self.spread.as_str(),
         );
         // Paths that aren't UTF-8 or contain line breaks can't be stored in this format.
         for path in &self.recent {
@@ -152,6 +157,7 @@ mod tests {
             sidebar_open: true,
             sidebar_side: Side::Right,
             sidebar_tab: Tab::Bookmarks,
+            spread: Spread::TwoCover,
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);

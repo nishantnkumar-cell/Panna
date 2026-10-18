@@ -11,7 +11,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Feature | Priority | Notes |
 |---|---|---|
 | Open PDF files (file dialog, drag and drop, command line) | V1 | Done in skeleton |
-| Continuous scroll, single page, two-page spread | V1 | Continuous scroll done; spreads later in V1 |
+| Continuous scroll, single page, two-page spread | V1 | Done: continuous scroll, with one page or two side by side (optionally with the cover alone) from the toolbar |
 | Zoom in/out, fit width, fit page, actual size | V1 | Done |
 | Rotate view | V1 | Done |
 | Page thumbnails sidebar | V1 | Done (F4); left or right edge, remembered |

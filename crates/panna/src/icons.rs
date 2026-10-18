@@ -52,6 +52,9 @@ pub enum Icon {
     Delete,
     Check,
     Eraser,
+    SinglePage,
+    TwoPages,
+    CoverPage,
 }
 
 impl Icon {
@@ -101,6 +104,9 @@ impl Icon {
             Icon::Delete => include_bytes!("../icons/trash-2.svg"),
             Icon::Check => include_bytes!("../icons/check.svg"),
             Icon::Eraser => include_bytes!("../icons/eraser.svg"),
+            Icon::SinglePage => include_bytes!("../icons/file.svg"),
+            Icon::TwoPages => include_bytes!("../icons/book-open.svg"),
+            Icon::CoverPage => include_bytes!("../icons/book.svg"),
         }
     }
 }
@@ -195,7 +201,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 44] = [
+    const ALL: [Icon; 47] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -240,6 +246,9 @@ mod tests {
         Icon::Delete,
         Icon::Check,
         Icon::Eraser,
+        Icon::SinglePage,
+        Icon::TwoPages,
+        Icon::CoverPage,
     ];
 
     #[test]
