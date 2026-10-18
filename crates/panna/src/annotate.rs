@@ -366,6 +366,7 @@ impl Annotate {
         Changes {
             add: self.items.clone(),
             remove: self.removed.clone(),
+            ..Changes::default()
         }
     }
 

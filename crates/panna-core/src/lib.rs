@@ -8,6 +8,7 @@
 mod comments;
 mod document;
 mod edit;
+mod forms;
 mod limits;
 mod outline;
 mod text;
@@ -16,6 +17,7 @@ mod worker;
 pub use comments::{Comment, CommentId, CommentKind, ObjRef};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{Annotation, Changes, Color, Kind, LINE_HEIGHT, NOTE_SIZE, SaveError, text_width, wrap};
+pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
 pub use limits::Limits;
 pub use outline::OutlineItem;
 pub use text::{FindOptions, PageText, TextBox};

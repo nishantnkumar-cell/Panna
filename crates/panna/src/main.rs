@@ -1194,6 +1194,7 @@ impl App {
                 properties: Vec::new(),
                 outline: Vec::new(),
                 comments: Vec::new(),
+                fields: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),

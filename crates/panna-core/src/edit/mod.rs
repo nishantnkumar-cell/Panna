@@ -1,6 +1,7 @@
 //! Writing changes back into a PDF as an incremental update.
 
 mod annot;
+mod field;
 pub(crate) mod lex;
 mod update;
 
@@ -10,11 +11,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hayro::hayro_interpret::TransformExt;
 use hayro::hayro_syntax::Pdf;
-use hayro::hayro_syntax::object::Array;
+use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, text_width, wrap};
 
-use crate::{CommentId, ObjRef};
+use crate::{CommentId, FieldValue, ObjRef};
 
 /// Unsaved changes to a document's comments.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -23,11 +24,13 @@ pub struct Changes {
     pub add: Vec<Annotation>,
     /// Saved comments to take out.
     pub remove: Vec<CommentId>,
+    /// Form fields filled in, by the field's object, with their new values.
+    pub fields: Vec<(ObjRef, FieldValue)>,
 }
 
 impl Changes {
     pub fn is_empty(&self) -> bool {
-        self.add.is_empty() && self.remove.is_empty()
+        self.add.is_empty() && self.remove.is_empty() && self.fields.is_empty()
     }
 }
 
@@ -150,7 +153,92 @@ pub(crate) fn apply(pdf: &Pdf, original: &[u8], changes: &Changes) -> Result<Vec
         dict.extend_from_slice(b"]\n>>");
         out.put(num, generation, dict);
     }
+    fill_fields(pdf, &mut out, &changes.fields)?;
     Ok(out.finish(original))
+}
+
+/// Writes filled-in field values: each field's /V, a new appearance for text and choice
+/// widgets, and the on or off state of checkbox and radio widgets.
+fn fill_fields(
+    pdf: &Pdf,
+    out: &mut update::Update,
+    values: &[(ObjRef, FieldValue)],
+) -> Result<(), SaveError> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let fields = crate::forms::read(pdf);
+    let xref = pdf.xref();
+    let get = |r: ObjRef| {
+        xref.get::<Dict<'_>>(ObjectIdentifier::new(
+            i32::try_from(r.number).unwrap_or(-1),
+            i32::from(r.generation),
+        ))
+    };
+    // Every edit to one object, so a field that is also its own widget is written once.
+    let mut edits: BTreeMap<(u32, u16), field::Entries> = BTreeMap::new();
+    for (id, value) in values {
+        let Some(f) = fields.iter().find(|f| f.id == *id) else {
+            continue;
+        };
+        edits
+            .entry((id.number, id.generation))
+            .or_default()
+            .push(("V", field::value(f, value)));
+        for w in &f.widgets {
+            let entry = match value {
+                FieldValue::State(state) => {
+                    let on = state.is_some() && w.on == *state;
+                    let shown = if on {
+                        w.on.as_deref().unwrap_or("Off")
+                    } else {
+                        "Off"
+                    };
+                    ("AS", field::name(shown))
+                }
+                FieldValue::Text(text) => {
+                    let Some(widget) = get(w.annot) else { continue };
+                    let Some(stream) = field::appearance(f, &widget, text) else {
+                        continue;
+                    };
+                    let ap = out.alloc();
+                    out.put(ap, 0, stream);
+                    ("AP", format!("<< /N {ap} 0 R >>"))
+                }
+            };
+            edits
+                .entry((w.annot.number, w.annot.generation))
+                .or_default()
+                .push(entry);
+        }
+    }
+    for ((number, generation), set) in edits {
+        let dict = get(ObjRef { number, generation }).ok_or(SaveError::Damaged)?;
+        out.put(number, generation, rewrite(dict.data(), &set)?);
+    }
+    Ok(())
+}
+
+/// A dictionary with `set` replacing (or adding) those keys, everything else copied byte for
+/// byte.
+fn rewrite(data: &[u8], set: &field::Entries) -> Result<Vec<u8>, SaveError> {
+    let entries = lex::dict_entries(data).ok_or(SaveError::Damaged)?;
+    let mut dict = b"<<".to_vec();
+    for (key, value) in &entries {
+        if set.iter().any(|(k, _)| k.as_bytes() == *key) {
+            continue;
+        }
+        dict.push(b'/');
+        dict.extend_from_slice(key);
+        dict.push(b' ');
+        dict.extend_from_slice(data.get(value.clone()).ok_or(SaveError::Damaged)?);
+        dict.push(b'\n');
+    }
+    for (key, value) in set {
+        dict.extend_from_slice(format!("/{key} {value}\n").as_bytes());
+    }
+    dict.extend_from_slice(b">>");
+    Ok(dict)
 }
 
 /// A PDF date string in UTC, like `D:20261017093000Z`.

@@ -442,7 +442,7 @@ fn ellipse(out: &mut String, x0: f64, y0: f64, x1: f64, y1: f64) {
 }
 
 /// A number as PDF syntax, with at most three decimals.
-fn n(v: f64) -> String {
+pub(crate) fn n(v: f64) -> String {
     if !v.is_finite() {
         return "0".into();
     }
@@ -466,7 +466,7 @@ pub(crate) fn text_string(s: &str) -> String {
 }
 
 /// Escapes bytes for a literal string.
-fn literal(bytes: &[u8]) -> String {
+pub(crate) fn literal(bytes: &[u8]) -> String {
     let mut out = String::new();
     for &b in bytes {
         match b {
@@ -485,7 +485,7 @@ fn literal(bytes: &[u8]) -> String {
 
 /// Encodes text in WinAnsiEncoding, the encoding of the standard Helvetica font. Characters it
 /// can't represent become `?`.
-fn win_ansi(s: &str) -> Vec<u8> {
+pub(crate) fn win_ansi(s: &str) -> Vec<u8> {
     s.chars()
         .map(|c| match c {
             ' '..='~' => c as u8,

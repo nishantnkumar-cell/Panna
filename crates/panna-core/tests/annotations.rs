@@ -316,6 +316,7 @@ fn removing_a_saved_comment_takes_its_popup_too() {
         .with_changes(&Changes {
             add: vec![added],
             remove: vec![id],
+            ..Changes::default()
         })
         .unwrap();
     let text = String::from_utf8_lossy(&saved);

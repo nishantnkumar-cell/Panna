@@ -31,6 +31,8 @@ pub struct DocumentInfo {
     pub outline: Vec<crate::OutlineItem>,
     /// Comments already in the file, in page order.
     pub comments: Vec<crate::Comment>,
+    /// The form's fields, if it has a form.
+    pub fields: Vec<crate::Field>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -259,7 +261,9 @@ impl Document {
             let outline =
                 catch_unwind(AssertUnwindSafe(|| crate::outline::read(&self.pdf))).unwrap_or_default();
             let comments = self.comments();
+            let fields = catch_unwind(AssertUnwindSafe(|| crate::forms::read(&self.pdf))).unwrap_or_default();
             DocumentInfo {
+                fields,
                 pages,
                 title,
                 properties,
@@ -283,7 +287,7 @@ impl Document {
     pub fn with_annotations(&self, annotations: &[crate::Annotation]) -> Result<Vec<u8>, crate::SaveError> {
         self.with_changes(&crate::Changes {
             add: annotations.to_vec(),
-            remove: Vec::new(),
+            ..crate::Changes::default()
         })
     }
 
