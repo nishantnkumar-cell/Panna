@@ -6,7 +6,7 @@ use std::ops::Range;
 use iced::widget::scrollable::Viewport;
 use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
 use iced::{Center, Element, Fill, Length, Theme};
-use panna_core::{Annotation, Attachment, Comment, CommentId, OutlineItem, PageSize};
+use panna_core::{Annotation, Attachment, Comment, CommentId, Layer, OutlineItem, PageSize};
 
 use crate::Message;
 use crate::find::Find;
@@ -31,6 +31,7 @@ pub enum Tab {
     Results,
     Comments,
     Files,
+    Layers,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -65,6 +66,7 @@ impl Tab {
             Tab::Results => "results",
             Tab::Comments => "comments",
             Tab::Files => "files",
+            Tab::Layers => "layers",
         }
     }
 
@@ -75,6 +77,7 @@ impl Tab {
             "results" => Some(Tab::Results),
             "comments" => Some(Tab::Comments),
             "files" => Some(Tab::Files),
+            "layers" => Some(Tab::Layers),
             _ => None,
         }
     }
@@ -205,6 +208,9 @@ pub struct ViewData<'a> {
     pub unsaved: &'a [Annotation],
     pub removed: &'a [CommentId],
     pub attachments: &'a [Attachment],
+    pub layers: &'a [Layer],
+    /// Whether each layer is shown.
+    pub layers_shown: &'a [bool],
     /// Page changes can be undone.
     pub can_undo_pages: bool,
     /// A page change is in progress.
@@ -215,13 +221,12 @@ impl Sidebar {
     pub fn view<'a>(&self, data: ViewData<'a>) -> Element<'a, Message> {
         let ev = Message::Sidebar;
         // Word-style text tabs; the open one is underlined in the accent colour.
-        // With the Files tab too, the text tabs shrink a little to leave it room.
         let has_files = !data.attachments.is_empty();
-        let (size, pad) = if has_files { (12, 3) } else { (13, 5) };
+        let has_layers = !data.layers.is_empty();
         let tab_button = |tab: Tab, label: &'static str| {
             let active = self.tab == tab;
-            button(text(label).size(size))
-                .padding([4, pad])
+            button(text(label).size(13))
+                .padding([4, 5])
                 .style(move |theme: &Theme, status| {
                     let palette = theme.extended_palette();
                     let mut style = button::text(theme, status);
@@ -254,40 +259,33 @@ impl Sidebar {
             Side::Left => "Move sidebar to the right",
             Side::Right => "Move sidebar to the left",
         };
-        let title = row![
-            text("Navigation").size(14),
-            space::horizontal(),
-            icons::button(Icon::SwapSide, side_tip, Some(ev(Event::SwapSide))),
-            icons::button(Icon::Close, "Hide sidebar (F4)", Some(ev(Event::Toggle))),
-        ]
-        .spacing(2)
-        .padding([4, 8])
-        .align_y(Center);
+        // Documents with attached files or layers get tabs for them too, as icons beside the
+        // title, where there's room.
+        let icon_tab = |show: bool, icon: Icon, tip: &'static str, tab: Tab| {
+            show.then(|| icons::toggle(icon, tip, self.tab == tab, ev(Event::Tab(tab))))
+        };
+        let title = row![text("Navigation").size(14), space::horizontal(),]
+            .push(icon_tab(has_layers, Icon::Layers, "Layers", Tab::Layers))
+            .push(icon_tab(has_files, Icon::Paperclip, "Attached files", Tab::Files))
+            .push(
+                row![
+                    icons::button(Icon::SwapSide, side_tip, Some(ev(Event::SwapSide))),
+                    icons::button(Icon::Close, "Hide sidebar (F4)", Some(ev(Event::Toggle))),
+                ]
+                .spacing(2),
+            )
+            .spacing(2)
+            .padding([4, 8])
+            .align_y(Center);
         let searched = data.texts.iter().filter(|t| t.text.is_some()).count();
-        // Only documents with attached files get the Files tab, as a paperclip to save room.
-        let files_tab = has_files.then(|| {
-            let active = self.tab == Tab::Files;
-            column![
-                icons::toggle(
-                    Icon::Paperclip,
-                    "Attached files",
-                    active,
-                    ev(Event::Tab(Tab::Files))
-                ),
-                underline(Tab::Files),
-            ]
-            .width(iced::Shrink)
-        });
         let tabs = row![
             tab(Tab::Bookmarks, "Bookmarks"),
             tab(Tab::Thumbnails, "Pages"),
             tab(Tab::Results, "Results"),
             tab(Tab::Comments, "Comments"),
         ]
-        .push(files_tab)
         .spacing(2)
-        .padding([0, 6])
-        .align_y(iced::Bottom);
+        .padding([0, 6]);
         let header = column![
             title,
             data.find.search_box(searched, data.texts.len()),
@@ -297,7 +295,8 @@ impl Sidebar {
 
         let content = match self.tab {
             Tab::Files if has_files => files(data.attachments),
-            Tab::Thumbnails | Tab::Files => self.thumbnails(&data),
+            Tab::Layers if has_layers => layers(data.layers, data.layers_shown),
+            Tab::Thumbnails | Tab::Files | Tab::Layers => self.thumbnails(&data),
             Tab::Bookmarks => bookmarks(data.outline, data.find),
             Tab::Results => data.find.results(data.texts),
             Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),
@@ -452,6 +451,25 @@ fn bookmarks<'a>(outline: &'a [OutlineItem], find: &Find) -> Element<'a, Message
     .height(Fill)
     .into()
 }
+/// Layers, each with a box to show or hide it. Hiding one changes only the view.
+fn layers<'a>(layers: &'a [Layer], shown: &[bool]) -> Element<'a, Message> {
+    let items = layers.iter().enumerate().map(|(index, layer)| {
+        let on = shown.get(index).copied().unwrap_or(layer.shown);
+        iced::widget::checkbox(on)
+            .label(layer.name.as_str())
+            .size(16)
+            .text_size(13)
+            .on_toggle(move |show| Message::ShowLayer(index, show))
+            .into()
+    });
+    let note = text("Hiding a layer changes only what you see here, not the file.")
+        .size(12)
+        .style(text::secondary);
+    scrollable(column![note].extend(items).spacing(8).padding(PAD).width(Fill))
+        .height(Fill)
+        .into()
+}
+
 /// Attached files, each with a button that saves a copy. They are never opened from here.
 fn files(attachments: &[Attachment]) -> Element<'_, Message> {
     let items = attachments.iter().enumerate().map(|(index, file)| {

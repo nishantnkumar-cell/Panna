@@ -79,6 +79,7 @@ pub enum Icon {
     AllTools,
     Paperclip,
     Camera,
+    Layers,
 }
 
 impl Icon {
@@ -155,6 +156,7 @@ impl Icon {
             Icon::AllTools => include_bytes!("../icons/layout-grid.svg"),
             Icon::Paperclip => include_bytes!("../icons/paperclip.svg"),
             Icon::Camera => include_bytes!("../icons/camera.svg"),
+            Icon::Layers => include_bytes!("../icons/layers-2.svg"),
         }
     }
 }
@@ -249,7 +251,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 71] = [
+    const ALL: [Icon; 72] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -321,6 +323,7 @@ mod tests {
         Icon::AllTools,
         Icon::Paperclip,
         Icon::Camera,
+        Icon::Layers,
     ];
 
     #[test]

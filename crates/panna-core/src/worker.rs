@@ -81,6 +81,8 @@ enum Reply {
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
     Print(PrintReply),
+    /// Hide these layers and show the rest, or `None` for the document's own choice.
+    Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
     Snapshot {
         page: usize,
@@ -259,6 +261,17 @@ impl RenderWorker {
         });
     }
 
+    /// Shows the document with the layers in `hidden` hidden and the rest shown, or as the
+    /// document itself chooses with `None`. Only the view changes; saved files don't.
+    pub fn set_layers(&self, hidden: Option<Vec<crate::ObjRef>>) {
+        // Its own number, so a newer choice replaces an older one but never other changes.
+        let _ = self.jobs.send(Job {
+            index: usize::MAX,
+            kind: Kind::Edit,
+            reply: Reply::Layers(hidden),
+        });
+    }
+
     /// The whole document with unsaved changes, without password protection, for printing.
     pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -282,6 +295,7 @@ impl RenderWorker {
 }
 
 enum Swap {
+    Layers(Option<Vec<crate::ObjRef>>),
     Edit(Changes, EditReply),
     Pages(PageEdit, PagesReply),
     /// The live document was saved and becomes the base.
@@ -355,9 +369,13 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
     let mut live: Option<Document> = None;
     let mut pending: Vec<Job> = Vec::new();
     let mut history: Vec<Document> = Vec::new();
+    let mut hidden: Option<Vec<crate::ObjRef>> = None;
     loop {
         let current = live.as_ref().unwrap_or(&base);
-        let cache = current.new_cache();
+        // What's shown: the document with the layers the user hid, when they've chosen.
+        let with_layers = hidden.as_ref().and_then(|h| current.with_layers_hidden(h).ok());
+        let view = with_layers.as_ref().unwrap_or(current);
+        let cache = view.new_cache();
         // Render from `current` until an edit or save needs to swap documents.
         let swap = loop {
             if pending.is_empty() {
@@ -389,10 +407,10 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     rotation,
                     reply,
                 } => {
-                    let page = current.render_page(&cache, job.index, scale);
+                    let page = view.render_page(&cache, job.index, scale);
                     reply(page.map(|p| p.rotated(rotation)));
                 }
-                Reply::Text(reply) => reply(current.page_text(job.index)),
+                Reply::Text(reply) => reply(view.page_text(job.index)),
                 Reply::Save(path, reply) => {
                     let result = write_atomically(&path, current.bytes()).map(|()| current.comments());
                     let saved = result.is_ok();
@@ -409,12 +427,13 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     area,
                     reply,
                 } => {
-                    let page = current.render_page(&cache, page, scale);
+                    let page = view.render_page(&cache, page, scale);
                     reply(page.map(|p| p.rotated(rotation).cropped(area)));
                 }
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
+                Reply::Layers(list) => break Swap::Layers(list),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
-                Reply::Export(export, reply) => reply(export_pages(current, &cache, &export)),
+                Reply::Export(export, reply) => reply(export_pages(view, &cache, &export)),
                 Reply::Attachment(index, path, reply) => reply(match current.attachment(index) {
                     Some(bytes) => write_atomically(&path, &bytes),
                     None => Err(SaveError::Io("the attached file couldn't be read".into())),
@@ -430,6 +449,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
         };
         drop(cache);
         match swap {
+            Swap::Layers(list) => hidden = list,
             Swap::Promote => {
                 if let Some(saved) = live.take() {
                     base = saved;

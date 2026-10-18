@@ -227,6 +227,8 @@ enum Message {
     },
     Find(find::Event),
     PagePointer(usize, Point),
+    /// Show or hide layer n.
+    ShowLayer(usize, bool),
     /// Turn the snapshot tool on or off.
     ToggleSnapshot,
     SnapshotTaken(Result<panna_core::RenderedPage, String>),
@@ -423,6 +425,8 @@ struct OpenDoc {
     thumb_layout: ThumbLayout,
     thumbs: Vec<Thumb>,
     texts: Vec<TextSlot>,
+    /// Whether each layer is shown.
+    layers_shown: Vec<bool>,
 }
 
 #[derive(Default)]
@@ -733,6 +737,7 @@ impl App {
                         doc.thumb_layout = ThumbLayout::new(&info.pages);
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
                         doc.texts = info.pages.iter().map(|_| TextSlot::default()).collect();
+                        doc.layers_shown = info.layers.iter().map(|l| l.shown).collect();
                         doc.info = info;
                         self.selection = None;
                         self.hover = None;
@@ -1099,6 +1104,33 @@ impl App {
                     }
                 });
                 Task::none()
+            }
+            Message::ShowLayer(index, show) => {
+                let Some(open) = self.doc.as_mut() else {
+                    return Task::none();
+                };
+                let Some(slot) = open.layers_shown.get_mut(index) else {
+                    return Task::none();
+                };
+                *slot = show;
+                let hidden = open
+                    .info
+                    .layers
+                    .iter()
+                    .zip(&open.layers_shown)
+                    .filter(|(_, shown)| !**shown)
+                    .map(|(layer, _)| layer.id)
+                    .collect();
+                open.worker.set_layers(Some(hidden));
+                // Re-render; old bitmaps stay up until the new ones arrive.
+                for slot in &mut open.pages {
+                    slot.rendered_scale = None;
+                    slot.pending_scale = None;
+                }
+                for thumb in &mut open.thumbs {
+                    *thumb = Thumb::default();
+                }
+                Task::batch([self.request_visible(), self.request_thumbnails()])
             }
             Message::ToggleSnapshot => {
                 self.snapping = !self.snapping;
@@ -1760,6 +1792,9 @@ impl App {
                 open.thumb_layout = ThumbLayout::new(&sizes);
                 open.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
                 open.texts = info.pages.iter().map(|_| TextSlot::default()).collect();
+                // Layers start as the document has them again, as their ids may have changed.
+                open.worker.set_layers(None);
+                open.layers_shown = info.layers.iter().map(|l| l.shown).collect();
                 open.info = info;
                 self.selection = None;
                 self.hover = None;
@@ -2267,7 +2302,6 @@ impl App {
         (!text.is_empty()).then_some(text)
     }
 
-    /// On Linux, selected text also goes to the primary selection for middle-click paste.
     /// Copies a picture of the area dragged out with the snapshot tool, as shown and with
     /// unsaved changes, drawn sharper than the screen when the page is small enough.
     fn take_snapshot(&mut self) -> Task<Message> {
@@ -2312,6 +2346,7 @@ impl App {
         })
     }
 
+    /// On Linux, selected text also goes to the primary selection for middle-click paste.
     fn copy_primary(&self) -> Task<Message> {
         match self.selected_text() {
             Some(text) if cfg!(target_os = "linux") => iced::clipboard::write_primary(text),
@@ -2554,6 +2589,7 @@ impl App {
                 links: Vec::new(),
                 protected: false,
                 attachments: Vec::new(),
+                layers: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -2561,6 +2597,7 @@ impl App {
             thumb_layout: ThumbLayout::default(),
             thumbs: Vec::new(),
             texts: Vec::new(),
+            layers_shown: Vec::new(),
         });
         Task::perform(rx, move |result| {
             Message::Opened(id, result.unwrap_or(Err(OpenError::EngineCrashed)))
@@ -3183,6 +3220,8 @@ impl App {
                 unsaved: &self.annotate.items,
                 removed: &self.annotate.removed,
                 attachments: &doc.info.attachments,
+                layers: &doc.info.layers,
+                layers_shown: &doc.layers_shown,
                 can_undo_pages: self.page_edits > 0,
                 pages_busy: self.pages_busy,
             })

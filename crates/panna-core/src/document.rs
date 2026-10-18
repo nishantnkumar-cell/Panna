@@ -39,6 +39,8 @@ pub struct DocumentInfo {
     pub protected: bool,
     /// Files attached to the document and its pages.
     pub attachments: Vec<crate::Attachment>,
+    /// Layers that can be shown or hidden.
+    pub layers: Vec<crate::Layer>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -310,11 +312,14 @@ impl Document {
             ));
             let attachments =
                 catch_unwind(AssertUnwindSafe(|| crate::attachments::read(&self.pdf))).unwrap_or_default();
+            let layers =
+                catch_unwind(AssertUnwindSafe(|| crate::layers::read(&self.pdf))).unwrap_or_default();
             DocumentInfo {
                 fields,
                 links,
                 protected,
                 attachments,
+                layers,
                 pages,
                 title,
                 properties,
@@ -518,6 +523,17 @@ impl Document {
     }
 
     /// Parses `bytes`, a later revision of this file, with the same password and limits.
+    /// This document as it looks with the layers in `hidden` hidden and the rest shown, for
+    /// viewing; never saved.
+    pub fn with_layers_hidden(&self, hidden: &[crate::ObjRef]) -> Result<Self, crate::SaveError> {
+        let layers: Vec<crate::ObjRef> = crate::layers::read(&self.pdf).iter().map(|l| l.id).collect();
+        let bytes = catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::with_layers(&self.pdf, &self.bytes, &layers, hidden)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)??;
+        self.reopen(bytes).map_err(|_| crate::SaveError::Damaged)
+    }
+
     pub fn reopen(&self, bytes: Vec<u8>) -> Result<Self, OpenError> {
         Self::from_bytes(bytes, Some(&self.password), self.limits)
     }

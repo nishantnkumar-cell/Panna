@@ -220,6 +220,55 @@ pub(crate) fn apply(
     Ok(out.finish(original))
 }
 
+/// `original` with an update that hides the layers in `hidden` and shows every other layer,
+/// for viewing only: the catalog's default layer settings are replaced by just that choice.
+pub(crate) fn with_layers(
+    pdf: &Pdf,
+    original: &[u8],
+    layers: &[crate::ObjRef],
+    hidden: &[crate::ObjRef],
+) -> Result<Vec<u8>, SaveError> {
+    let xref = pdf.xref();
+    let root = xref.root_id();
+    let catalog = xref
+        .get::<hayro::hayro_syntax::object::Dict<'_>>(root)
+        .ok_or(SaveError::Damaged)?;
+    let (num, generation) = (
+        u32::try_from(root.obj_number).map_err(|_| SaveError::Damaged)?,
+        u16::try_from(root.gen_number).map_err(|_| SaveError::Damaged)?,
+    );
+    let data = catalog.data();
+    let entries = lex::dict_entries(data).ok_or(SaveError::Damaged)?;
+    let mut dict = b"<<".to_vec();
+    for (key, value) in &entries {
+        if *key == b"OCProperties" {
+            continue;
+        }
+        dict.push(b'/');
+        dict.extend_from_slice(key);
+        dict.push(b' ');
+        dict.extend_from_slice(data.get(value.clone()).ok_or(SaveError::Damaged)?);
+        dict.push(b'\n');
+    }
+    let list = |refs: &[crate::ObjRef]| {
+        refs.iter()
+            .map(|r| format!("{} {} R", r.number, r.generation))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    dict.extend_from_slice(
+        format!(
+            "/OCProperties << /OCGs [{}] /D << /BaseState /ON /OFF [{}] >> >>\n>>",
+            list(layers),
+            list(hidden)
+        )
+        .as_bytes(),
+    );
+    let mut out = update::Update::new(update::read_trailer(original)?);
+    out.put_copied(num, generation, dict);
+    Ok(out.finish(original))
+}
+
 /// One document taking part in a rebuild: parsed, its bytes, and its password.
 pub(crate) type Input<'a> = (&'a Pdf, &'a [u8], &'a str);
 

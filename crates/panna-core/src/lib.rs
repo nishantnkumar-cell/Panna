@@ -12,6 +12,7 @@ mod edit;
 mod export;
 mod formats;
 mod forms;
+mod layers;
 mod limits;
 mod links;
 mod outline;
@@ -29,6 +30,7 @@ pub use edit::{
 pub use export::{Export, ExportFormat};
 pub use formats::Format;
 pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
+pub use layers::Layer;
 pub use limits::Limits;
 pub use links::{Link, LinkTarget, safe_uri};
 pub use outline::OutlineItem;
