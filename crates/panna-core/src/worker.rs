@@ -79,6 +79,7 @@ enum Reply {
     Pages(PageEdit, PagesReply),
     Extract(Vec<(Vec<PageSource>, PathBuf)>, ExtractReply),
     Export(crate::Export, ExtractReply),
+    Attachment(usize, PathBuf, ExtractReply),
     Print(PrintReply),
 }
 
@@ -199,6 +200,20 @@ impl RenderWorker {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
             reply: Reply::Extract(files, Box::new(reply)),
+        });
+    }
+
+    /// Saves attached file `index` (in [`DocumentInfo::attachments`]) to `path`.
+    pub fn save_attachment(
+        &self,
+        index: usize,
+        path: PathBuf,
+        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Attachment(index, path, Box::new(reply)),
         });
     }
 
@@ -358,6 +373,10 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
                 Reply::Export(export, reply) => reply(export_pages(current, &cache, &export)),
+                Reply::Attachment(index, path, reply) => reply(match current.attachment(index) {
+                    Some(bytes) => write_atomically(&path, &bytes),
+                    None => Err(SaveError::Io("the attached file couldn't be read".into())),
+                }),
                 Reply::Extract(files, reply) => {
                     reply(files.iter().try_for_each(|(pages, path)| {
                         current

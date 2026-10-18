@@ -6,7 +6,7 @@ use std::ops::Range;
 use iced::widget::scrollable::Viewport;
 use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
 use iced::{Center, Element, Fill, Length, Theme};
-use panna_core::{Annotation, Comment, CommentId, OutlineItem, PageSize};
+use panna_core::{Annotation, Attachment, Comment, CommentId, OutlineItem, PageSize};
 
 use crate::Message;
 use crate::find::Find;
@@ -30,6 +30,7 @@ pub enum Tab {
     Bookmarks,
     Results,
     Comments,
+    Files,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,6 +64,7 @@ impl Tab {
             Tab::Bookmarks => "bookmarks",
             Tab::Results => "results",
             Tab::Comments => "comments",
+            Tab::Files => "files",
         }
     }
 
@@ -72,6 +74,7 @@ impl Tab {
             "bookmarks" => Some(Tab::Bookmarks),
             "results" => Some(Tab::Results),
             "comments" => Some(Tab::Comments),
+            "files" => Some(Tab::Files),
             _ => None,
         }
     }
@@ -201,6 +204,7 @@ pub struct ViewData<'a> {
     pub comments: &'a [Comment],
     pub unsaved: &'a [Annotation],
     pub removed: &'a [CommentId],
+    pub attachments: &'a [Attachment],
     /// Page changes can be undone.
     pub can_undo_pages: bool,
     /// A page change is in progress.
@@ -211,10 +215,13 @@ impl Sidebar {
     pub fn view<'a>(&self, data: ViewData<'a>) -> Element<'a, Message> {
         let ev = Message::Sidebar;
         // Word-style text tabs; the open one is underlined in the accent colour.
+        // With the Files tab too, the text tabs shrink a little to leave it room.
+        let has_files = !data.attachments.is_empty();
+        let (size, pad) = if has_files { (12, 3) } else { (13, 5) };
         let tab_button = |tab: Tab, label: &'static str| {
             let active = self.tab == tab;
-            button(text(label).size(13))
-                .padding([4, 5])
+            button(text(label).size(size))
+                .padding([4, pad])
                 .style(move |theme: &Theme, status| {
                     let palette = theme.extended_palette();
                     let mut style = button::text(theme, status);
@@ -257,14 +264,30 @@ impl Sidebar {
         .padding([4, 8])
         .align_y(Center);
         let searched = data.texts.iter().filter(|t| t.text.is_some()).count();
+        // Only documents with attached files get the Files tab, as a paperclip to save room.
+        let files_tab = has_files.then(|| {
+            let active = self.tab == Tab::Files;
+            column![
+                icons::toggle(
+                    Icon::Paperclip,
+                    "Attached files",
+                    active,
+                    ev(Event::Tab(Tab::Files))
+                ),
+                underline(Tab::Files),
+            ]
+            .width(iced::Shrink)
+        });
         let tabs = row![
             tab(Tab::Bookmarks, "Bookmarks"),
             tab(Tab::Thumbnails, "Pages"),
             tab(Tab::Results, "Results"),
             tab(Tab::Comments, "Comments"),
         ]
+        .push(files_tab)
         .spacing(2)
-        .padding([0, 6]);
+        .padding([0, 6])
+        .align_y(iced::Bottom);
         let header = column![
             title,
             data.find.search_box(searched, data.texts.len()),
@@ -273,7 +296,8 @@ impl Sidebar {
         ];
 
         let content = match self.tab {
-            Tab::Thumbnails => self.thumbnails(&data),
+            Tab::Files if has_files => files(data.attachments),
+            Tab::Thumbnails | Tab::Files => self.thumbnails(&data),
             Tab::Bookmarks => bookmarks(data.outline, data.find),
             Tab::Results => data.find.results(data.texts),
             Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),
@@ -428,6 +452,66 @@ fn bookmarks<'a>(outline: &'a [OutlineItem], find: &Find) -> Element<'a, Message
     .height(Fill)
     .into()
 }
+/// Attached files, each with a button that saves a copy. They are never opened from here.
+fn files(attachments: &[Attachment]) -> Element<'_, Message> {
+    let items = attachments.iter().enumerate().map(|(index, file)| {
+        let mut details = Vec::new();
+        if let Some(size) = file.size {
+            details.push(size_text(size));
+        }
+        if let Some(page) = file.page {
+            details.push(format!("on page {}", page + 1));
+        }
+        let mut about = column![
+            text(file.name.as_str())
+                .size(13)
+                .wrapping(text::Wrapping::WordOrGlyph)
+        ];
+        if !details.is_empty() {
+            let line = text(details.join(" · ")).size(12).style(text::secondary);
+            about = about.push(match file.page {
+                Some(page) => button(line)
+                    .padding(0)
+                    .style(button::text)
+                    .on_press(Message::GoToPage(page))
+                    .into(),
+                None => Element::from(line),
+            });
+        }
+        if !file.description.trim().is_empty() {
+            about = about.push(
+                text(file.description.as_str())
+                    .size(12)
+                    .style(text::secondary)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+        row![
+            about.spacing(2).width(Fill),
+            icons::button(Icon::Save, "Save a copy…", Some(Message::SaveAttachment(index))),
+        ]
+        .spacing(6)
+        .align_y(Center)
+        .into()
+    });
+    scrollable(Column::with_children(items).spacing(10).padding(PAD).width(Fill))
+        .height(Fill)
+        .into()
+}
+
+/// A file size in bytes, KB or MB.
+fn size_text(bytes: u64) -> String {
+    #[allow(clippy::cast_precision_loss)] // only shown rounded
+    let b = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} bytes")
+    } else if b < 1024.0 * 1024.0 {
+        format!("{:.0} KB", (b / 1024.0).ceil())
+    } else {
+        format!("{:.1} MB", b / (1024.0 * 1024.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +575,13 @@ mod tests {
         assert_eq!(section(&outline, 1), None);
         assert_eq!(section(&outline, 3), Some(7..9));
         assert_eq!(section(&outline, 4), Some(9..10));
+    }
+
+    #[test]
+    fn sizes_read_naturally() {
+        assert_eq!(size_text(5), "5 bytes");
+        assert_eq!(size_text(1500), "2 KB");
+        assert_eq!(size_text(3 * 1024 * 1024 + 200_000), "3.2 MB");
     }
 
     #[test]

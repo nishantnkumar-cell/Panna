@@ -37,6 +37,8 @@ pub struct DocumentInfo {
     pub links: Vec<crate::Link>,
     /// Whether the file has password protection.
     pub protected: bool,
+    /// Files attached to the document and its pages.
+    pub attachments: Vec<crate::Attachment>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -275,10 +277,13 @@ impl Document {
                 "Password protection",
                 if protected { "Yes" } else { "None" }.to_owned(),
             ));
+            let attachments =
+                catch_unwind(AssertUnwindSafe(|| crate::attachments::read(&self.pdf))).unwrap_or_default();
             DocumentInfo {
                 fields,
                 links,
                 protected,
+                attachments,
                 pages,
                 title,
                 properties,
@@ -458,6 +463,13 @@ impl Document {
             crate::edit::clean_up((&self.pdf, &self.bytes, &self.password), self.page_count(), clean)
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The contents of attached file `index` (in [`DocumentInfo::attachments`]).
+    pub fn attachment(&self, index: usize) -> Option<Vec<u8>> {
+        catch_unwind(AssertUnwindSafe(|| crate::attachments::data(&self.pdf, index)))
+            .ok()
+            .flatten()
     }
 
     /// The whole document, without password protection, for the printing system. Fails when

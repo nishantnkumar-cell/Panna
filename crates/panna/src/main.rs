@@ -161,6 +161,9 @@ enum Message {
         result: Result<DocumentInfo, SaveError>,
     },
     Extracted(Result<(), SaveError>),
+    /// Save a copy of attached file n.
+    SaveAttachment(usize),
+    AttachmentChosen(usize, Option<PathBuf>),
     /// Asks for a picture to stamp.
     StampPicture,
     StampPictureChosen(Option<PathBuf>),
@@ -1627,6 +1630,34 @@ impl App {
                 }
                 Task::none()
             }
+            Message::SaveAttachment(index) => {
+                let Some(file) = self.doc.as_ref().and_then(|d| d.info.attachments.get(index)) else {
+                    return Task::none();
+                };
+                let name = file.name.clone();
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save attached file as")
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    move |path| Message::AttachmentChosen(index, path),
+                )
+            }
+            Message::AttachmentChosen(_, None) => Task::none(),
+            Message::AttachmentChosen(index, Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_attachment(index, path, move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
             Message::PagesChanged {
                 doc,
                 show,
@@ -2405,6 +2436,7 @@ impl App {
                 fields: Vec::new(),
                 links: Vec::new(),
                 protected: false,
+                attachments: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -3023,6 +3055,7 @@ impl App {
                 comments: &doc.info.comments,
                 unsaved: &self.annotate.items,
                 removed: &self.annotate.removed,
+                attachments: &doc.info.attachments,
                 can_undo_pages: self.page_edits > 0,
                 pages_busy: self.pages_busy,
             })

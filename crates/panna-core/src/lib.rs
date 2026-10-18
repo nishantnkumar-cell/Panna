@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod attachments;
 mod comments;
 mod document;
 mod edit;
@@ -17,6 +18,7 @@ mod outline;
 mod text;
 mod worker;
 
+pub use attachments::Attachment;
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{
