@@ -94,6 +94,8 @@ pub enum Icon {
     Shrink,
     Redact,
     MarkResults,
+    EditPictures,
+    ReplacePicture,
     Compare,
     PrepareForm,
     TextField,
@@ -190,6 +192,8 @@ impl Icon {
             Icon::Shrink => include_bytes!("../icons/shrink.svg"),
             Icon::Redact => include_bytes!("../icons/eye-off.svg"),
             Icon::MarkResults => include_bytes!("../icons/text-search.svg"),
+            Icon::EditPictures => include_bytes!("../icons/images.svg"),
+            Icon::ReplacePicture => include_bytes!("../icons/replace.svg"),
             Icon::Compare => include_bytes!("../icons/file-diff.svg"),
             Icon::PrepareForm => include_bytes!("../icons/clipboard-pen-line.svg"),
             Icon::TextField => include_bytes!("../icons/text-cursor-input.svg"),
@@ -291,7 +295,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 92] = [
+    const ALL: [Icon; 94] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -378,6 +382,8 @@ mod tests {
         Icon::Shrink,
         Icon::Redact,
         Icon::MarkResults,
+        Icon::EditPictures,
+        Icon::ReplacePicture,
         Icon::Compare,
         Icon::PrepareForm,
         Icon::TextField,

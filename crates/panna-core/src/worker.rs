@@ -19,6 +19,7 @@ type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
+type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
 type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 
@@ -51,6 +52,12 @@ pub enum PageEdit {
     Add {
         page: usize,
         additions: Vec<crate::Addition>,
+    },
+    /// Moves, replaces or takes out pictures on a page, each named by its place in
+    /// [`Worker::pictures`].
+    Pictures {
+        page: usize,
+        changes: Vec<(usize, crate::PictureChange)>,
     },
     /// Takes everything inside these areas (as page text boxes, per page) out for good, and
     /// covers them in black.
@@ -105,6 +112,8 @@ enum Reply {
     ReadComments(Vec<u8>, CommentsReply),
     /// Compares the document's text with another file's.
     Compare(PathBuf, CompareReply),
+    /// Where the pictures on a page are.
+    Pictures(usize, PicturesReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
@@ -352,6 +361,15 @@ impl RenderWorker {
         });
     }
 
+    /// Where the pictures on page `page` are, as shown.
+    pub fn pictures(&self, page: usize, reply: impl FnOnce(Vec<crate::TextBox>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Pictures(page, Box::new(reply)),
+        });
+    }
+
     /// The whole document with unsaved changes, without password protection, for printing.
     pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -507,6 +525,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     write_atomically(&path, &bytes)?;
                     Ok((current.bytes().len() as u64, bytes.len() as u64))
                 })),
+                Reply::Pictures(page, reply) => reply(current.pictures(page)),
                 Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
                 Reply::Compare(path, reply) => reply(match Document::open(&path, None, current.limits()) {
                     Ok(other) => current
@@ -586,6 +605,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::FormFields { add, remove } => current
                         .with_form_fields(&add, &remove)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::Pictures { page, changes } => current
+                        .with_pictures_changed(page, &changes)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Redact(areas) => current
                         .redacted(&areas)

@@ -43,7 +43,7 @@ pub(crate) fn concat(a: Matrix, b: Matrix) -> Matrix {
     ]
 }
 
-fn apply(m: Matrix, x: f64, y: f64) -> (f64, f64) {
+pub(crate) fn apply(m: Matrix, x: f64, y: f64) -> (f64, f64) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
@@ -766,6 +766,101 @@ fn areas_point(hit: &dyn Fn([f64; 4]) -> bool, m: Matrix) -> bool {
     hit([x - 0.01, y - 0.01, x + 0.01, y + 0.01])
 }
 
+// ---- Pictures drawn on a page ----
+
+/// A picture drawn by the content: its name in the resources, where it's drawn (picture
+/// space to page space), and the bytes of the operation that draws it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Placed {
+    pub name: Vec<u8>,
+    pub ctm: Matrix,
+    pub range: std::ops::Range<usize>,
+}
+
+impl Placed {
+    /// The box it covers, in page space.
+    pub(crate) fn bounds(&self) -> [f64; 4] {
+        bounds(self.ctm, [0.0, 0.0, 1.0, 1.0])
+    }
+}
+
+/// Every picture `content` draws itself (not those inside forms), in order.
+pub(crate) fn placed_images(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Placed> {
+    let mut lex = Lexer {
+        data: content,
+        pos: 0,
+    };
+    let mut stack: Vec<Matrix> = Vec::new();
+    let mut ctm = IDENTITY;
+    let mut operands: Vec<Operand> = Vec::new();
+    let mut start = 0;
+    let mut out = Vec::new();
+    loop {
+        lex.skip();
+        if operands.is_empty() {
+            start = lex.pos;
+        }
+        let Some(token) = lex.token(0) else { break };
+        let range = match token {
+            Token::Operand(o) => {
+                operands.push(o);
+                continue;
+            }
+            Token::ArrayEnd | Token::DictEnd => {
+                operands.push(Operand::Other);
+                continue;
+            }
+            Token::Operator(range) => range,
+        };
+        let nums: Vec<f64> = operands.iter().filter_map(Operand::number).collect();
+        match content.get(range.clone()).unwrap_or_default() {
+            b"q" if stack.len() < MAX_STACK => stack.push(ctm),
+            b"Q" => ctm = stack.pop().unwrap_or(ctm),
+            b"cm" => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    ctm = concat([a, b, c, d, e, f], ctm);
+                }
+            }
+            b"Do" => {
+                if let Some(Operand::Name(name)) = operands.first()
+                    && matches!(lookup.xobject(name), Some(XObject::Image))
+                {
+                    out.push(Placed {
+                        name: name.clone(),
+                        ctm,
+                        range: start..range.end,
+                    });
+                }
+            }
+            _ => {}
+        }
+        operands.clear();
+    }
+    out
+}
+
+/// The inverse of `m`, unless it squashes everything flat.
+pub(crate) fn invert(m: Matrix) -> Option<Matrix> {
+    let det = m[0] * m[3] - m[1] * m[2];
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let (a, b, c, d) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det);
+    Some([a, b, c, d, -(m[4] * a + m[5] * c), -(m[4] * b + m[5] * d)])
+}
+
+/// The matrix that, put in front of a picture drawn with `ctm`, moves it from the box
+/// `from` to the box `to` (both in page space).
+pub(crate) fn moved(ctm: Matrix, from: [f64; 4], to: [f64; 4]) -> Option<Matrix> {
+    let (fw, fh) = (from[2] - from[0], from[3] - from[1]);
+    if fw.abs() < 1e-9 || fh.abs() < 1e-9 {
+        return None;
+    }
+    let (sx, sy) = ((to[2] - to[0]) / fw, (to[3] - to[1]) / fh);
+    let shift = [sx, 0.0, 0.0, sy, to[0] - from[0] * sx, to[1] - from[1] * sy];
+    Some(concat(concat(ctm, shift), invert(ctm)?))
+}
+
 // ---- Reading fonts and pictures from a file ----
 
 use hayro::hayro_syntax::object::{Array, Dict, Name, Object, Stream};
@@ -1075,5 +1170,20 @@ mod tests {
             !t.contains("secret") && t.contains("/MCID 3") && !t.contains("BI"),
             "{t}"
         );
+    }
+
+    #[test]
+    fn pictures_are_found_and_moved_where_asked() {
+        let content = b"q 50 0 0 40 10 20 cm /Im1 Do Q BT /F1 12 Tf (x) Tj ET q 2 0 0 2 0 0 cm 10 0 0 10 5 5 cm /Im1 Do Q";
+        let found = placed_images(content, &mut Fake);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].bounds(), [10.0, 20.0, 60.0, 60.0]);
+        assert_eq!(found[1].bounds(), [10.0, 10.0, 30.0, 30.0]);
+        assert_eq!(&content[found[0].range.clone()], b"/Im1 Do");
+        let m = moved(found[1].ctm, found[1].bounds(), [100.0, 100.0, 140.0, 120.0]).unwrap();
+        let b = bounds(concat(m, found[1].ctm), [0.0, 0.0, 1.0, 1.0]);
+        for (x, y) in b.iter().zip([100.0, 100.0, 140.0, 120.0]) {
+            assert!((x - y).abs() < 1e-9, "{b:?}");
+        }
     }
 }

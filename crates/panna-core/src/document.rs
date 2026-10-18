@@ -478,6 +478,30 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The pictures each page draws (not those inside forms), each as the box it covers in
+    /// the same space as page text.
+    pub fn pictures(&self, page: usize) -> Vec<crate::TextBox> {
+        catch_unwind(AssertUnwindSafe(|| crate::edit::page_pictures(&self.pdf, page))).unwrap_or_default()
+    }
+
+    /// The document with pictures on page `page` moved, replaced or taken out, as a new
+    /// file. Each change names a picture by its place in [`Document::pictures`].
+    pub fn with_pictures_changed(
+        &self,
+        page: usize,
+        changes: &[(usize, crate::PictureChange)],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::change_pictures(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                page,
+                changes,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The differences between this document's text and `other`'s, word by word.
     pub fn compare_with(&self, other: &Document) -> Result<Vec<crate::Change>, RenderError> {
         let texts = |doc: &Document| -> Result<Vec<crate::PageText>, RenderError> {

@@ -280,6 +280,9 @@ pub(crate) struct Extra {
     /// Widgets to take off the page, and fields to take out of the form.
     pub drop_annots: Vec<ObjRef>,
     pub drop_fields: Vec<ObjRef>,
+    /// Pictures the page draws to move, replace or take out, by their place in
+    /// [`page_pictures`].
+    pub pictures: Vec<(usize, super::PictureChange)>,
 }
 
 /// Hidden information to leave out of the new file.
@@ -724,8 +727,12 @@ pub(crate) fn rebuild(
                         }
                     }
                 }
-                let drawn =
-                    !extra.under.is_empty() || !extra.over.is_empty() || !flattened.is_empty() || redacting;
+                let editing_pictures = !extra.pictures.is_empty();
+                let drawn = !extra.under.is_empty()
+                    || !extra.over.is_empty()
+                    || !flattened.is_empty()
+                    || redacting
+                    || editing_pictures;
                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
                     if key == b"Parent" || INHERITED.contains(&key) {
                         continue;
@@ -734,7 +741,7 @@ pub(crate) fn rebuild(
                         continue;
                     }
                     // A redacted page's thumbnail picture would show what was taken out.
-                    if redacting && (key == b"Contents" || key == b"Thumb") {
+                    if (redacting || editing_pictures) && (key == b"Contents" || key == b"Thumb") {
                         continue;
                     }
                     if key == b"Contents" && drawn {
@@ -890,6 +897,96 @@ pub(crate) fn rebuild(
                         w.set(num, flate_stream("", &content));
                         contents = Some(format!("{num} 0 R").into_bytes());
                         forms.extend(overrides);
+                    }
+                    if editing_pictures && !redacting {
+                        let res = resources.and_then(|(owner, raw)| resolved(pdf, owner, raw));
+                        let content = page_content(dict);
+                        let mut lookup = super::redact::Resources { dict: res };
+                        let placed = super::redact::placed_images(&content, &mut lookup);
+                        let (inv, _, height) = shown_space(shown, rotate);
+                        let user = |r: &crate::TextBox| {
+                            let [a, b, c, d, e, f] = inv;
+                            let p = |x: f32, y: f32| {
+                                let (x, y) = (f64::from(x), height - f64::from(y));
+                                (a * x + c * y + e, b * x + d * y + f)
+                            };
+                            let (ux0, uy0) = p(r.x0, r.y0);
+                            let (ux1, uy1) = p(r.x1, r.y1);
+                            [ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)]
+                        };
+                        let mut out = Vec::new();
+                        let mut at = 0;
+                        for (i, place) in placed.iter().enumerate() {
+                            let Some((_, change)) = extra.pictures.iter().rev().find(|(p, _)| *p == i) else {
+                                continue;
+                            };
+                            let Some(raw) = content.get(place.range.clone()) else {
+                                continue;
+                            };
+                            out.extend_from_slice(content.get(at..place.range.start).unwrap_or_default());
+                            at = place.range.end;
+                            let from = place.bounds();
+                            let wrap = |to: [f64; 4], draw: &[u8]| -> Vec<u8> {
+                                match super::redact::moved(place.ctm, from, to) {
+                                    Some(m) => {
+                                        let mut op = format!("q {} cm ", m.map(n).join(" ")).into_bytes();
+                                        op.extend_from_slice(draw);
+                                        op.extend_from_slice(b" Q");
+                                        op
+                                    }
+                                    None => draw.to_vec(),
+                                }
+                            };
+                            match change {
+                                super::PictureChange::Delete => {}
+                                super::PictureChange::Move(rect) => out.extend(wrap(user(rect), raw)),
+                                super::PictureChange::Replace(image) => {
+                                    let mask = image.has_mask().then(|| w.alloc());
+                                    let (body, mask_body) =
+                                        image.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
+                                    let num = w.alloc();
+                                    w.set(num, body);
+                                    if let (Some(m), Some(b)) = (mask, mask_body) {
+                                        w.set(m, b);
+                                    }
+                                    let name = format!("PannaPicture{num}");
+                                    forms.push((name.clone(), num));
+                                    // The new picture keeps its own shape, centred where the
+                                    // old one was and upright as shown, whatever turned the
+                                    // old one. Worked out in shown space, bottom up.
+                                    let Some(shown_of) = super::redact::invert(inv) else {
+                                        continue;
+                                    };
+                                    let a = super::redact::apply(shown_of, from[0], from[1]);
+                                    let b = super::redact::apply(shown_of, from[2], from[3]);
+                                    let (sx0, sy0) = (a.0.min(b.0), a.1.min(b.1));
+                                    let (bw, bh) = ((a.0 - b.0).abs(), (a.1 - b.1).abs());
+                                    let aspect = f64::from(image.width) / f64::from(image.height.max(1));
+                                    let (pw, ph) = if bw / bh.max(1e-9) > aspect {
+                                        (bh * aspect, bh)
+                                    } else {
+                                        (bw, bw / aspect)
+                                    };
+                                    let place_in_shown =
+                                        [pw, 0.0, 0.0, ph, sx0 + (bw - pw) / 2.0, sy0 + (bh - ph) / 2.0];
+                                    let wanted = super::redact::concat(place_in_shown, inv);
+                                    // Drawn where the old one was, so its own placing is undone.
+                                    let Some(undo) = super::redact::invert(place.ctm) else {
+                                        continue;
+                                    };
+                                    let m = super::redact::concat(wanted, undo);
+                                    out.extend_from_slice(
+                                        format!("q {} cm /{name} Do Q", m.map(n).join(" ")).as_bytes(),
+                                    );
+                                    // The old picture isn't drawn any more; its operation goes.
+                                    let _ = raw;
+                                }
+                            }
+                        }
+                        out.extend_from_slice(content.get(at..).unwrap_or_default());
+                        let num = w.alloc();
+                        w.set(num, flate_stream("", &out));
+                        contents = Some(format!("{num} 0 R").into_bytes());
                     }
                     // The page's own drawing is kept apart in q ... Q, so whatever state it
                     // leaves behind doesn't move what's drawn over it.
@@ -1083,6 +1180,42 @@ fn form_with_fields(
     }
     body.extend_from_slice(format!("/Fields [{}]\n/NeedAppearances true\n>>", fields.join(" ")).as_bytes());
     Ok(body)
+}
+
+/// The pictures page `index` draws itself, in the order they're drawn, each as the box it
+/// covers in the same space as page text.
+pub(crate) fn page_pictures(pdf: &Pdf, index: usize) -> Vec<crate::TextBox> {
+    let (pages, _) = page_tree(pdf);
+    let Some((r, dict)) = pages.get(index) else {
+        return Vec::new();
+    };
+    let rotate = inherited(pdf, *r, dict, b"Rotate")
+        .and_then(|(_, v)| std::str::from_utf8(v).ok()?.trim().parse::<f64>().ok())
+        .map_or(0, |v| (v as i64).rem_euclid(360));
+    let boxed = |key: &[u8]| inherited(pdf, *r, dict, key).and_then(|(_, v)| rect(v));
+    let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    let shown = cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media);
+    let res = inherited(pdf, *r, dict, b"Resources").and_then(|(owner, raw)| resolved(pdf, owner, raw));
+    let content = page_content(dict);
+    let mut lookup = super::redact::Resources { dict: res };
+    let (matrix, _, height) = shown_space(shown, rotate);
+    let Some(inv) = super::redact::invert(matrix) else {
+        return Vec::new();
+    };
+    super::redact::placed_images(&content, &mut lookup)
+        .iter()
+        .map(|p| {
+            let [x0, y0, x1, y1] = p.bounds();
+            let a = super::redact::apply(inv, x0, y0);
+            let b = super::redact::apply(inv, x1, y1);
+            crate::TextBox {
+                x0: a.0.min(b.0) as f32,
+                y0: (height - a.1.max(b.1)) as f32,
+                x1: a.0.max(b.0) as f32,
+                y1: (height - a.1.min(b.1)) as f32,
+            }
+        })
+        .collect()
 }
 
 /// A page's content, all its streams decoded and joined.

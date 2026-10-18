@@ -87,7 +87,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 |---|---|---|
 | Edit existing text (reflow within a text box) | Later | Hardest feature; font subsetting issues |
 | Add text, images, links | Later | Done: "Add text, pictures or links to pages" in All tools. Text (Helvetica, size and colour) and PNG or JPEG pictures become part of the page content; links go to a page or open a web or email address. Each addition is a page change, undone from the page tools |
-| Replace / move / resize images | Later | |
+| Replace / move / resize images | Done | All tools › Move, replace or delete pictures: pick a picture, drag it or its corner, or replace or delete it; undoable as a page change |
 | Redaction (true content removal, search and redact) | Done | Text, pictures, inline images and enclosed drawings in marked areas are removed from the content (forms are copied and redacted too); comments over them are removed; drawings only partly inside stay, covered by the black box. Areas over form fields are refused until the form is flattened |
 | Remove hidden information / sanitise document | Later | Done: document information and XMP metadata, scripts and automatic actions, attached files, and optionally comments. Scripts on form field parents (not widgets) are not yet removed |
 

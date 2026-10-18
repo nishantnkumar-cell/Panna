@@ -418,6 +418,41 @@ pub(crate) fn watermark(
     )
 }
 
+/// A change to a picture a page draws.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PictureChange {
+    /// To this box, in the same space as [`crate::TextBox`] page text.
+    Move(crate::TextBox),
+    /// With this picture, keeping its shape, in the old one's place.
+    Replace(StampImage),
+    Delete,
+}
+
+/// `doc` with the pictures page `page` draws changed: each by its place in the page's list
+/// of pictures.
+pub(crate) fn change_pictures(
+    doc: Input<'_>,
+    count: usize,
+    page: usize,
+    changes: &[(usize, PictureChange)],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    let extra = extras.get_mut(page).ok_or(SaveError::NoSuchPage(page))?;
+    extra.pictures = changes.to_vec();
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+/// The pictures page `page` draws, each as the box it covers.
+pub(crate) fn page_pictures(pdf: &Pdf, page: usize) -> Vec<crate::TextBox> {
+    rebuild::page_pictures(pdf, page)
+}
+
 /// A form field to make.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewField {

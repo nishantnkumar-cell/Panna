@@ -18,6 +18,7 @@ mod layout;
 mod links;
 mod measure;
 mod pages;
+mod pictures;
 mod prepare;
 mod print;
 mod protect;
@@ -257,6 +258,12 @@ enum Message {
     Add(add::Event),
     Redact(redact::Event),
     Prepare(prepare::Event),
+    EditPictures(pictures::Event),
+    PicturesFound {
+        doc: u64,
+        page: usize,
+        boxes: Vec<TextBox>,
+    },
     Compare(compare::Event),
     CompareChosen(Option<PathBuf>),
     Compared {
@@ -344,6 +351,7 @@ struct App {
     adder: add::Adder,
     redactor: redact::Redactor,
     preparer: prepare::Preparer,
+    picture_editor: pictures::PictureEditor,
     /// The comparison with another file, while it's shown.
     comparison: Option<compare::Comparison>,
     annotate: annotate::Annotate,
@@ -718,6 +726,7 @@ impl App {
             adder: add::Adder::default(),
             redactor: redact::Redactor::default(),
             preparer: prepare::Preparer::default(),
+            picture_editor: pictures::PictureEditor::default(),
             comparison: None,
         };
         let scale = window::oldest()
@@ -1061,6 +1070,12 @@ impl App {
                 } else if self.snapping {
                     self.snapping = false;
                     self.snapshot = None;
+                } else if self.picture_editor.on {
+                    if self.picture_editor.busy() {
+                        self.picture_editor.cancel();
+                    } else {
+                        self.picture_editor.stop();
+                    }
                 } else if self.preparer.on {
                     if self.preparer.busy() {
                         self.preparer.cancel();
@@ -1202,6 +1217,11 @@ impl App {
                     self.preparer.hover(page, self.page_map(page).to_page(position));
                     return Task::none();
                 }
+                if self.picture_editor.on {
+                    self.picture_editor
+                        .hover(page, self.page_map(page).to_page(position));
+                    return self.ask_pictures(page);
+                }
                 if self.measure.on {
                     self.measure.hover(page, self.page_map(page).to_page(position));
                     return Task::none();
@@ -1232,6 +1252,14 @@ impl App {
             Message::PagePress(page) if self.preparer.on => {
                 if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
                     self.preparer.press(page, self.page_map(page).to_page(position));
+                }
+                Task::none()
+            }
+            Message::PagePress(page) if self.picture_editor.on => {
+                if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
+                    let slop = pictures::HANDLE / self.zoom.max(0.01);
+                    self.picture_editor
+                        .press(page, self.page_map(page).to_page(position), slop);
                 }
                 Task::none()
             }
@@ -1559,6 +1587,7 @@ impl App {
                 if self.adder.on {
                     self.redactor.stop();
                     self.preparer.stop();
+                    self.picture_editor.stop();
                     self.measure.on = false;
                     self.measure.clear();
                     self.snapping = false;
@@ -1578,6 +1607,7 @@ impl App {
                 let outcome = self.preparer.update(event);
                 if self.preparer.on {
                     self.redactor.stop();
+                    self.picture_editor.stop();
                     self.adder.on = false;
                     self.adder.cancel();
                     self.measure.on = false;
@@ -1597,6 +1627,35 @@ impl App {
                     }
                 }
             }
+            Message::EditPictures(event) => {
+                if self.saving || self.doc.is_none() {
+                    return Task::none();
+                }
+                self.all_tools = false;
+                let outcome = self.picture_editor.update(event);
+                if self.picture_editor.on {
+                    self.redactor.stop();
+                    self.preparer.stop();
+                    self.adder.on = false;
+                    self.adder.cancel();
+                    self.measure.on = false;
+                    self.measure.clear();
+                    self.snapping = false;
+                    self.snapshot = None;
+                    self.selection = None;
+                    if self.annotate.open {
+                        self.annotate.update(annotate::Event::Toggle);
+                    }
+                }
+                let ask = self.ask_pictures(self.current_page());
+                Task::batch([ask, self.after_pictures(outcome)])
+            }
+            Message::PicturesFound { doc, page, boxes } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    self.picture_editor.found(page, boxes);
+                }
+                Task::none()
+            }
             Message::Redact(event) => {
                 if self.saving || self.doc.is_none() {
                     return Task::none();
@@ -1612,6 +1671,7 @@ impl App {
                 }
                 if self.redactor.on {
                     self.preparer.stop();
+                    self.picture_editor.stop();
                     self.adder.on = false;
                     self.adder.cancel();
                     self.measure.on = false;
@@ -1626,6 +1686,10 @@ impl App {
                 Task::none()
             }
             Message::AddPictureChosen(None) => {
+                if self.picture_editor.replacing() {
+                    self.picture_editor.picture(None);
+                    return Task::none();
+                }
                 self.adder.cancel();
                 Task::none()
             }
@@ -1651,6 +1715,10 @@ impl App {
                         None
                     }
                 };
+                if self.picture_editor.replacing() {
+                    let outcome = self.picture_editor.picture(image);
+                    return self.after_pictures(outcome);
+                }
                 let outcome = self.adder.picture(image);
                 self.after_adding(outcome)
             }
@@ -1659,6 +1727,7 @@ impl App {
                 if self.measure.on {
                     self.redactor.stop();
                     self.preparer.stop();
+                    self.picture_editor.stop();
                     self.adder.on = false;
                     self.adder.cancel();
                     self.snapping = false;
@@ -1670,6 +1739,7 @@ impl App {
             Message::ToggleSnapshot => {
                 self.redactor.stop();
                 self.preparer.stop();
+                self.picture_editor.stop();
                 self.adder.on = false;
                 self.adder.cancel();
                 self.measure.on = false;
@@ -1786,6 +1856,10 @@ impl App {
                 if self.redactor.on {
                     self.redactor.release();
                     return Task::none();
+                }
+                if self.picture_editor.on {
+                    let outcome = self.picture_editor.release();
+                    return self.after_pictures(outcome);
                 }
                 if self.preparer.on {
                     self.preparer.release(self.form.fields());
@@ -2361,11 +2435,13 @@ impl App {
                 self.hover = None;
                 // Marks to redact, and differences found, were for the pages as they were.
                 self.redactor.stop();
+                self.picture_editor.reload();
                 self.comparison = None;
                 self.annotate.saved(&open.info.comments);
                 self.form.load(&open.info.fields);
                 self.find.rescan(&open.texts);
                 Task::batch([
+                    self.ask_pictures(show),
                     self.go_to_page(show),
                     self.request_thumbnails(),
                     self.request_search_text(),
@@ -2854,6 +2930,44 @@ impl App {
         }
     }
 
+    /// Asks the worker where page `page`'s pictures are, unless already asked.
+    fn ask_pictures(&mut self, page: usize) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        if page >= doc.pages.len() || !self.picture_editor.should_ask(page) {
+            return Task::none();
+        }
+        let (tx, rx) = futures_channel::oneshot::channel();
+        doc.worker.pictures(page, move |boxes| {
+            let _ = tx.send(boxes);
+        });
+        let id = doc.id;
+        Task::perform(rx, move |boxes| Message::PicturesFound {
+            doc: id,
+            page,
+            boxes: boxes.unwrap_or_default(),
+        })
+    }
+
+    fn after_pictures(&mut self, outcome: pictures::Outcome) -> Task<Message> {
+        match outcome {
+            pictures::Outcome::Nothing => Task::none(),
+            pictures::Outcome::PickReplacement => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Replace the picture with")
+                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::AddPictureChosen,
+            ),
+            pictures::Outcome::Change { page, changes } => {
+                self.edit_pages(PageEdit::Pictures { page, changes }, page, false)
+            }
+        }
+    }
+
     /// Sends a page change to the worker, with unsaved comments and form entries first so
     /// they go along.
     fn edit_pages(&mut self, edit: PageEdit, show: usize, undo: bool) -> Task<Message> {
@@ -3265,6 +3379,7 @@ impl App {
         self.adder.cancel();
         self.redactor.stop();
         self.preparer.stop();
+        self.picture_editor.stop();
         self.snapping = false;
         self.snapshot = None;
         self.selection = None;
@@ -3964,6 +4079,17 @@ impl App {
                     .into(),
             );
         }
+        if self.picture_editor.on && self.doc.is_some() {
+            layers.push(
+                container(self.picture_editor.bar())
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(Center)
+                    .align_y(iced::Bottom)
+                    .into(),
+            );
+        }
         if let Some(card) = self.preparer.card() {
             layers.push(modal(card, Message::Prepare(prepare::Event::Cancel)));
         }
@@ -4321,11 +4447,14 @@ impl App {
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                         );
                         let adding = self.adder.overlay(index, self.page_map(index));
-                        let redacting = if self.redactor.on {
+                        let mut redacting = if self.redactor.on {
                             self.redactor.overlays(index, self.page_map(index))
                         } else {
                             Vec::new()
                         };
+                        if self.picture_editor.on {
+                            redacting.extend(self.picture_editor.overlays(index, self.page_map(index)));
+                        }
                         let snapshot = self.snapshot.filter(|s| s.page == index).map(|s| {
                             let (x, y, w, h) = s.rect();
                             let zoom = self.zoom;
@@ -4422,7 +4551,22 @@ impl App {
                     .on_press(Message::PagePress(index))
                     .on_double_click(Message::PageDoubleClick(index))
                     .on_release(Message::PointerReleased)
-                    .interaction(if let Some(down) = over_handle {
+                    .interaction(if self.picture_editor.on {
+                        let slop = pictures::HANDLE / self.zoom.max(0.01);
+                        let at_handle = self.hover.is_some_and(|(page, position)| {
+                            page == index
+                                && self.picture_editor.over_handle(
+                                    page,
+                                    self.page_map(page).to_page(position),
+                                    slop,
+                                )
+                        });
+                        if at_handle {
+                            mouse::Interaction::ResizingDiagonallyDown
+                        } else {
+                            mouse::Interaction::Grab
+                        }
+                    } else if let Some(down) = over_handle {
                         if down {
                             mouse::Interaction::ResizingDiagonallyDown
                         } else {
