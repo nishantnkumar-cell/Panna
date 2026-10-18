@@ -121,7 +121,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Keyboard navigation for all actions | V1 | Done: every toolbar action has a shortcut shown in its tooltip (Ctrl+Shift+N goes to a page, Ctrl+Shift+C shows the comment tools, Ctrl+Shift+T changes the page layout, Home and End jump to the first and last page), and with the comment tools open a single letter picks each tool (V, H, U, K, N, T, P, R, E, A, L, G, C). Tab moves between form fields |
+| Keyboard navigation for all actions | V1 | Done: the document actions have shortcuts shown in their tooltips (Ctrl+Shift+N goes to a page, Ctrl+Shift+C shows the comment tools, Ctrl+Shift+T changes the page layout, Home and End jump to the first and last page), and with the comment tools open a single letter picks each tool (V, H, U, K, N, T, P, R, E, A, L, G, C). Tab moves between form fields |
 | Screen reader support for the app UI | Later | Depends on iced accessibility support |
 | Tag PDF, reading order, accessibility checker | Later | |
 
