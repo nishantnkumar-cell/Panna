@@ -1,0 +1,161 @@
+#![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
+use panna_core::{Document, Limits, PageSource};
+
+/// Three pages saying "Page 1" to "Page 3", in a two-level page tree whose top node holds the
+/// page size and fonts the pages inherit, with a bookmark to the second page.
+fn three_pages() -> Vec<u8> {
+    let mut objects: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 12 0 R /PageLabels << /Nums [0 << /S /r >>] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 10 0 R] /Count 3 /MediaBox [0 0 300 400] \
+         /Resources << /Font << /F1 11 0 R >> >> >>"
+            .into(),
+        "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 6 0 R] /Count 2 /Rotate 90 >>".into(),
+    ];
+    for i in 1..=3 {
+        let content = format!("BT /F1 24 Tf 40 300 Td (Page {i}) Tj ET");
+        let parent = if i < 3 { 3 } else { 2 };
+        let page = format!("<< /Type /Page /Parent {parent} 0 R /Contents {{}} 0 R >>");
+        let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+        objects.push(page);
+        objects.push(stream);
+    }
+    // Objects 4..9: page, content, page, content, page, content. Fix up numbers.
+    objects[3] = objects[3].replace("{}", "5");
+    objects[5] = objects[5].replace("{}", "7");
+    objects[7] = objects[7].replace("{}", "9");
+    // Page 3 is object 8; object 10 is a one-page node holding it.
+    objects[7] = objects[7].replace("/Parent 2 0 R", "/Parent 10 0 R");
+    objects.push("<< /Type /Pages /Parent 2 0 R /Kids [8 0 R] /Count 1 >>".into());
+    objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
+    objects.push("<< /Type /Outlines /First 13 0 R /Last 13 0 R /Count 1 >>".into());
+    objects.push("<< /Title (Second) /Parent 12 0 R /Dest [6 0 R /Fit] >>".into());
+    objects.push("<< /Title (Three pages) /Author (Jo) >>".into());
+
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", i + 1, body).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R /Info 14 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+fn open(bytes: Vec<u8>, password: Option<&str>) -> Document {
+    Document::from_bytes(bytes, password, Limits::default()).unwrap()
+}
+
+fn text(doc: &Document, page: usize) -> String {
+    let t = doc.page_text(page).unwrap();
+    t.slice(0..t.len())
+}
+
+fn page(index: usize, turns: u8) -> PageSource {
+    PageSource::Page { doc: 0, index, turns }
+}
+
+#[test]
+fn the_source_reads_as_built() {
+    let doc = open(three_pages(), None);
+    assert_eq!(doc.page_count(), 3);
+    assert!(text(&doc, 2).contains("Page 3"));
+    let info = doc.info().unwrap();
+    assert_eq!(info.outline[0].page, Some(1));
+    // The first two pages inherit a quarter turn.
+    assert_eq!((info.pages[0].width, info.pages[0].height), (400.0, 300.0));
+    assert_eq!((info.pages[2].width, info.pages[2].height), (300.0, 400.0));
+}
+
+#[test]
+fn pages_are_reordered_turned_dropped_and_added() {
+    let doc = open(three_pages(), None);
+    let plan = [
+        page(2, 0),
+        page(0, 1),
+        PageSource::Blank {
+            width: 200.0,
+            height: 100.0,
+        },
+    ];
+    let bytes = doc.rearranged(&plan, &[]).unwrap();
+    // The dropped page's content is gone, not just unlisted.
+    assert!(!bytes.windows(8).any(|w| w == b"(Page 2)"));
+    let out = open(bytes, None);
+    assert_eq!(out.page_count(), 3);
+    assert!(text(&out, 0).contains("Page 3"));
+    assert!(text(&out, 1).contains("Page 1"));
+    assert!(text(&out, 2).is_empty());
+    let info = out.info().unwrap();
+    // Inherited size and fonts came along; the quarter turn it had plus one more is a half.
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0));
+    assert_eq!((info.pages[1].width, info.pages[1].height), (300.0, 400.0));
+    assert_eq!((info.pages[2].width, info.pages[2].height), (200.0, 100.0));
+    assert_eq!(info.title.as_deref(), Some("Three pages"));
+    // The bookmark's page is gone, so it leads nowhere rather than somewhere wrong.
+    assert_eq!(info.outline.len(), 1);
+    assert_eq!(info.outline[0].page, None);
+}
+
+#[test]
+fn bookmarks_follow_their_page() {
+    let doc = open(three_pages(), None);
+    let bytes = doc
+        .rearranged(&[page(1, 0), page(0, 0), page(2, 0)], &[])
+        .unwrap();
+    let out = open(bytes, None);
+    assert_eq!(out.info().unwrap().outline[0].page, Some(0));
+    assert!(text(&out, 1).contains("Page 1"));
+}
+
+#[test]
+fn files_are_combined() {
+    let doc = open(three_pages(), None);
+    let other = open(
+        include_bytes!("fixtures/encrypted-aes128.pdf").to_vec(),
+        Some("secret"),
+    );
+    let plan = [
+        page(0, 0),
+        PageSource::Page {
+            doc: 1,
+            index: 0,
+            turns: 0,
+        },
+    ];
+    let out = open(doc.rearranged(&plan, &[&other]).unwrap(), None);
+    assert_eq!(out.page_count(), 2);
+    assert!(text(&out, 1).contains("Hello secret world"));
+}
+
+#[test]
+fn password_protection_is_kept() {
+    for (name, bytes) in [
+        ("RC4", &include_bytes!("fixtures/encrypted-rc4.pdf")[..]),
+        ("AES-128", include_bytes!("fixtures/encrypted-aes128.pdf")),
+        ("AES-256", include_bytes!("fixtures/encrypted-aes256.pdf")),
+    ] {
+        let doc = open(bytes.to_vec(), Some("secret"));
+        let saved = doc.rearranged(&[page(0, 0), page(0, 2)], &[]).unwrap();
+        assert!(
+            Document::from_bytes(saved.clone(), None, Limits::default()).is_err(),
+            "{name} opens without its password"
+        );
+        let out = open(saved, Some("secret"));
+        assert_eq!(out.page_count(), 2, "{name}");
+        assert!(text(&out, 1).contains("Hello secret world"), "{name}");
+        let fields = out.info().unwrap().fields;
+        assert_eq!(fields.len(), 1, "{name}");
+        assert_eq!(fields[0].name, "name", "{name}");
+    }
+}

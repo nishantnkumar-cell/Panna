@@ -232,6 +232,77 @@ pub(crate) fn reference(value: &[u8]) -> Option<crate::ObjRef> {
     (lex.pos == value.len()).then_some(crate::ObjRef { number, generation })
 }
 
+/// Copies PDF syntax (no stream data), changing every reference with `remap` (to the new
+/// object number, or `null` when it gives none) and every string with `string` (given the
+/// string's bytes, it returns the bytes to write, as hex). Comments are dropped. Returns `None`
+/// for malformed input.
+pub(crate) fn transform<E>(
+    data: &[u8],
+    remap: &mut impl FnMut(crate::ObjRef) -> Option<u32>,
+    string: &mut impl FnMut(&[u8]) -> Result<Vec<u8>, E>,
+) -> Option<Result<Vec<u8>, E>> {
+    let mut out = Vec::with_capacity(data.len() + 16);
+    let mut lex = Lexer::new(data, 0);
+    while let Some(b) = lex.peek() {
+        match b {
+            b'%' => {
+                lex.skip_trivia();
+                out.push(b'\n');
+            }
+            b'<' if lex.starts_with(b"<<") => {
+                out.extend_from_slice(b"<<");
+                lex.pos += 2;
+            }
+            b'(' | b'<' => {
+                let span = lex.value()?;
+                let bytes = super::crypt::parse_string(data.get(span)?)?;
+                let bytes = match string(&bytes) {
+                    Ok(bytes) => bytes,
+                    Err(e) => return Some(Err(e)),
+                };
+                out.push(b'<');
+                for byte in bytes {
+                    out.extend_from_slice(format!("{byte:02X}").as_bytes());
+                }
+                out.push(b'>');
+            }
+            b'/' => {
+                lex.pos += 1;
+                out.push(b'/');
+                out.extend_from_slice(lex.regular_run());
+            }
+            b if is_regular(b) => {
+                let start = lex.pos;
+                let run = lex.regular_run();
+                // `12 0 R`: a reference.
+                if run.iter().all(u8::is_ascii_digit) {
+                    let after = lex.pos;
+                    let number = std::str::from_utf8(run).ok().and_then(|r| r.parse::<u32>().ok());
+                    let generation = lex.uint().and_then(|g| u16::try_from(g).ok());
+                    if let (Some(number), Some(generation)) = (number, generation)
+                        && lex.eat(b"R")
+                        && !lex.peek().is_some_and(is_regular)
+                    {
+                        match remap(crate::ObjRef { number, generation }) {
+                            Some(n) => out.extend_from_slice(format!("{n} 0 R").as_bytes()),
+                            None => out.extend_from_slice(b"null"),
+                        }
+                        continue;
+                    }
+                    lex.pos = after;
+                }
+                out.extend_from_slice(data.get(start..lex.pos)?);
+            }
+            b')' => return None,
+            _ => {
+                out.push(b);
+                lex.pos += 1;
+            }
+        }
+    }
+    Some(Ok(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +377,20 @@ mod tests {
         assert_eq!(r(b"12 0 R 4"), None);
         assert!(array_items(b"1 [2").is_none());
         assert_eq!(array_items(b"  ").map(|v| v.len()), Some(0));
+    }
+
+    #[test]
+    fn transform_renumbers_references_and_rewrites_strings() {
+        let data = b"<< /A 12 0 R /B [1 2 R 3 0 R] /C [1 2] /S (hi) /H <6869> %note\n/N 4 0 Rx /K 5 0 R>>";
+        let out = transform(
+            data,
+            &mut |r| (r.number != 3).then_some(r.number * 10),
+            &mut |s: &[u8]| Ok::<_, ()>(s.to_ascii_uppercase()),
+        );
+        assert_eq!(
+            out.map(|o| String::from_utf8(o.unwrap()).unwrap()).as_deref(),
+            Some("<< /A 120 0 R /B [10 0 R null] /C [1 2] /S <4849> /H <4849> \n/N 4 0 Rx /K 50 0 R>>")
+        );
+        assert!(transform(b"(open", &mut |_| None, &mut |s: &[u8]| Ok::<_, ()>(s.to_vec())).is_none());
     }
 }

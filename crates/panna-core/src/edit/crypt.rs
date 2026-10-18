@@ -206,6 +206,23 @@ impl Crypt {
         Ok(out)
     }
 
+    /// The plain bytes of a string as stored in object `num`.
+    pub(crate) fn open_string(&self, num: u32, generation: u16, data: &[u8]) -> Result<Vec<u8>, SaveError> {
+        match self.strings {
+            Method::None => Ok(data.to_vec()),
+            Method::Rc4 => Ok(rc4(&self.object_key(num, generation, false), data)),
+            Method::Aes128 => {
+                let key = self.object_key(num, generation, true);
+                let cipher = Aes128::new_from_slice(&key).map_err(|_| SaveError::Damaged)?;
+                Ok(cbc_decrypt(|b| cipher.decrypt_block(b), data))
+            }
+            Method::Aes256 => {
+                let cipher = Aes256::new_from_slice(&self.key).map_err(|_| SaveError::Damaged)?;
+                Ok(cbc_decrypt(|b| cipher.decrypt_block(b), data))
+            }
+        }
+    }
+
     fn encrypt(&self, method: Method, num: u32, generation: u16, data: &[u8]) -> Result<Vec<u8>, SaveError> {
         match method {
             Method::None => Ok(data.to_vec()),
@@ -452,6 +469,34 @@ fn cbc_encrypt(
     Ok(out)
 }
 
+/// Reverses [`cbc_encrypt`]. Damaged input (too short, or bad padding) gives what can be
+/// recovered, as readers do.
+fn cbc_decrypt(
+    decrypt_block: impl Fn(&mut GenericArray<u8, aes::cipher::consts::U16>),
+    data: &[u8],
+) -> Vec<u8> {
+    let (blocks, _) = data.as_chunks::<16>();
+    let Some((iv, blocks)) = blocks.split_first() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(data.len());
+    let mut prev = *iv;
+    for chunk in blocks {
+        let mut block = GenericArray::clone_from_slice(chunk);
+        decrypt_block(&mut block);
+        block.iter_mut().zip(prev).for_each(|(a, b)| *a ^= b);
+        prev = *chunk;
+        out.extend_from_slice(&block);
+    }
+    if let Some(&pad) = out.last()
+        && (1..=16).contains(&pad)
+        && out.len() >= usize::from(pad)
+    {
+        out.truncate(out.len() - usize::from(pad));
+    }
+    out
+}
+
 /// The bytes of a literal `( … )` or hex `< … >` string.
 pub(crate) fn parse_string(raw: &[u8]) -> Option<Vec<u8>> {
     let raw = raw.trim_ascii();
@@ -572,6 +617,22 @@ mod tests {
         let aes256 = encrypt_dict(include_bytes!("../../tests/fixtures/encrypted-aes256.pdf"));
         let key: Vec<u8> = (200..232).collect();
         assert_eq!(Crypt::new(aes256, &id, "secret").unwrap().key, key);
+    }
+
+    #[test]
+    fn strings_open_after_sealing() {
+        let id: Vec<u8> = (0..16).collect();
+        for file in [
+            &include_bytes!("../../tests/fixtures/encrypted-rc4.pdf")[..],
+            include_bytes!("../../tests/fixtures/encrypted-aes128.pdf"),
+            include_bytes!("../../tests/fixtures/encrypted-aes256.pdf"),
+        ] {
+            let crypt = Crypt::new(encrypt_dict(file), &id, "secret").unwrap();
+            for plain in [&b""[..], b"x", b"sixteen bytes!!!", b"Jane Doe (signed)"] {
+                let sealed = crypt.encrypt(crypt.strings, 7, 0, plain).unwrap();
+                assert_eq!(crypt.open_string(7, 0, &sealed).unwrap(), plain);
+            }
+        }
     }
 
     #[test]

@@ -137,7 +137,7 @@ pub struct ObjRef {
 }
 
 impl ObjRef {
-    fn new(number: i32, generation: i32) -> Option<Self> {
+    pub(crate) fn new(number: i32, generation: i32) -> Option<Self> {
         Some(Self {
             number: u32::try_from(number).ok()?,
             generation: u16::try_from(generation).ok()?,

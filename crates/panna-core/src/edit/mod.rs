@@ -4,6 +4,7 @@ mod annot;
 mod crypt;
 mod field;
 pub(crate) mod lex;
+mod rebuild;
 mod update;
 
 use std::collections::{BTreeMap, HashSet};
@@ -15,6 +16,8 @@ use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
+
+pub use rebuild::PageSource;
 
 use crate::{CommentId, FieldValue, ObjRef};
 
@@ -170,6 +173,54 @@ pub(crate) fn apply(
     }
     fill_fields(pdf, &mut out, &changes.fields)?;
     Ok(out.finish(original))
+}
+
+/// One document taking part in a rebuild: parsed, its bytes, and its password.
+pub(crate) type Input<'a> = (&'a Pdf, &'a [u8], &'a str);
+
+/// A whole new file with the pages in `plan`, taken from `docs` (the first is the one being
+/// changed, whose catalog, document information and password the new file keeps).
+pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u8>, SaveError> {
+    let mut sources = Vec::with_capacity(docs.len());
+    let mut first = None;
+    for (i, &(pdf, bytes, password)) in docs.iter().enumerate() {
+        let trailer = update::read_trailer(bytes)?;
+        let crypt = match &trailer.encrypt {
+            Some(raw) => Some(encryption(pdf, raw, trailer.id.as_deref(), password)?),
+            None => None,
+        };
+        if i == 0 {
+            let encryption = match (&trailer.encrypt, &crypt, &trailer.id) {
+                (Some(raw), Some(crypt), Some(id)) => Some(rebuild::Encryption {
+                    crypt: crypt.clone(),
+                    dict: encrypt_dict(pdf, raw)?,
+                    id: id.clone(),
+                }),
+                _ => None,
+            };
+            let info = trailer.info.as_deref().and_then(lex::reference);
+            first = Some((info, encryption));
+        }
+        sources.push(rebuild::Source { pdf, bytes, crypt });
+    }
+    let (info, encryption) = first.ok_or(SaveError::Damaged)?;
+    rebuild::rebuild(&sources, plan, info, encryption)
+}
+
+/// The /Encrypt dictionary's bytes, whether the trailer holds it or refers to it.
+fn encrypt_dict(pdf: &Pdf, raw: &[u8]) -> Result<Vec<u8>, SaveError> {
+    let raw = raw.trim_ascii();
+    if raw.starts_with(b"<<") {
+        return Ok(raw.to_vec());
+    }
+    let r = lex::reference(raw).ok_or(SaveError::Damaged)?;
+    pdf.xref()
+        .get::<Dict<'_>>(ObjectIdentifier::new(
+            i32::try_from(r.number).map_err(|_| SaveError::Damaged)?,
+            i32::from(r.generation),
+        ))
+        .map(|d| d.data().to_vec())
+        .ok_or(SaveError::Damaged)
 }
 
 /// Writes filled-in field values: each field's /V, a new appearance for text and choice

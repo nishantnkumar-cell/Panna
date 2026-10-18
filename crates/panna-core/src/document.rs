@@ -306,6 +306,27 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// A whole new file with the pages in `plan`: this document's pages (doc 0) and those of
+    /// `others` (doc 1 onwards), in any order, turned or repeated, plus blank pages. Nothing
+    /// the new file doesn't use is kept, so pages left out can't be recovered from it. It keeps
+    /// this document's password protection.
+    pub fn rearranged(
+        &self,
+        plan: &[crate::PageSource],
+        others: &[&Document],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut docs: Vec<crate::edit::Input<'_>> = vec![(&self.pdf, &self.bytes, &self.password)];
+            docs.extend(
+                others
+                    .iter()
+                    .map(|d| (&d.pdf, d.bytes.as_slice(), d.password.as_str())),
+            );
+            crate::edit::rearrange(&docs, plan)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The comments in the document, as listed in [`DocumentInfo::comments`].
     pub fn comments(&self) -> Vec<crate::Comment> {
         catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default()
