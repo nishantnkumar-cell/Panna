@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod attachments;
+mod commentdata;
 mod comments;
 mod document;
 mod edit;

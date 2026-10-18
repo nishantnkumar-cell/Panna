@@ -1,6 +1,6 @@
 //! Writing changes back into a PDF as an incremental update.
 
-mod annot;
+pub(crate) mod annot;
 mod convert;
 pub(crate) mod crypt;
 mod field;
@@ -621,6 +621,30 @@ fn pdf_date(now: SystemTime) -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+/// A small PDF from numbered objects (1-based, the first the catalog) with a classic
+/// cross-reference table.
+pub(crate) fn assemble(objects: &[String]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
 }
 
 #[cfg(test)]

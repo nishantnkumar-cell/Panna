@@ -883,6 +883,16 @@ impl Annotate {
         Outcome::Changed
     }
 
+    /// Adds comments read from a comments file, as one undo step.
+    pub fn add_imported(&mut self, list: Vec<Annotation>) -> Outcome {
+        if list.is_empty() {
+            return Outcome::Nothing;
+        }
+        self.record();
+        self.items.extend(list);
+        Outcome::Changed
+    }
+
     /// Starts drawing at a point on `page`, for tools that draw.
     pub fn press(&mut self, page: usize, at: (f32, f32)) -> Outcome {
         if self.tool.marks_text() || self.editing.is_some() {

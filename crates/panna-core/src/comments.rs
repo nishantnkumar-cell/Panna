@@ -460,7 +460,14 @@ fn editable(
         "Highlight" if !marked.is_empty() => Kind::Highlight(marked.to_vec()),
         "Underline" if !marked.is_empty() => Kind::Underline(marked.to_vec()),
         "StrikeOut" if !marked.is_empty() => Kind::StrikeOut(marked.to_vec()),
-        "Text" => Kind::Note { x: at.x0, y: at.y0 },
+        // Panna pads a note's /Rect by a point too, so it doesn't creep each time it's redrawn.
+        "Text" => {
+            let pad = if made_by_panna(annot) { 1.0 } else { 0.0 };
+            Kind::Note {
+                x: at.x0 + pad,
+                y: at.y0 + pad,
+            }
+        }
         "FreeText" => Kind::FreeText {
             rect: at,
             size: annot
@@ -555,6 +562,13 @@ fn editable(
         }
         _ => return None,
     })
+}
+
+/// Whether Panna wrote the annotation: its name starts `panna-`.
+fn made_by_panna(annot: &Dict<'_>) -> bool {
+    annot
+        .get::<hayro::hayro_syntax::object::String<'_>>(b"NM")
+        .is_some_and(|nm| decode_text_string(nm.as_bytes()).starts_with("panna-"))
 }
 
 /// A border effect of /S /C: a cloudy outline.

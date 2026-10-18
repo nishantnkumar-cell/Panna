@@ -232,6 +232,15 @@ enum Message {
     FormDataExportTo(Option<PathBuf>),
     ImportFormData,
     FormDataChosen(Option<PathBuf>),
+    ExportComments,
+    CommentsExportTo(Option<PathBuf>),
+    ImportComments,
+    CommentsChosen(Option<PathBuf>),
+    /// Comments read from a comments file, and how many in it couldn't be placed.
+    CommentsRead {
+        doc: u64,
+        result: Result<(Vec<panna_core::Annotation>, usize), String>,
+    },
     /// Show or hide layer n.
     ShowLayer(usize, bool),
     Measure(measure::Event),
@@ -1205,6 +1214,109 @@ impl App {
                         }
                     }
                     Err(e) => self.notice = Some(format!("Couldn't read the form data: {e}")),
+                }
+                Task::none()
+            }
+            Message::ExportComments => {
+                self.all_tools = false;
+                let name = format!("{}.xfdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save comments as")
+                            .add_filter("Comments (XFDF)", &["xfdf"])
+                            .add_filter("Comments (FDF)", &["fdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::CommentsExportTo,
+                )
+            }
+            Message::CommentsExportTo(None) | Message::CommentsChosen(None) => Task::none(),
+            Message::CommentsExportTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let fdf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("fdf"));
+                let format = if fdf {
+                    panna_core::DataFormat::Fdf
+                } else {
+                    panna_core::DataFormat::Xfdf
+                };
+                let pdf_name = doc
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                // The worker already has every unsaved comment: each change is sent to it.
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.export_comments(path, format, pdf_name, move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::ImportComments => {
+                self.all_tools = false;
+                Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Add comments from")
+                            .add_filter("Comments", &["xfdf", "fdf"])
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::CommentsChosen,
+                )
+            }
+            Message::CommentsChosen(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Comments files are small; a big one isn't one.
+                const MAX: u64 = 16 * 1024 * 1024;
+                let read = std::fs::metadata(&path).map_err(|e| e.to_string()).and_then(|m| {
+                    if m.len() > MAX {
+                        Err("the file is too large to be a comments file".into())
+                    } else {
+                        std::fs::read(&path).map_err(|e| e.to_string())
+                    }
+                });
+                let bytes = match read {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.notice = Some(format!("Couldn't read the comments: {e}"));
+                        return Task::none();
+                    }
+                };
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.read_comments(bytes, move |result| {
+                    let _ = tx.send(result);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::CommentsRead {
+                    doc: id,
+                    result: result.unwrap_or_else(|_| Err("the file couldn't be read".into())),
+                })
+            }
+            Message::CommentsRead { doc, result } => {
+                if self.doc.as_ref().is_none_or(|d| d.id != doc) || self.saving {
+                    return Task::none();
+                }
+                match result {
+                    Ok((list, skipped)) => {
+                        let added = list.len();
+                        if added == 0 {
+                            self.notice = Some("None of the comments in that file fit this document.".into());
+                        } else if skipped > 0 {
+                            self.notice = Some(format!(
+                                "Added {added} comments. {skipped} didn't fit this document and were left out."
+                            ));
+                        }
+                        let outcome = self.annotate.add_imported(list);
+                        return self.after_annotate(outcome);
+                    }
+                    Err(e) => self.notice = Some(format!("Couldn't read the comments: {e}")),
                 }
                 Task::none()
             }
@@ -3185,7 +3297,10 @@ impl App {
             ));
         }
         if self.all_tools {
-            layers.push(modal(tools::card(self.form.exists()), Message::AllTools(false)));
+            layers.push(modal(
+                tools::card(self.form.exists(), self.doc.is_some()),
+                Message::AllTools(false),
+            ));
         }
         if let Some(state) = self.cleaning {
             layers.push(modal(

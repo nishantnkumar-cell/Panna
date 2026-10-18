@@ -17,6 +17,7 @@ type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 
 /// Earlier versions kept for undoing page changes.
@@ -81,6 +82,10 @@ enum Reply {
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
     Print(PrintReply),
+    /// Writes the document's comments to a comments file.
+    ExportComments(PathBuf, crate::DataFormat, String, ExtractReply),
+    /// Reads a comments file into annotations for this document.
+    ReadComments(Vec<u8>, CommentsReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
@@ -272,6 +277,35 @@ impl RenderWorker {
         });
     }
 
+    /// Writes the document's comments (as last given to it) to a comments file at `path`.
+    pub fn export_comments(
+        &self,
+        path: PathBuf,
+        format: crate::DataFormat,
+        pdf_name: String,
+        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::ExportComments(path, format, pdf_name, Box::new(reply)),
+        });
+    }
+
+    /// Reads a comments file into annotations placed on this document's pages, with how
+    /// many comments in it couldn't be placed (see [`Document::comments_from_file`]).
+    pub fn read_comments(
+        &self,
+        bytes: Vec<u8>,
+        reply: impl FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::ReadComments(bytes, Box::new(reply)),
+        });
+    }
+
     /// The whole document with unsaved changes, without password protection, for printing.
     pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -420,6 +454,10 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     }
                 }
                 Reply::Print(reply) => reply(current.print_copy()),
+                Reply::ExportComments(path, format, name, reply) => {
+                    reply(write_atomically(&path, &current.comments_file(format, &name)));
+                }
+                Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
                 Reply::Snapshot {
                     page,
                     scale,

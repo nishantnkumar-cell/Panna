@@ -8,7 +8,7 @@ use crate::icons::{self, Icon};
 use crate::{Message, export, protect};
 
 /// The All tools card. Each tool closes the card and opens its own.
-pub fn card<'a>(has_form: bool) -> Element<'a, Message> {
+pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
     let tool = |icon: Icon, label: &'static str, message: Message| {
         button(
             row![icons::glyph(icon, true), text(label)]
@@ -37,6 +37,21 @@ pub fn card<'a>(has_form: bool) -> Element<'a, Message> {
                 Message::Export(export::Event::Open)
             ),
         ]
+        .push(has_doc.then(|| {
+            column![
+                tool(
+                    Icon::CommentsImport,
+                    "Add comments from a file (FDF, XFDF)…",
+                    Message::ImportComments
+                ),
+                tool(
+                    Icon::CommentsExport,
+                    "Save comments to a file (FDF, XFDF)…",
+                    Message::ExportComments
+                ),
+            ]
+            .spacing(4)
+        }))
         .push(has_form.then(|| {
             column![
                 tool(

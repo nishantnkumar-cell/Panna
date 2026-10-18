@@ -122,7 +122,7 @@ fn xfdf_fields(node: &Node<'_>, out: &mut String) {
 }
 
 /// A PDF string: plain when it's printable ASCII, else UTF-16 with a byte order mark.
-fn pdf_string(s: &str) -> String {
+pub(crate) fn pdf_string(s: &str) -> String {
     if s.bytes().all(|b| (b' '..=b'~').contains(&b)) {
         let mut out = String::from("(");
         for c in s.chars() {
@@ -144,7 +144,7 @@ fn pdf_string(s: &str) -> String {
 }
 
 /// A PDF name, with `#xx` for bytes that can't appear in one as they are.
-fn pdf_name(s: &str) -> String {
+pub(crate) fn pdf_name(s: &str) -> String {
     let mut out = String::from("/");
     for b in s.bytes() {
         if b.is_ascii_graphic() && !b"()<>[]{}/%#".contains(&b) {
@@ -156,7 +156,7 @@ fn pdf_name(s: &str) -> String {
     out
 }
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -260,7 +260,7 @@ fn fdf_value(raw: &[u8]) -> Option<String> {
 }
 
 /// A name's text, with `#xx` escapes undone.
-fn name_text(raw: &[u8]) -> String {
+pub(crate) fn name_text(raw: &[u8]) -> String {
     let mut bytes = Vec::with_capacity(raw.len());
     let mut i = 0;
     while let Some(&b) = raw.get(i) {

@@ -534,6 +534,65 @@ impl Document {
         self.reopen(bytes).map_err(|_| crate::SaveError::Damaged)
     }
 
+    /// The document's comments as an FDF or XFDF file, for the PDF named `pdf_name`.
+    pub fn comments_file(&self, format: crate::DataFormat, pdf_name: &str) -> Vec<u8> {
+        let comments =
+            catch_unwind(AssertUnwindSafe(|| crate::commentdata::read(&self.pdf))).unwrap_or_default();
+        crate::commentdata::export(&comments, format, pdf_name)
+    }
+
+    /// The comments in an FDF or XFDF file, as comments to add to this document, and how many
+    /// in it couldn't be added: replies, comments on pages it doesn't have, and kinds Panna
+    /// can't draw.
+    pub fn comments_from_file(&self, bytes: &[u8]) -> Result<(Vec<crate::Annotation>, usize), String> {
+        let markups = crate::commentdata::import(bytes)?;
+        let total = markups.len();
+        let pages = self.pdf.pages();
+        let mut per_page: Vec<Vec<String>> = vec![Vec::new(); pages.len()];
+        for (i, m) in markups.iter().enumerate() {
+            if m.in_reply_to.is_some() {
+                continue;
+            }
+            if let Some(list) = per_page.get_mut(m.page) {
+                list.push(m.pdf_dict_for_import(i));
+            }
+        }
+        // A stand-in document with the same pages as this one, holding just the comments, read
+        // the way comments saved in a PDF are.
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            format!(
+                "<< /Type /Pages /Kids [{}] /Count {} >>",
+                (0..pages.len())
+                    .map(|i| format!("{} 0 R", i + 3))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                pages.len()
+            ),
+        ];
+        for (page, annots) in pages.iter().zip(&per_page) {
+            let b = |r: hayro::hayro_syntax::object::Rect| format!("[{} {} {} {}]", r.x0, r.y0, r.x1, r.y1);
+            let rotate = match page.rotation() {
+                hayro::hayro_syntax::page::Rotation::None => 0,
+                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
+                hayro::hayro_syntax::page::Rotation::Flipped => 180,
+                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+            };
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox {} /CropBox {} /Rotate {rotate} /Annots [{}] >>",
+                b(page.media_box()),
+                b(page.crop_box()),
+                annots.join("\n")
+            ));
+        }
+        let stand_in = crate::edit::assemble(&objects);
+        let doc = Self::from_bytes(stand_in, None, self.limits).map_err(|e| e.to_string())?;
+        let comments = doc.info().map_err(|e| e.to_string())?.comments;
+        let added: Vec<crate::Annotation> = comments.into_iter().filter_map(|c| c.editable).collect();
+        let skipped = total - added.len().min(total);
+        Ok((added, skipped))
+    }
+
     pub fn reopen(&self, bytes: Vec<u8>) -> Result<Self, OpenError> {
         Self::from_bytes(bytes, Some(&self.password), self.limits)
     }
