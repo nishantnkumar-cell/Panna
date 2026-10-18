@@ -19,6 +19,7 @@ type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
+type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
 type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
 type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
 type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
@@ -117,6 +118,8 @@ enum Reply {
     Pictures(usize, PicturesReply),
     /// Where form fields could go.
     DetectFields(DetectReply),
+    /// What keeps the document from being PDF/A.
+    Preflight(PreflightReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
@@ -364,6 +367,16 @@ impl RenderWorker {
         });
     }
 
+    /// What keeps the document, with unsaved changes, from being PDF/A (see
+    /// [`Document::preflight`]).
+    pub fn preflight(&self, reply: impl FnOnce(Vec<crate::Finding>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Preflight(Box::new(reply)),
+        });
+    }
+
     /// Where form fields could go (see [`Document::detect_fields`]).
     pub fn detect_fields(
         &self,
@@ -542,6 +555,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 })),
                 Reply::Pictures(page, reply) => reply(current.pictures(page)),
                 Reply::DetectFields(reply) => reply(current.detect_fields()),
+                Reply::Preflight(reply) => reply(current.preflight()),
                 Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
                 Reply::Compare(path, reply) => reply(match Document::open(&path, None, current.limits()) {
                     Ok(other) => current

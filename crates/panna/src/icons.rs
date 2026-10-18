@@ -99,6 +99,7 @@ pub enum Icon {
     ReadAloud,
     StopReading,
     DetectFields,
+    Preflight,
     Compare,
     PrepareForm,
     TextField,
@@ -200,6 +201,7 @@ impl Icon {
             Icon::ReadAloud => include_bytes!("../icons/volume-2.svg"),
             Icon::StopReading => include_bytes!("../icons/circle-stop.svg"),
             Icon::DetectFields => include_bytes!("../icons/wand-sparkles.svg"),
+            Icon::Preflight => include_bytes!("../icons/file-check.svg"),
             Icon::Compare => include_bytes!("../icons/file-diff.svg"),
             Icon::PrepareForm => include_bytes!("../icons/clipboard-pen-line.svg"),
             Icon::TextField => include_bytes!("../icons/text-cursor-input.svg"),
@@ -301,7 +303,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 97] = [
+    const ALL: [Icon; 98] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -393,6 +395,7 @@ mod tests {
         Icon::ReadAloud,
         Icon::StopReading,
         Icon::DetectFields,
+        Icon::Preflight,
         Icon::Compare,
         Icon::PrepareForm,
         Icon::TextField,

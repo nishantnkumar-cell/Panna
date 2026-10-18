@@ -19,6 +19,7 @@ mod links;
 mod measure;
 mod pages;
 mod pictures;
+mod preflight;
 mod prepare;
 mod print;
 mod protect;
@@ -260,6 +261,11 @@ enum Message {
     Redact(redact::Event),
     Prepare(prepare::Event),
     EditPictures(pictures::Event),
+    Preflight(preflight::Event),
+    Preflighted {
+        doc: u64,
+        findings: Vec<panna_core::Finding>,
+    },
     FieldsDetected {
         doc: u64,
         result: Result<Vec<panna_core::NewField>, String>,
@@ -364,6 +370,7 @@ struct App {
     preparer: prepare::Preparer,
     picture_editor: pictures::PictureEditor,
     reader: speech::Reader,
+    preflight: Option<preflight::Report>,
     /// The comparison with another file, while it's shown.
     comparison: Option<compare::Comparison>,
     annotate: annotate::Annotate,
@@ -740,6 +747,7 @@ impl App {
             preparer: prepare::Preparer::default(),
             picture_editor: pictures::PictureEditor::default(),
             reader: speech::Reader::default(),
+            preflight: None,
             comparison: None,
         };
         let scale = window::oldest()
@@ -1722,6 +1730,36 @@ impl App {
                             self.notice = Some(e);
                         }
                     }
+                }
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Close) => {
+                self.preflight = None;
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Show(page)) => {
+                self.preflight = None;
+                self.go_to_page(page)
+            }
+            Message::Preflight(preflight::Event::Run) => {
+                self.all_tools = false;
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.preflight(move |findings| {
+                    let _ = tx.send(findings);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |findings| Message::Preflighted {
+                    doc: id,
+                    findings: findings.unwrap_or_default(),
+                })
+            }
+            Message::Preflighted { doc, findings } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    self.preflight = Some(preflight::Report::new(findings));
                 }
                 Task::none()
             }
@@ -3518,6 +3556,7 @@ impl App {
         self.preparer.stop();
         self.picture_editor.stop();
         self.reader.stop();
+        self.preflight = None;
         self.snapping = false;
         self.snapshot = None;
         self.selection = None;
@@ -4238,6 +4277,9 @@ impl App {
                     .align_y(iced::Bottom)
                     .into(),
             );
+        }
+        if let Some(report) = &self.preflight {
+            layers.push(modal(report.card(), Message::Preflight(preflight::Event::Close)));
         }
         if let Some(card) = self.preparer.card() {
             layers.push(modal(card, Message::Prepare(prepare::Event::Cancel)));

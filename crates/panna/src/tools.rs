@@ -71,6 +71,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                     Message::Compare(crate::compare::Event::Open)
                 ),
                 tool(
+                    Icon::Preflight,
+                    "Check for PDF/A (archiving)",
+                    Message::Preflight(crate::preflight::Event::Run)
+                ),
+                tool(
                     Icon::Redact,
                     "Remove content for good (redact)",
                     Message::Redact(crate::redact::Event::Toggle)

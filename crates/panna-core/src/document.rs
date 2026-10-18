@@ -484,6 +484,17 @@ impl Document {
         catch_unwind(AssertUnwindSafe(|| crate::edit::page_pictures(&self.pdf, page))).unwrap_or_default()
     }
 
+    /// What keeps the document from being PDF/A-2b, the archival kind of PDF: an empty list
+    /// when the main rules are met. Not every rule of the standard is checked.
+    pub fn preflight(&self) -> Vec<crate::Finding> {
+        let encrypted = crate::edit::protected(&self.bytes);
+        let has_id = crate::edit::has_file_id(&self.bytes);
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::preflight::check(&self.pdf, encrypted, has_id)
+        }))
+        .unwrap_or_default()
+    }
+
     /// Where form fields could go on each page: blanks, empty boxes and lines to write on,
     /// and box characters, named after the words beside them. Places that already have a
     /// field are left out.

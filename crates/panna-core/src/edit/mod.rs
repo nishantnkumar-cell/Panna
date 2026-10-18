@@ -352,6 +352,11 @@ pub(crate) fn clean_up(doc: Input<'_>, count: usize, clean: Cleanup) -> Result<V
     rebuild_from(&[doc], &every_page(count), &[], Output::Keep, clean)
 }
 
+/// Whether the file `bytes` has an identifier (/ID) in its trailer.
+pub(crate) fn has_file_id(bytes: &[u8]) -> bool {
+    update::read_trailer(bytes).is_ok_and(|t| t.id.is_some())
+}
+
 /// Whether the file `bytes` has password protection.
 pub(crate) fn protected(bytes: &[u8]) -> bool {
     update::read_trailer(bytes).is_ok_and(|t| t.encrypt.is_some())
