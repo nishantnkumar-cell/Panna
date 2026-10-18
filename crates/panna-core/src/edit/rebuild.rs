@@ -71,6 +71,17 @@ impl Writer {
         }
     }
 
+    /// A new number for `r` in source `doc` that the caller fills in itself, or `None` when
+    /// `r` already has one.
+    fn claim(&mut self, doc: usize, r: ObjRef) -> Option<u32> {
+        if self.maps.get(doc)?.contains_key(&r) {
+            return None;
+        }
+        let num = self.alloc();
+        self.maps.get_mut(doc)?.insert(r, Some(num));
+        Some(num)
+    }
+
     /// The new number for `r` in source `doc`, queueing it to be copied the first time.
     fn map(&mut self, doc: usize, r: ObjRef) -> Option<u32> {
         if let Some(known) = self.maps.get(doc).and_then(|m| m.get(&r)) {
@@ -262,6 +273,34 @@ pub(crate) struct Extra {
     pub flatten: Flatten,
 }
 
+/// Hidden information to leave out of the new file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Cleanup {
+    /// The document information (title, author, dates, software) and XMP metadata.
+    pub metadata: bool,
+    /// JavaScript and actions that run by themselves (on opening, on page views, on fields).
+    pub scripts: bool,
+    /// Attached files, in the document and on the pages.
+    pub attachments: bool,
+    /// Comments and markup; links and form fields stay.
+    pub comments: bool,
+}
+
+impl Cleanup {
+    fn annotations(self) -> bool {
+        self.scripts || self.attachments || self.comments
+    }
+}
+
+/// Whether `annot`'s action (/A) runs JavaScript.
+fn runs_script(annot: &Dict<'_>) -> bool {
+    use hayro::hayro_syntax::object::Name;
+    annot
+        .get::<Dict<'_>>(b"A")
+        .and_then(|a| a.get::<Name<'_>>(b"S"))
+        .is_some_and(|s| s.as_str() == "JavaScript")
+}
+
 /// Which annotations become part of the page's content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Flatten {
@@ -441,6 +480,40 @@ fn with_xobjects<'a>(
     Ok(out)
 }
 
+/// The catalog's name dictionary (`value`, written in place or referred to) without the
+/// scripts or attached files `clean` leaves out; `None` when nothing else is in it.
+fn names_without(
+    w: &mut Writer,
+    sources: &[Source<'_>],
+    root: ObjRef,
+    value: &[u8],
+    clean: Cleanup,
+) -> Result<Option<Vec<u8>>, SaveError> {
+    let pdf = sources.first().ok_or(SaveError::Damaged)?.pdf;
+    let (owner, data) = match lex::reference(value) {
+        Some(r) => match pdf.xref().get::<Dict<'_>>(id(r)) {
+            Some(d) => (r, d.data()),
+            None => return Ok(None),
+        },
+        None => (root, value),
+    };
+    let mut out = b"<<".to_vec();
+    let mut any = false;
+    for (key, v) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
+        if (clean.scripts && key == b"JavaScript") || (clean.attachments && key == b"EmbeddedFiles") {
+            continue;
+        }
+        any = true;
+        out.extend_from_slice(b" /");
+        out.extend_from_slice(key);
+        out.push(b' ');
+        let v = data.get(v).ok_or(SaveError::Damaged)?;
+        out.extend(copy_syntax(w, sources, 0, owner, v)?);
+    }
+    out.extend_from_slice(b" >>");
+    Ok(any.then_some(out))
+}
+
 /// The four numbers of a rectangle written as an array.
 fn rect(value: &[u8]) -> Option<[f64; 4]> {
     let inner = value.trim_ascii().strip_prefix(b"[")?.strip_suffix(b"]")?;
@@ -462,8 +535,10 @@ pub(crate) fn rebuild(
     extras: &[Extra],
     info: Option<ObjRef>,
     encryption: Option<Encryption>,
+    clean: Cleanup,
 ) -> Result<Vec<u8>, SaveError> {
     let first = sources.first().ok_or(SaveError::Damaged)?;
+    let info = info.filter(|_| !clean.metadata);
     let mut w = Writer {
         objects: Vec::new(),
         maps: vec![HashMap::new(); sources.len()],
@@ -524,7 +599,8 @@ pub(crate) fn rebuild(
                 // Annotations drawn into the page, and the ones left as they are.
                 let mut flattened = Vec::new();
                 let mut kept = String::new();
-                if extra.flatten.any()
+                let filtering = extra.flatten.any() || clean.annotations();
+                if filtering
                     && let Some(annots) = dict.get::<hayro::hayro_syntax::object::Array<'_>>(b"Annots")
                 {
                     for annot in annots.iter::<Dict<'_>>().take(20_000) {
@@ -535,7 +611,14 @@ pub(crate) fn rebuild(
                             .get::<hayro::hayro_syntax::object::Name<'_>>(b"Subtype")
                             .map(|n| n.as_str().to_owned())
                             .unwrap_or_default();
-                        if subtype == "Popup" && extra.flatten.comments {
+                        if subtype == "Popup" && (extra.flatten.comments || clean.comments) {
+                            continue;
+                        }
+                        let script = runs_script(&annot);
+                        if (clean.comments && subtype != "Link" && subtype != "Widget")
+                            || (clean.attachments && subtype == "FileAttachment")
+                            || (clean.scripts && subtype == "Link" && script)
+                        {
                             continue;
                         }
                         if extra.flatten.takes(&subtype) {
@@ -549,6 +632,30 @@ pub(crate) fn rebuild(
                                 continue;
                             }
                         }
+                        let has_actions = script || annot.get::<Dict<'_>>(b"AA").is_some();
+                        if clean.scripts && has_actions {
+                            // A copy without its scripts, under the number everything that
+                            // refers to it will use.
+                            if let Some(num) = w.claim(doc, r) {
+                                let data = annot.data();
+                                let mut body = b"<<".to_vec();
+                                for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
+                                    if key == b"AA" || (key == b"A" && script) {
+                                        continue;
+                                    }
+                                    body.push(b'/');
+                                    body.extend_from_slice(key);
+                                    body.push(b' ');
+                                    let value = data.get(value).ok_or(SaveError::Damaged)?;
+                                    body.extend(copy_syntax(&mut w, sources, doc, r, value)?);
+                                    body.push(b'\n');
+                                }
+                                body.extend_from_slice(b">>");
+                                w.set(num, body);
+                                kept.push_str(&format!("{num} 0 R "));
+                                continue;
+                            }
+                        }
                         if let Some(num) = w.map(doc, r) {
                             kept.push_str(&format!("{num} 0 R "));
                         }
@@ -559,7 +666,7 @@ pub(crate) fn rebuild(
                     if key == b"Parent" || INHERITED.contains(&key) {
                         continue;
                     }
-                    if key == b"Annots" && extra.flatten.any() {
+                    if (key == b"Annots" && filtering) || (key == b"AA" && clean.scripts) {
                         continue;
                     }
                     if key == b"Contents" && drawn {
@@ -609,7 +716,7 @@ pub(crate) fn rebuild(
                     }
                     None => cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media),
                 };
-                if extra.flatten.any() && !kept.is_empty() {
+                if filtering && !kept.is_empty() {
                     body.extend_from_slice(format!("/Annots [{}]\n", kept.trim_end()).as_bytes());
                 }
                 if drawn {
@@ -708,10 +815,26 @@ pub(crate) fn rebuild(
         if key == b"Pages" || (key == b"PageLabels" && !same_pages) || flattened_form {
             continue;
         }
+        let value = data.get(value.clone()).ok_or(SaveError::Damaged)?;
+        if (clean.metadata && key == b"Metadata")
+            || (clean.scripts && key == b"AA")
+            // An open action that is a destination only turns to a page; any other runs an action.
+            || (clean.scripts && key == b"OpenAction" && !value.trim_ascii_start().starts_with(b"["))
+        {
+            continue;
+        }
+        if key == b"Names" && (clean.scripts || clean.attachments) {
+            let names = names_without(&mut w, sources, root, value, clean)?;
+            if let Some(names) = names {
+                body.extend_from_slice(b"/Names ");
+                body.extend(names);
+                body.push(b'\n');
+            }
+            continue;
+        }
         body.push(b'/');
         body.extend_from_slice(key);
         body.push(b' ');
-        let value = data.get(value).ok_or(SaveError::Damaged)?;
         body.extend(copy_syntax(&mut w, sources, 0, root, value)?);
         body.push(b'\n');
     }

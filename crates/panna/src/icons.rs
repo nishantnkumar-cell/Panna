@@ -75,6 +75,8 @@ pub enum Icon {
     FromPictures,
     Flatten,
     Protect,
+    Clean,
+    AllTools,
 }
 
 impl Icon {
@@ -147,6 +149,8 @@ impl Icon {
             Icon::FromPictures => include_bytes!("../icons/file-image.svg"),
             Icon::Flatten => include_bytes!("../icons/layers.svg"),
             Icon::Protect => include_bytes!("../icons/lock.svg"),
+            Icon::Clean => include_bytes!("../icons/shield-check.svg"),
+            Icon::AllTools => include_bytes!("../icons/layout-grid.svg"),
         }
     }
 }
@@ -241,7 +245,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 67] = [
+    const ALL: [Icon; 69] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -309,6 +313,8 @@ mod tests {
         Icon::FromPictures,
         Icon::Flatten,
         Icon::Protect,
+        Icon::Clean,
+        Icon::AllTools,
     ];
 
     #[test]

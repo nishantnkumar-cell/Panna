@@ -1,9 +1,9 @@
-//! The Password protection card: a password to open the file, and limits on what others may
-//! do with it.
+//! The Password protection card (a password to open the file, and limits on what others may
+//! do with it) and the Remove hidden information card.
 
 use iced::widget::{button, checkbox, column, container, row, space, text, text_input};
 use iced::{Element, Theme};
-use panna_core::Protection;
+use panna_core::{Cleanup, Protection};
 
 use crate::Message;
 
@@ -162,6 +162,65 @@ pub fn card<'a>(state: &Protecting) -> Element<'a, Message> {
         .spacing(8),
     );
     container(body).padding(16).style(container::rounded_box).into()
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CleanEvent {
+    Open,
+    Metadata(bool),
+    Scripts(bool),
+    Attachments(bool),
+    Comments(bool),
+    Go,
+    Cancel,
+}
+
+/// What a new Remove hidden information card starts with: everything but the comments, which
+/// people usually mean to keep.
+pub fn default_cleanup() -> Cleanup {
+    Cleanup {
+        metadata: true,
+        scripts: true,
+        attachments: true,
+        comments: false,
+    }
+}
+
+/// The Remove hidden information card.
+pub fn clean_card<'a>(state: Cleanup) -> Element<'a, Message> {
+    let ev = Message::Clean;
+    let any = state.metadata || state.scripts || state.attachments || state.comments;
+    container(
+        column![
+            text("Remove hidden information").size(16),
+            text("Takes effect when you save. Undo brings it back until then.").size(13),
+            checkbox(state.metadata)
+                .label("Title, author, dates and the software that made it")
+                .on_toggle(move |v| ev(CleanEvent::Metadata(v))),
+            checkbox(state.scripts)
+                .label("Scripts and actions that run by themselves")
+                .on_toggle(move |v| ev(CleanEvent::Scripts(v))),
+            checkbox(state.attachments)
+                .label("Attached files")
+                .on_toggle(move |v| ev(CleanEvent::Attachments(v))),
+            checkbox(state.comments)
+                .label("Comments and markup (links and form fields stay)")
+                .on_toggle(move |v| ev(CleanEvent::Comments(v))),
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(CleanEvent::Cancel)),
+                button("Remove").on_press_maybe(any.then_some(ev(CleanEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(400),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
 }
 
 #[cfg(test)]

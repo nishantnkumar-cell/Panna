@@ -452,6 +452,14 @@ impl Document {
         Ok((bytes, password))
     }
 
+    /// The document without the hidden information `clean` names, as a new file.
+    pub fn cleaned(&self, clean: crate::Cleanup) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::clean_up((&self.pdf, &self.bytes, &self.password), self.page_count(), clean)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The whole document, without password protection, for the printing system. Fails when
     /// the file's permissions don't allow printing.
     pub fn print_copy(&self) -> Result<Vec<u8>, crate::SaveError> {

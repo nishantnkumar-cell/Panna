@@ -24,7 +24,7 @@ pub use picture::StampImage;
 pub use convert::{MAX_PICTURES, pictures_to_pdf};
 pub use crypt::Protection;
 pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer};
-pub use rebuild::{Margins, PageSource};
+pub use rebuild::{Cleanup, Margins, PageSource};
 
 use crate::{CommentId, FieldValue, ObjRef};
 
@@ -226,7 +226,7 @@ pub(crate) type Input<'a> = (&'a Pdf, &'a [u8], &'a str);
 /// A whole new file with the pages in `plan`, taken from `docs` (the first is the one being
 /// changed, whose catalog, document information and password the new file keeps).
 pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u8>, SaveError> {
-    rebuild_from(docs, plan, &[], Output::Keep)
+    rebuild_from(docs, plan, &[], Output::Keep, Cleanup::default())
 }
 
 /// Every page of `doc`, unchanged and unturned.
@@ -253,7 +253,13 @@ pub(crate) fn crop(
             ..rebuild::Extra::default()
         })
         .collect();
-    rebuild_from(&[doc], &every_page(count), &extras, Output::Keep)
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
 }
 
 /// Every page of `doc`, with `marks` drawn on the pages at `pages`, numbered in that order.
@@ -273,7 +279,18 @@ pub(crate) fn header_footer(
                 .push(marks::Drawing::Lines(marks.for_page(number, pages.len(), &date)));
         }
     }
-    rebuild_from(&[doc], &every_page(count), &extras, Output::Keep)
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+/// Every page of `doc`, without the hidden information `clean` names.
+pub(crate) fn clean_up(doc: Input<'_>, count: usize, clean: Cleanup) -> Result<Vec<u8>, SaveError> {
+    rebuild_from(&[doc], &every_page(count), &[], Output::Keep, clean)
 }
 
 /// Whether the file `bytes` has password protection.
@@ -287,7 +304,13 @@ pub(crate) fn protect(
     count: usize,
     protection: Option<&Protection>,
 ) -> Result<Vec<u8>, SaveError> {
-    rebuild_from(&[doc], &every_page(count), &[], Output::Change(protection))
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &[],
+        Output::Change(protection),
+        Cleanup::default(),
+    )
 }
 
 /// Every page of `doc`, with its comments, its form fields or both drawn into the pages. With
@@ -302,7 +325,13 @@ pub(crate) fn flatten(
         flatten: rebuild::Flatten { comments, fields },
         ..rebuild::Extra::default()
     };
-    rebuild_from(&[doc], &every_page(count), &vec![extra; count], Output::Keep)
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &vec![extra; count],
+        Output::Keep,
+        Cleanup::default(),
+    )
 }
 
 /// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order.
@@ -321,13 +350,19 @@ pub(crate) fn watermark(
             extra.over.extend(over);
         }
     }
-    rebuild_from(&[doc], &every_page(count), &extras, Output::Keep)
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
 }
 
 /// Every page of `doc` in a file without password protection, to hand to the printing
 /// system, if the file's permissions allow printing.
 pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveError> {
-    rebuild_from(&[doc], &every_page(pages), &[], Output::Print)
+    rebuild_from(&[doc], &every_page(pages), &[], Output::Print, Cleanup::default())
 }
 
 /// What password protection a rebuilt file gets.
@@ -346,6 +381,7 @@ fn rebuild_from(
     plan: &[PageSource],
     extras: &[rebuild::Extra],
     output: Output<'_>,
+    clean: Cleanup,
 ) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
     let mut first = None;
@@ -383,7 +419,7 @@ fn rebuild_from(
         sources.push(rebuild::Source { pdf, bytes, crypt });
     }
     let (info, encryption) = first.ok_or(SaveError::Damaged)?;
-    rebuild::rebuild(&sources, plan, extras, info, encryption)
+    rebuild::rebuild(&sources, plan, extras, info, encryption, clean)
 }
 
 /// The /Encrypt dictionary's bytes, whether the trailer holds it or refers to it.

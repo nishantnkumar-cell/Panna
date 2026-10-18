@@ -44,6 +44,8 @@ pub enum PageEdit {
         pages: Vec<usize>,
         mark: crate::Watermark,
     },
+    /// Removes hidden information.
+    Clean(crate::Cleanup),
     /// Gives the document new password protection, or removes it.
     Protect(Option<crate::Protection>),
     /// Draws comments, form fields or both into the pages.
@@ -398,6 +400,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                                     .map_err(|_| SaveError::Damaged)
                             })
                     }
+                    PageEdit::Clean(clean) => current
+                        .cleaned(clean)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Flatten { comments, fields } => current
                         .flattened(comments, fields)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),

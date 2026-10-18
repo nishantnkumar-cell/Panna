@@ -89,7 +89,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Add text, images, links | Later | |
 | Replace / move / resize images | Later | |
 | Redaction (true content removal, search and redact) | Later | Must remove underlying content, not just cover it |
-| Remove hidden information / sanitise document | Later | |
+| Remove hidden information / sanitise document | Later | Done: document information and XMP metadata, scripts and automatic actions, attached files, and optionally comments. Scripts on form field parents (not widgets) are not yet removed |
 
 ## 6. Create and convert
 

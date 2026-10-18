@@ -21,6 +21,7 @@ mod settings;
 mod shortcuts;
 mod sidebar;
 mod toolbar;
+mod tools;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -135,6 +136,10 @@ enum Message {
     Flatten(pages::FlattenEvent),
     /// The Password protection card.
     Protect(protect::Event),
+    /// The Remove hidden information card.
+    Clean(protect::CleanEvent),
+    /// Shows or hides the All tools card.
+    AllTools(bool),
     /// Where to export pages to: a text file, or a folder for pictures.
     ExportChosen(Option<PathBuf>),
     /// Asks for pictures to make a new PDF of.
@@ -277,6 +282,10 @@ struct App {
     flattening: Option<pages::Flattening>,
     /// Choosing password protection.
     protecting: Option<protect::Protecting>,
+    /// Choosing hidden information to remove.
+    cleaning: Option<panna_core::Cleanup>,
+    /// The All tools card is showing.
+    all_tools: bool,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
     /// The pages being extracted, while their file or folder is chosen.
@@ -575,6 +584,8 @@ impl App {
             exporting: None,
             flattening: None,
             protecting: None,
+            cleaning: None,
+            all_tools: false,
             pictures: Vec::new(),
             extract_pages: Vec::new(),
             confirm: None,
@@ -642,6 +653,16 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // A tool picked from the All tools card takes its place.
+        if matches!(
+            message,
+            Message::FromPictures
+                | Message::Export(export::Event::Open)
+                | Message::Protect(protect::Event::Open)
+                | Message::Clean(protect::CleanEvent::Open)
+        ) {
+            self.all_tools = false;
+        }
         match message {
             Message::OpenDialog if self.dirty() => {
                 self.confirm = Some(Pending::OpenDialog);
@@ -922,6 +943,10 @@ impl App {
                     self.flattening = None;
                 } else if self.protecting.is_some() {
                     self.protecting = None;
+                } else if self.cleaning.is_some() {
+                    self.cleaning = None;
+                } else if self.all_tools {
+                    self.all_tools = false;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1221,7 +1246,40 @@ impl App {
             }
             Message::Extract(event) => self.extract(event),
             Message::Export(event) => self.export(event),
+            Message::AllTools(show) => {
+                self.all_tools = show;
+                Task::none()
+            }
             Message::Protect(event) => self.protect(event),
+            Message::Clean(protect::CleanEvent::Open) => {
+                if self.doc.is_some() {
+                    self.cleaning = Some(protect::default_cleanup());
+                }
+                Task::none()
+            }
+            Message::Clean(event) => {
+                let Some(state) = &mut self.cleaning else {
+                    return Task::none();
+                };
+                match event {
+                    protect::CleanEvent::Open => {}
+                    protect::CleanEvent::Metadata(v) => state.metadata = v,
+                    protect::CleanEvent::Scripts(v) => state.scripts = v,
+                    protect::CleanEvent::Attachments(v) => state.attachments = v,
+                    protect::CleanEvent::Comments(v) => state.comments = v,
+                    protect::CleanEvent::Cancel => self.cleaning = None,
+                    protect::CleanEvent::Go => {
+                        let clean = *state;
+                        self.cleaning = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(PageEdit::Clean(clean), current, false);
+                    }
+                }
+                Task::none()
+            }
             Message::Flatten(event) => {
                 let Some(state) = &mut self.flattening else {
                     return Task::none();
@@ -2617,11 +2675,6 @@ impl App {
             ),
             icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
             icons::button(
-                Icon::FromPictures,
-                "Make a PDF from pictures…",
-                Some(Message::FromPictures),
-            ),
-            icons::button(
                 Icon::Save,
                 format!("Save ({m}S)"),
                 (self.dirty() && !self.saving).then_some(Message::Save),
@@ -2631,16 +2684,7 @@ impl App {
                 format!("Print… ({m}P)"),
                 (has_doc && !self.printing).then_some(Message::Print),
             ),
-            icons::button(
-                Icon::Export,
-                "Export as text or pictures…",
-                on(Message::Export(export::Event::Open)),
-            ),
-            icons::button(
-                Icon::Protect,
-                "Password protection…",
-                on(Message::Protect(protect::Event::Open)),
-            ),
+            icons::button(Icon::AllTools, "All tools…", Some(Message::AllTools(true))),
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
             icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
@@ -2803,6 +2847,15 @@ impl App {
             layers.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
+            ));
+        }
+        if self.all_tools {
+            layers.push(modal(tools::card(), Message::AllTools(false)));
+        }
+        if let Some(state) = self.cleaning {
+            layers.push(modal(
+                protect::clean_card(state),
+                Message::Clean(protect::CleanEvent::Cancel),
             ));
         }
         if let Some(state) = &self.protecting {
