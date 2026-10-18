@@ -341,6 +341,24 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with header and footer text drawn on the pages at `pages`, numbered in
+    /// that order, as a new file.
+    pub fn with_header_footer(
+        &self,
+        pages: &[usize],
+        marks: &crate::HeaderFooter,
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::header_footer(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                pages,
+                marks,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The whole document, without password protection, for the printing system. Fails when
     /// the file's permissions don't allow printing.
     pub fn print_copy(&self) -> Result<Vec<u8>, crate::SaveError> {

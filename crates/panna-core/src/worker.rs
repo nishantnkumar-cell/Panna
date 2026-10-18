@@ -34,6 +34,11 @@ pub enum PageEdit {
         pages: Vec<usize>,
         margins: crate::Margins,
     },
+    /// Draws header and footer text on these pages, numbered in this order.
+    HeaderFooter {
+        pages: Vec<usize>,
+        marks: crate::HeaderFooter,
+    },
     /// Goes back to before the last page change.
     Undo,
 }
@@ -336,6 +341,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     PageEdit::InsertFile { at, path } => insert_file(current, at, &path),
                     PageEdit::Crop { pages, margins } => current
                         .cropped(&pages, margins)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::HeaderFooter { pages, marks } => current
+                        .with_header_footer(&pages, &marks)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                 };
                 match result.and_then(|doc| Ok((doc.info().map_err(|_| SaveError::Damaged)?, doc))) {

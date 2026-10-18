@@ -4,6 +4,7 @@ mod annot;
 mod crypt;
 mod field;
 pub(crate) mod lex;
+mod marks;
 mod picture;
 mod rebuild;
 mod update;
@@ -19,6 +20,7 @@ use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
 pub use picture::StampImage;
 
+pub use marks::{HeaderFooter, fill as fill_header_footer};
 pub use rebuild::{Margins, PageSource};
 
 use crate::{CommentId, FieldValue, ObjRef};
@@ -217,6 +219,17 @@ pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u
     rebuild_from(docs, plan, &[], true)
 }
 
+/// Every page of `doc`, unchanged and unturned.
+fn every_page(count: usize) -> Vec<PageSource> {
+    (0..count)
+        .map(|index| PageSource::Page {
+            doc: 0,
+            index,
+            turns: 0,
+        })
+        .collect()
+}
+
 /// Every page of `doc`, with the pages at `pages` cropped by `margins`.
 pub(crate) fn crop(
     doc: Input<'_>,
@@ -224,36 +237,43 @@ pub(crate) fn crop(
     pages: &[usize],
     margins: Margins,
 ) -> Result<Vec<u8>, SaveError> {
-    let plan: Vec<PageSource> = (0..count)
-        .map(|index| PageSource::Page {
-            doc: 0,
-            index,
-            turns: 0,
+    let extras: Vec<rebuild::Extra> = (0..count)
+        .map(|i| rebuild::Extra {
+            crop: pages.contains(&i).then_some(margins),
+            marks: None,
         })
         .collect();
-    let crops: Vec<Option<Margins>> = (0..count)
-        .map(|i| pages.contains(&i).then_some(margins))
-        .collect();
-    rebuild_from(&[doc], &plan, &crops, true)
+    rebuild_from(&[doc], &every_page(count), &extras, true)
+}
+
+/// Every page of `doc`, with `marks` drawn on the pages at `pages`, numbered in that order.
+pub(crate) fn header_footer(
+    doc: Input<'_>,
+    count: usize,
+    pages: &[usize],
+    marks: &HeaderFooter,
+) -> Result<Vec<u8>, SaveError> {
+    let date = marks::today();
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for (i, &page) in pages.iter().enumerate() {
+        if let Some(extra) = extras.get_mut(page) {
+            let number = u64::from(marks.first) + i as u64;
+            extra.marks = Some(marks.for_page(number, pages.len(), &date));
+        }
+    }
+    rebuild_from(&[doc], &every_page(count), &extras, true)
 }
 
 /// Every page of `doc` in a file without password protection, to hand to the printing
 /// system, if the file's permissions allow printing.
 pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveError> {
-    let plan: Vec<PageSource> = (0..pages)
-        .map(|index| PageSource::Page {
-            doc: 0,
-            index,
-            turns: 0,
-        })
-        .collect();
-    rebuild_from(&[doc], &plan, &[], false)
+    rebuild_from(&[doc], &every_page(pages), &[], false)
 }
 
 fn rebuild_from(
     docs: &[Input<'_>],
     plan: &[PageSource],
-    crops: &[Option<Margins>],
+    extras: &[rebuild::Extra],
     keep_password: bool,
 ) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
@@ -282,7 +302,7 @@ fn rebuild_from(
         sources.push(rebuild::Source { pdf, bytes, crypt });
     }
     let (info, encryption) = first.ok_or(SaveError::Damaged)?;
-    rebuild::rebuild(&sources, plan, crops, info, encryption)
+    rebuild::rebuild(&sources, plan, extras, info, encryption)
 }
 
 /// The /Encrypt dictionary's bytes, whether the trailer holds it or refers to it.

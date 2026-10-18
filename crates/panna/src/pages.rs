@@ -24,6 +24,8 @@ pub enum Op {
     Extract,
     /// Asks how much to trim from the page edges.
     Crop,
+    /// Asks what text to put at the top and bottom of pages.
+    HeaderFooter,
     Delete,
     Undo,
 }
@@ -105,6 +107,11 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             ev(Op::Extract, true)
         ),
         icons::button(Icon::Crop, "Crop pages", ev(Op::Crop, true)),
+        icons::button(
+            Icon::PageNumbers,
+            "Add page numbers, headers and footers",
+            ev(Op::HeaderFooter, true)
+        ),
         icons::button(Icon::Delete, "Delete this page", ev(Op::Delete, count > 1)),
         icons::button(
             Icon::Undo,
@@ -318,6 +325,176 @@ pub fn crop_card<'a>(state: &Cropping) -> Element<'a, Message> {
         ]
         .spacing(10)
         .width(380),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
+/// The Headers and footers card, as typed.
+#[derive(Debug, Clone)]
+pub struct Marking {
+    /// Header left, centre and right, then footer left, centre and right.
+    pub text: [String; 6],
+    /// Text size in points.
+    pub size: String,
+    /// Distance from the edges in millimetres.
+    pub margin: String,
+    /// The first page's number.
+    pub first: String,
+    pub range: String,
+}
+
+impl Marking {
+    /// Page numbers in the footer's centre on every page of `count`.
+    pub fn new(count: usize) -> Self {
+        let mut text: [String; 6] = Default::default();
+        text[4] = "Page {page} of {pages}".into();
+        Self {
+            text,
+            size: "10".into(),
+            margin: "12".into(),
+            first: "1".into(),
+            range: format!("1-{count}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum MarkEvent {
+    Text(usize, String),
+    Size(String),
+    Margin(String),
+    First(String),
+    Range(String),
+    Go,
+    Cancel,
+}
+
+pub fn mark_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("mark-footer-centre")
+}
+
+/// The pages to mark, each once in the order given, and what to put on them; or what's wrong.
+pub fn mark_settings(
+    state: &Marking,
+    count: usize,
+) -> Result<(Vec<usize>, panna_core::HeaderFooter), String> {
+    let number = |typed: &str, what: &str, range: std::ops::RangeInclusive<f32>| {
+        let typed = typed.trim().replace(',', ".");
+        match typed.parse::<f32>() {
+            Ok(v) if range.contains(&v) => Ok(v),
+            _ => Err(format!(
+                "The {what} goes from {} to {}.",
+                range.start(),
+                range.end()
+            )),
+        }
+    };
+    let size = number(&state.size, "text size", 4.0..=72.0)?;
+    let margin = number(&state.margin, "margin", 0.0..=500.0)?;
+    let first = state
+        .first
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "The first page number is a whole number, such as 1.".to_owned())?;
+    let mut seen = std::collections::HashSet::new();
+    let pages: Vec<usize> = parse_range(&state.range, count)?
+        .into_iter()
+        .filter(|p| seen.insert(*p))
+        .collect();
+    let marks = panna_core::HeaderFooter {
+        text: state.text.clone(),
+        size,
+        margin: margin * POINTS_PER_MM,
+        first,
+    };
+    if marks.is_empty() {
+        return Err("Enter text for the header or the footer.".into());
+    }
+    Ok((pages, marks))
+}
+
+/// The Headers and footers card for a document of `count` pages.
+pub fn mark_card<'a>(state: &Marking, count: usize) -> Element<'a, Message> {
+    let ev = Message::Mark;
+    let parsed = mark_settings(state, count);
+    let line = |label: &'static str, from: usize| {
+        let field = |i: usize, placeholder: &'static str| {
+            let input = text_input(placeholder, state.text.get(i).map_or("", String::as_str))
+                .on_input(move |v| ev(MarkEvent::Text(i, v)))
+                .on_submit(ev(MarkEvent::Go))
+                .width(160);
+            if i == 4 { input.id(mark_input_id()) } else { input }
+        };
+        row![
+            text(label).width(60),
+            field(from, "Left"),
+            field(from + 1, "Centre"),
+            field(from + 2, "Right"),
+        ]
+        .spacing(6)
+        .align_y(iced::Center)
+    };
+    let small = |label: &'static str, value: &str, unit: &'static str, on: fn(String) -> MarkEvent| {
+        row![
+            text(label),
+            text_input("", value)
+                .on_input(move |v| ev(on(v)))
+                .on_submit(ev(MarkEvent::Go))
+                .width(56),
+            text(unit).size(13),
+        ]
+        .spacing(6)
+        .align_y(iced::Center)
+    };
+    // What the first page gets, from the first field that has anything in it.
+    let example = match &parsed {
+        Ok((pages, marks)) => {
+            let first = marks.text.iter().find(|t| !t.trim().is_empty());
+            text(first.map_or(String::new(), |t| {
+                let filled = panna_core::fill_header_footer(t, u64::from(marks.first), pages.len(), "today");
+                format!("On the first page: {filled}")
+            }))
+            .size(13)
+        }
+        Err(e) => text(e.clone()).size(13).style(|theme: &Theme| text::Style {
+            color: Some(theme.extended_palette().danger.base.color),
+        }),
+    };
+    container(
+        column![
+            text("Page numbers, headers and footers").size(16),
+            line("Header", 0),
+            line("Footer", 3),
+            text("{page} is the page number and {pages} the number of pages; {page:6} pads it to 6 digits, for Bates numbers. {date} is today's date.")
+                .size(13),
+            row![
+                small("Size", &state.size, "pt", MarkEvent::Size),
+                small("Margin", &state.margin, "mm", MarkEvent::Margin),
+                small("First number", &state.first, "", MarkEvent::First),
+            ]
+            .spacing(16),
+            row![
+                text("Pages").width(60),
+                text_input(&format!("Such as 1-3, 5 (1 to {count})"), &state.range)
+                    .on_input(move |v| ev(MarkEvent::Range(v)))
+                    .on_submit(ev(MarkEvent::Go)),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            example,
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(MarkEvent::Cancel)),
+                button("Add").on_press_maybe(parsed.is_ok().then_some(ev(MarkEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(580),
     )
     .padding(16)
     .style(container::rounded_box)

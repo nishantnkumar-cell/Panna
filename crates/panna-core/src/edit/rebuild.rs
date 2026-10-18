@@ -250,6 +250,15 @@ fn inherited<'a>(pdf: &'a Pdf, page: ObjRef, dict: &Dict<'a>, key: &[u8]) -> Opt
 /// Margins to trim from a page as it is shown, in points: top, right, bottom, left.
 pub type Margins = [f32; 4];
 
+/// Changes made to one page of the new file on the way.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Extra {
+    /// Margins to crop.
+    pub crop: Option<Margins>,
+    /// Header and footer text to draw over the page.
+    pub marks: Option<super::marks::Lines>,
+}
+
 /// The smallest a cropped page may be, in points a side.
 const MIN_CROPPED: f64 = 18.0;
 
@@ -282,6 +291,72 @@ fn cropped(media: [f64; 4], crop: Option<[f64; 4]>, rotate: i64, margins: Margin
     (x1 - x0 >= MIN_CROPPED && y1 - y0 >= MIN_CROPPED).then_some([x0, y0, x1, y1])
 }
 
+/// For the visible box of a page turned by `rotate`, the matrix from a space with its origin at
+/// the bottom-left corner as shown and its axes as shown, to the page's own space; and the
+/// page's width and height as shown.
+fn shown_space([x0, y0, x1, y1]: [f64; 4], rotate: i64) -> ([f64; 6], f64, f64) {
+    let (w, h) = (x1 - x0, y1 - y0);
+    match rotate.rem_euclid(360) {
+        90 => ([0.0, 1.0, -1.0, 0.0, x1, y0], h, w),
+        180 => ([-1.0, 0.0, 0.0, -1.0, x1, y1], w, h),
+        270 => ([0.0, -1.0, 1.0, 0.0, x0, y1], h, w),
+        _ => ([1.0, 0.0, 0.0, 1.0, x0, y0], w, h),
+    }
+}
+
+/// A page's resources (`owner`'s value, if it has any) as a new dictionary that also names
+/// form `form` as `name`.
+fn with_xobject<'a>(
+    w: &mut Writer,
+    sources: &[Source<'a>],
+    doc: usize,
+    resources: Option<(ObjRef, &'a [u8])>,
+    name: &str,
+    form: u32,
+) -> Result<Vec<u8>, SaveError> {
+    let pdf: &'a Pdf = sources.get(doc).ok_or(SaveError::Damaged)?.pdf;
+    // A dictionary written in place, or the object it refers to, with the object it's in.
+    let resolve = |owner: ObjRef, value: &'a [u8]| -> Option<(ObjRef, &'a [u8])> {
+        let (owner, data) = match lex::reference(value) {
+            Some(r) => (r, pdf.xref().get::<Dict<'a>>(id(r))?.data()),
+            None => (owner, value),
+        };
+        data.trim_ascii_start()
+            .starts_with(b"<<")
+            .then_some((owner, data))
+    };
+    let mut out = b"<<".to_vec();
+    let mut xobjects = format!("/{name} {form} 0 R").into_bytes();
+    let copy = |w: &mut Writer, out: &mut Vec<u8>, owner: ObjRef, data: &[u8], skip: &[u8]| {
+        for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
+            if key == skip {
+                continue;
+            }
+            out.extend_from_slice(b" /");
+            out.extend_from_slice(key);
+            out.push(b' ');
+            let value = data.get(value).ok_or(SaveError::Damaged)?;
+            out.extend(copy_syntax(w, sources, doc, owner, value)?);
+        }
+        Ok::<_, SaveError>(())
+    };
+    if let Some((owner, data)) = resources.and_then(|(o, v)| resolve(o, v)) {
+        copy(w, &mut out, owner, data, b"XObject")?;
+        let entries = lex::dict_entries(data).ok_or(SaveError::Damaged)?;
+        if let Some((sub_owner, sub)) = entries
+            .iter()
+            .find(|(k, _)| *k == b"XObject")
+            .and_then(|(_, v)| resolve(owner, data.get(v.clone())?))
+        {
+            copy(w, &mut xobjects, sub_owner, sub, name.as_bytes())?;
+        }
+    }
+    out.extend_from_slice(b" /XObject <<");
+    out.extend(xobjects);
+    out.extend_from_slice(b">>\n>>");
+    Ok(out)
+}
+
 /// The four numbers of a rectangle written as an array.
 fn rect(value: &[u8]) -> Option<[f64; 4]> {
     let inner = value.trim_ascii().strip_prefix(b"[")?.strip_suffix(b"]")?;
@@ -295,12 +370,12 @@ fn rect(value: &[u8]) -> Option<[f64; 4]> {
 }
 
 /// Writes a new file with the pages in `plan`, the first source's catalog, document
-/// information and everything they use. Pages with margins in `crops` (by place in `plan`;
-/// it may be shorter) are cropped.
+/// information and everything they use. Pages are changed as `extras` says (by place in
+/// `plan`; it may be shorter).
 pub(crate) fn rebuild(
     sources: &[Source<'_>],
     plan: &[PageSource],
-    crops: &[Option<Margins>],
+    extras: &[Extra],
     info: Option<ObjRef>,
     encryption: Option<Encryption>,
 ) -> Result<Vec<u8>, SaveError> {
@@ -346,7 +421,8 @@ pub(crate) fn rebuild(
         }
     }
     for (place, (source, num)) in plan.iter().zip(&page_nums).enumerate() {
-        let crop = crops.get(place).copied().flatten();
+        let extra = extras.get(place).cloned().unwrap_or_default();
+        let crop = extra.crop;
         let body = match *source {
             PageSource::Blank { width, height } => format!(
                 "<< /Type /Page /Parent {pages_num} 0 R /MediaBox [0 0 {} {}] /Resources << >> >>",
@@ -360,8 +436,14 @@ pub(crate) fn rebuild(
                 let pdf = sources.get(doc).ok_or(SaveError::Damaged)?.pdf;
                 let data = dict.data();
                 let mut body = b"<<".to_vec();
+                let mut contents = None;
                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
                     if key == b"Parent" || INHERITED.contains(&key) {
+                        continue;
+                    }
+                    if key == b"Contents" && extra.marks.is_some() {
+                        let value = data.get(value).ok_or(SaveError::Damaged)?;
+                        contents = Some(copy_syntax(&mut w, sources, doc, *r, value)?);
                         continue;
                     }
                     body.push(b'/');
@@ -371,10 +453,15 @@ pub(crate) fn rebuild(
                     body.extend(copy_syntax(&mut w, sources, doc, *r, value)?);
                     body.push(b'\n');
                 }
+                let mut resources = None;
                 for key in INHERITED {
                     let Some((owner, value)) = inherited(pdf, *r, dict, key) else {
                         continue;
                     };
+                    if key == b"Resources" && extra.marks.is_some() {
+                        resources = Some((owner, value));
+                        continue;
+                    }
                     if key == b"Rotate" || (key == b"CropBox" && crop.is_some()) {
                         continue;
                     }
@@ -388,14 +475,55 @@ pub(crate) fn rebuild(
                     .and_then(|(_, v)| std::str::from_utf8(v).ok()?.trim().parse::<f64>().ok())
                     .map_or(0, |v| v as i64);
                 let rotate = (rotate + 90 * i64::from(turns)).rem_euclid(360);
-                if let Some(margins) = crop {
-                    let boxed = |key: &[u8]| inherited(pdf, *r, dict, key).and_then(|(_, v)| rect(v));
-                    let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
-                    let [x0, y0, x1, y1] =
-                        cropped(media, boxed(b"CropBox"), rotate, margins).ok_or(SaveError::CropTooLarge)?;
-                    body.extend_from_slice(
-                        format!("/CropBox [{} {} {} {}]\n", n(x0), n(y0), n(x1), n(y1)).as_bytes(),
+                let boxed = |key: &[u8]| inherited(pdf, *r, dict, key).and_then(|(_, v)| rect(v));
+                let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+                let shown = match crop {
+                    Some(margins) => {
+                        let [x0, y0, x1, y1] = cropped(media, boxed(b"CropBox"), rotate, margins)
+                            .ok_or(SaveError::CropTooLarge)?;
+                        body.extend_from_slice(
+                            format!("/CropBox [{} {} {} {}]\n", n(x0), n(y0), n(x1), n(y1)).as_bytes(),
+                        );
+                        [x0, y0, x1, y1]
+                    }
+                    None => cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media),
+                };
+                if let Some(marks) = &extra.marks {
+                    let form = w.alloc();
+                    let (matrix, width, height) = shown_space(shown, rotate);
+                    let stream = |dict: &str, data: &str| {
+                        format!("<< {dict}/Length {} >>\nstream\n{data}\nendstream", data.len()).into_bytes()
+                    };
+                    w.set(
+                        form,
+                        stream(
+                            &format!(
+                                "/Type /XObject /Subtype /Form /BBox [0 0 {} {}] /Matrix [{}] /Resources {} ",
+                                n(width),
+                                n(height),
+                                matrix.map(n).join(" "),
+                                super::marks::RESOURCES
+                            ),
+                            &marks.content(width, height),
+                        ),
                     );
+                    // The page's own drawing is kept apart in q ... Q, so whatever state it
+                    // leaves behind doesn't move the header and footer.
+                    let (before, after) = (w.alloc(), w.alloc());
+                    w.set(before, stream("", "q"));
+                    let name = format!("PannaMarks{form}");
+                    w.set(after, stream("", &format!("Q /{name} Do")));
+                    let inner = contents.unwrap_or_default();
+                    let inner = inner.trim_ascii();
+                    let inner = inner
+                        .strip_prefix(b"[")
+                        .and_then(|i| i.strip_suffix(b"]"))
+                        .unwrap_or(inner);
+                    body.extend_from_slice(format!("/Contents [{before} 0 R ").as_bytes());
+                    body.extend_from_slice(inner);
+                    body.extend_from_slice(format!(" {after} 0 R]\n/Resources ").as_bytes());
+                    body.extend(with_xobject(&mut w, sources, doc, resources, &name, form)?);
+                    body.push(b'\n');
                 }
                 body.extend_from_slice(format!("/Parent {pages_num} 0 R\n/Rotate {rotate}\n>>").as_bytes());
                 body

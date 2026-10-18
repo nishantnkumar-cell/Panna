@@ -69,6 +69,7 @@ pub enum Icon {
     MoveDown,
     Print,
     Crop,
+    PageNumbers,
 }
 
 impl Icon {
@@ -135,6 +136,7 @@ impl Icon {
             Icon::MoveDown => include_bytes!("../icons/arrow-down.svg"),
             Icon::Print => include_bytes!("../icons/printer.svg"),
             Icon::Crop => include_bytes!("../icons/crop.svg"),
+            Icon::PageNumbers => include_bytes!("../icons/file-digit.svg"),
         }
     }
 }
@@ -229,7 +231,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 61] = [
+    const ALL: [Icon; 62] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -291,6 +293,7 @@ mod tests {
         Icon::MoveDown,
         Icon::Print,
         Icon::Crop,
+        Icon::PageNumbers,
     ];
 
     #[test]

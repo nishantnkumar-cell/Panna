@@ -123,6 +123,8 @@ enum Message {
     Extract(pages::ExtractEvent),
     /// The Crop pages card.
     Crop(pages::CropEvent),
+    /// The Headers and footers card.
+    Mark(pages::MarkEvent),
     /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
     /// The folder to save extracted pages to, a file each, once chosen.
@@ -246,6 +248,8 @@ struct App {
     extracting: Option<pages::Extracting>,
     /// Choosing how much to crop.
     cropping: Option<pages::Cropping>,
+    /// Choosing headers and footers.
+    marking: Option<pages::Marking>,
     /// The pages being extracted, while their file or folder is chosen.
     extract_pages: Vec<usize>,
     /// What to do once unsaved changes are saved or discarded.
@@ -497,6 +501,7 @@ impl App {
             printing: false,
             extracting: None,
             cropping: None,
+            marking: None,
             extract_pages: Vec::new(),
             confirm: None,
             after_save: None,
@@ -833,6 +838,8 @@ impl App {
                     self.extracting = None;
                 } else if self.cropping.is_some() {
                     self.cropping = None;
+                } else if self.marking.is_some() {
+                    self.marking = None;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1131,6 +1138,37 @@ impl App {
                 self.edit_pages(PageEdit::InsertFile { at, path }, at, false)
             }
             Message::Extract(event) => self.extract(event),
+            Message::Mark(event) => {
+                let Some(state) = &mut self.marking else {
+                    return Task::none();
+                };
+                let clean = |v: String, max: usize| v.chars().filter(|c| !c.is_control()).take(max).collect();
+                match event {
+                    pages::MarkEvent::Text(i, value) => {
+                        if let Some(slot) = state.text.get_mut(i) {
+                            *slot = clean(value, 200);
+                        }
+                    }
+                    pages::MarkEvent::Size(v) => state.size = clean(v, 6),
+                    pages::MarkEvent::Margin(v) => state.margin = clean(v, 6),
+                    pages::MarkEvent::First(v) => state.first = clean(v, 9),
+                    pages::MarkEvent::Range(v) => state.range = clean(v, 200),
+                    pages::MarkEvent::Cancel => self.marking = None,
+                    pages::MarkEvent::Go => {
+                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                        let Ok((pages, marks)) = pages::mark_settings(state, count) else {
+                            return Task::none();
+                        };
+                        self.marking = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(PageEdit::HeaderFooter { pages, marks }, current, false);
+                    }
+                }
+                Task::none()
+            }
             Message::Crop(event) => {
                 let Some(state) = &mut self.cropping else {
                     return Task::none();
@@ -1450,6 +1488,12 @@ impl App {
                 },
                 Message::InsertFileChosen,
             ),
+            pages::Op::HeaderFooter => {
+                let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                self.marking = Some(pages::Marking::new(count));
+                operation::focus(pages::mark_input_id())
+                    .chain(operation::move_cursor_to_end(pages::mark_input_id()))
+            }
             pages::Op::Crop => {
                 self.cropping = Some(pages::Cropping::default());
                 operation::focus(pages::crop_input_id()).chain(operation::select_all(pages::crop_input_id()))
@@ -2366,6 +2410,12 @@ impl App {
             layers.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
+            ));
+        }
+        if let (Some(state), Some(doc)) = (&self.marking, &self.doc) {
+            layers.push(modal(
+                pages::mark_card(state, doc.pages.len()),
+                Message::Mark(pages::MarkEvent::Cancel),
             ));
         }
         if self.confirm_reset {

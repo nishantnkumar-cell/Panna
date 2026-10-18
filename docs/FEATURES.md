@@ -78,7 +78,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Extract pages, split document | Later | Done: pick pages such as 1-3, 5, 8- and save them as one PDF or each as its own PDF |
 | Merge / combine files | Later | Done: insert another PDF's pages after the current page |
 | Crop pages | Later | Done: trim margins in millimetres from the edges as shown, on this page or all pages |
-| Headers, footers, page numbers, Bates numbering | Later | |
+| Headers, footers, page numbers, Bates numbering | Later | Done: left, centre and right text at the top and bottom, with {page}, {pages}, {page:6} for Bates numbers and {date}, on chosen pages. Drawn into the pages, so changing them later is Undo or adding new ones |
 | Watermarks and backgrounds | Later | |
 
 ## 5. Editing content

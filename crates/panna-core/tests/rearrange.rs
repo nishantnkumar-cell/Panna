@@ -306,3 +306,55 @@ fn pages_are_cropped_by_the_margins_as_shown() {
         Err(panna_core::SaveError::CropTooLarge)
     );
 }
+
+#[test]
+fn headers_and_footers_sit_on_the_page_as_shown() {
+    use panna_core::{HeaderFooter, TextBox};
+    let doc = open(three_pages(), None);
+    let mut marks = HeaderFooter {
+        first: 7,
+        ..HeaderFooter::default()
+    };
+    marks.text[0] = "Three pages".into();
+    marks.text[4] = "Page {page} of {pages}".into();
+    marks.text[5] = "X{page:4}".into();
+    let out = open(doc.with_header_footer(&[0, 2], &marks).unwrap(), None);
+    let band = |doc: &Document, page: usize, y0: f32, y1: f32| {
+        let width = doc.info().unwrap().pages[page].width;
+        doc.page_text(page).unwrap().text_in(&[TextBox {
+            x0: 0.0,
+            y0,
+            x1: width,
+            y1,
+        }])
+    };
+    // Page 1 is shown turned, 400 × 300: its header and footer run along the long edges. Its
+    // own text starts near the top too.
+    assert!(band(&out, 0, 0.0, 60.0).ends_with("Three pages"));
+    assert_eq!(band(&out, 0, 240.0, 300.0), "Page 7 of 2 X0007");
+    assert!(text(&out, 0).contains("Page 1"));
+    // Page 2 is untouched; page 3 is the second one marked.
+    assert!(!text(&out, 1).contains("Three pages"));
+    assert_eq!(band(&out, 2, 340.0, 400.0), "Page 8 of 2 X0008");
+    // The page's own content is still drawn, and the result still opens with its bookmarks.
+    assert!(text(&out, 2).contains("Page 3"));
+    assert_eq!(out.page_count(), 3);
+}
+
+#[test]
+fn headers_and_footers_keep_password_protection() {
+    let doc = open(
+        include_bytes!("fixtures/encrypted-aes256.pdf").to_vec(),
+        Some("secret"),
+    );
+    let mut marks = panna_core::HeaderFooter::default();
+    marks.text[1] = "Confidential".into();
+    let saved = doc.with_header_footer(&[0], &marks).unwrap();
+    assert!(Document::from_bytes(saved.clone(), None, Limits::default()).is_err());
+    let out = open(saved, Some("secret"));
+    let t = text(&out, 0);
+    assert!(
+        t.contains("Confidential") && t.contains("Hello secret world"),
+        "{t}"
+    );
+}
