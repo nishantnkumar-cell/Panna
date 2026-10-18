@@ -275,6 +275,11 @@ pub(crate) struct Extra {
     pub links: Vec<([f64; 4], crate::LinkTarget)>,
     /// Areas to take content out of for good, in the same space as `links`.
     pub redact: Vec<[f64; 4]>,
+    /// Form fields to add, placed in the same space as `links`.
+    pub fields: Vec<super::NewField>,
+    /// Widgets to take off the page, and fields to take out of the form.
+    pub drop_annots: Vec<ObjRef>,
+    pub drop_fields: Vec<ObjRef>,
 }
 
 /// Hidden information to leave out of the new file.
@@ -571,6 +576,8 @@ pub(crate) fn rebuild(
     }
     let mut kids = Vec::new();
     let mut page_nums = Vec::new();
+    // Form fields added to pages, for the form's field list.
+    let mut new_fields: Vec<u32> = Vec::new();
     for source in plan {
         let num = w.alloc();
         kids.push(format!("{num} 0 R"));
@@ -642,8 +649,12 @@ pub(crate) fn rebuild(
                 // Annotations drawn into the page, and the ones left as they are.
                 let mut flattened = Vec::new();
                 let mut kept = String::new();
-                let filtering =
-                    extra.flatten.any() || clean.annotations() || !extra.links.is_empty() || redacting;
+                let filtering = extra.flatten.any()
+                    || clean.annotations()
+                    || !extra.links.is_empty()
+                    || !extra.fields.is_empty()
+                    || !extra.drop_annots.is_empty()
+                    || redacting;
                 let gone = if redacting {
                     redacted_annotations(pdf, dict, &areas)?
                 } else {
@@ -663,7 +674,7 @@ pub(crate) fn rebuild(
                         if subtype == "Popup" && (extra.flatten.comments || clean.comments) {
                             continue;
                         }
-                        if gone.contains(&r) {
+                        if gone.contains(&r) || extra.drop_annots.contains(&r) {
                             continue;
                         }
                         let script = runs_script(&annot);
@@ -789,6 +800,27 @@ pub(crate) fn rebuild(
                             .into_bytes(),
                         );
                         kept.push_str(&format!("{link} 0 R "));
+                    }
+                }
+                if !extra.fields.is_empty() {
+                    let (matrix, _, height) = shown_space(shown, rotate);
+                    let [a, b, c, d, e, f] = matrix;
+                    let user = |x: f64, y: f64| (a * x + c * (height - y) + e, b * x + d * (height - y) + f);
+                    for field in &extra.fields {
+                        let r = field.rect;
+                        let (ux0, uy0) = user(f64::from(r.x0), f64::from(r.y0));
+                        let (ux1, uy1) = user(f64::from(r.x1), f64::from(r.y1));
+                        let rect = [ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)];
+                        let mut store = |body: Vec<u8>| {
+                            let at = w.alloc();
+                            w.set(at, body);
+                            at
+                        };
+                        let body = super::new_field::widget(field, rect, *num, rotate, &mut store);
+                        let widget = w.alloc();
+                        w.set(widget, body);
+                        new_fields.push(widget);
+                        kept.push_str(&format!("{widget} 0 R "));
                     }
                 }
                 if filtering && !kept.is_empty() {
@@ -917,12 +949,32 @@ pub(crate) fn rebuild(
             .enumerate()
             .all(|(i, p)| matches!(p, PageSource::Page { doc: 0, index, turns: _ } if *index == i));
     let data = catalog.data();
+    let dropped_fields: Vec<ObjRef> = extras
+        .iter()
+        .flat_map(|e| e.drop_fields.iter().copied())
+        .collect();
+    let mut wrote_form = false;
     let mut body = b"<<".to_vec();
     for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
         // Flattened form fields are page content now, so the form goes.
         let flattened_form = key == b"AcroForm" && extras.iter().any(|e| e.flatten.fields);
         if key == b"Pages" || (key == b"PageLabels" && !same_pages) || flattened_form {
             continue;
+        }
+        if key == b"AcroForm" && (!new_fields.is_empty() || !dropped_fields.is_empty()) {
+            let raw = data.get(value.clone()).ok_or(SaveError::Damaged)?;
+            let form = match lex::reference(raw) {
+                Some(r) => first.pdf.xref().get::<Dict<'_>>(id(r)),
+                None => catalog.get::<Dict<'_>>(b"AcroForm"),
+            };
+            if let Some(form) = form {
+                let body_form = form_with_fields(&mut w, sources, root, &form, &new_fields, &dropped_fields)?;
+                body.extend_from_slice(b"/AcroForm ");
+                body.extend(body_form);
+                body.push(b'\n');
+                wrote_form = true;
+                continue;
+            }
         }
         let value = data.get(value.clone()).ok_or(SaveError::Damaged)?;
         if (clean.metadata && key == b"Metadata")
@@ -946,6 +998,17 @@ pub(crate) fn rebuild(
         body.push(b' ');
         body.extend(copy_syntax(&mut w, sources, 0, root, value)?);
         body.push(b'\n');
+    }
+    if !wrote_form && !new_fields.is_empty() {
+        let fields: Vec<String> = new_fields.iter().map(|f| format!("{f} 0 R")).collect();
+        body.extend_from_slice(
+            format!(
+                "/AcroForm << /Fields [{}] /NeedAppearances true /DA (/Helv 0 Tf 0 g) /DR {} >>\n",
+                fields.join(" "),
+                super::new_field::RESOURCES
+            )
+            .as_bytes(),
+        );
     }
     body.extend_from_slice(format!("/Pages {pages_num} 0 R\n>>").as_bytes());
     w.set(catalog_num, body);
@@ -972,6 +1035,54 @@ fn resolved<'a>(pdf: &'a Pdf, owner: ObjRef, raw: &'a [u8]) -> Option<Dict<'a>> 
             .get::<Dict<'a>>(id(owner))?
             .get::<Dict<'a>>(b"Resources"),
     }
+}
+
+/// The form dictionary with `added` fields at the end of its field list, `dropped` ones left
+/// out, and viewers asked to redraw what fields show.
+fn form_with_fields(
+    w: &mut Writer,
+    sources: &[Source<'_>],
+    root: ObjRef,
+    form: &Dict<'_>,
+    added: &[u32],
+    dropped: &[ObjRef],
+) -> Result<Vec<u8>, SaveError> {
+    use hayro::hayro_syntax::object::Array;
+    let data = form.data();
+    let mut body = b"<<".to_vec();
+    let mut has_dr = false;
+    for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
+        if key == b"Fields" || key == b"NeedAppearances" {
+            continue;
+        }
+        has_dr |= key == b"DR";
+        body.push(b'/');
+        body.extend_from_slice(key);
+        body.push(b' ');
+        let value = data.get(value).ok_or(SaveError::Damaged)?;
+        body.extend(copy_syntax(w, sources, 0, root, value)?);
+        body.push(b'\n');
+    }
+    let mut fields = Vec::new();
+    if let Some(list) = form.get::<Array<'_>>(b"Fields") {
+        for field in list.iter::<Dict<'_>>().take(100_000) {
+            let Some(r) = field.obj_id().and_then(obj_ref) else {
+                continue;
+            };
+            if dropped.contains(&r) {
+                continue;
+            }
+            if let Some(num) = w.map(0, r) {
+                fields.push(format!("{num} 0 R"));
+            }
+        }
+    }
+    fields.extend(added.iter().map(|f| format!("{f} 0 R")));
+    if !has_dr {
+        body.extend_from_slice(format!("/DR {}\n", super::new_field::RESOURCES).as_bytes());
+    }
+    body.extend_from_slice(format!("/Fields [{}]\n/NeedAppearances true\n>>", fields.join(" ")).as_bytes());
+    Ok(body)
 }
 
 /// A page's content, all its streams decoded and joined.

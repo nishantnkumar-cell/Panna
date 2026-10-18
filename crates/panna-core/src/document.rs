@@ -433,6 +433,51 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with `add` fields added to its form and the fields `remove` taken out,
+    /// as a new file. Added fields named like one already there get a number after the name.
+    pub fn with_form_fields(
+        &self,
+        add: &[crate::NewField],
+        remove: &[crate::ObjRef],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        let fields = self.info().map(|i| i.fields).unwrap_or_default();
+        let mut taken: std::collections::HashSet<String> = fields
+            .iter()
+            .filter(|f| !remove.contains(&f.id))
+            .map(|f| f.name.clone())
+            .collect();
+        let add: Vec<crate::NewField> = add
+            .iter()
+            .map(|f| {
+                let base = f.name.trim().replace('.', "_");
+                let base = if base.is_empty() { "Field".to_owned() } else { base };
+                let mut name = base.clone();
+                let mut i = 2;
+                while taken.contains(&name) {
+                    name = format!("{base} {i}");
+                    i += 1;
+                }
+                taken.insert(name.clone());
+                crate::NewField { name, ..f.clone() }
+            })
+            .collect();
+        let widgets: Vec<(usize, crate::ObjRef)> = fields
+            .iter()
+            .filter(|f| remove.contains(&f.id))
+            .flat_map(|f| f.widgets.iter().map(|w| (w.page, w.annot)))
+            .collect();
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::form_fields(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                &add,
+                remove,
+                &widgets,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The differences between this document's text and `other`'s, word by word.
     pub fn compare_with(&self, other: &Document) -> Result<Vec<crate::Change>, RenderError> {
         let texts = |doc: &Document| -> Result<Vec<crate::PageText>, RenderError> {

@@ -46,6 +46,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                     Message::Add(crate::add::Event::Toggle)
                 ),
                 tool(
+                    Icon::PrepareForm,
+                    "Prepare a form (add or delete fields)",
+                    Message::Prepare(crate::prepare::Event::Toggle)
+                ),
+                tool(
                     Icon::Compare,
                     "Compare with another file…",
                     Message::Compare(crate::compare::Event::Open)

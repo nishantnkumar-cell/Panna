@@ -18,6 +18,7 @@ mod layout;
 mod links;
 mod measure;
 mod pages;
+mod prepare;
 mod print;
 mod protect;
 mod redact;
@@ -255,6 +256,7 @@ enum Message {
     /// Adding text, pictures and links to pages.
     Add(add::Event),
     Redact(redact::Event),
+    Prepare(prepare::Event),
     Compare(compare::Event),
     CompareChosen(Option<PathBuf>),
     Compared {
@@ -327,6 +329,7 @@ struct App {
     measure: measure::Measure,
     adder: add::Adder,
     redactor: redact::Redactor,
+    preparer: prepare::Preparer,
     /// The comparison with another file, while it's shown.
     comparison: Option<compare::Comparison>,
     annotate: annotate::Annotate,
@@ -670,6 +673,7 @@ impl App {
             measure: measure::Measure::default(),
             adder: add::Adder::default(),
             redactor: redact::Redactor::default(),
+            preparer: prepare::Preparer::default(),
             comparison: None,
         };
         let scale = window::oldest()
@@ -1013,6 +1017,12 @@ impl App {
                 } else if self.snapping {
                     self.snapping = false;
                     self.snapshot = None;
+                } else if self.preparer.on {
+                    if self.preparer.busy() {
+                        self.preparer.cancel();
+                    } else {
+                        self.preparer.stop();
+                    }
                 } else if self.redactor.on {
                     if self.redactor.busy() {
                         self.redactor.cancel();
@@ -1144,6 +1154,10 @@ impl App {
                     self.redactor.hover(page, self.page_map(page).to_page(position));
                     return Task::none();
                 }
+                if self.preparer.on {
+                    self.preparer.hover(page, self.page_map(page).to_page(position));
+                    return Task::none();
+                }
                 if self.measure.on {
                     self.measure.hover(page, self.page_map(page).to_page(position));
                     return Task::none();
@@ -1168,6 +1182,12 @@ impl App {
             Message::PagePress(page) if self.adder.on => {
                 if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
                     self.adder.press(page, self.page_map(page).to_page(position));
+                }
+                Task::none()
+            }
+            Message::PagePress(page) if self.preparer.on => {
+                if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
+                    self.preparer.press(page, self.page_map(page).to_page(position));
                 }
                 Task::none()
             }
@@ -1494,6 +1514,7 @@ impl App {
                 let outcome = self.adder.update(event, pages);
                 if self.adder.on {
                     self.redactor.stop();
+                    self.preparer.stop();
                     self.measure.on = false;
                     self.measure.clear();
                     self.snapping = false;
@@ -1504,6 +1525,33 @@ impl App {
                     }
                 }
                 self.after_adding(outcome)
+            }
+            Message::Prepare(event) => {
+                if self.saving || self.doc.is_none() {
+                    return Task::none();
+                }
+                self.all_tools = false;
+                let outcome = self.preparer.update(event);
+                if self.preparer.on {
+                    self.redactor.stop();
+                    self.adder.on = false;
+                    self.adder.cancel();
+                    self.measure.on = false;
+                    self.measure.clear();
+                    self.snapping = false;
+                    self.snapshot = None;
+                    self.selection = None;
+                    if self.annotate.open {
+                        self.annotate.update(annotate::Event::Toggle);
+                    }
+                }
+                match outcome {
+                    prepare::Outcome::Nothing => Task::none(),
+                    prepare::Outcome::Edit { add, remove } => {
+                        let show = add.first().map_or(self.current_page(), |f| f.page);
+                        self.edit_pages(PageEdit::FormFields { add, remove }, show, false)
+                    }
+                }
             }
             Message::Redact(event) => {
                 if self.saving || self.doc.is_none() {
@@ -1519,6 +1567,7 @@ impl App {
                     }
                 }
                 if self.redactor.on {
+                    self.preparer.stop();
                     self.adder.on = false;
                     self.adder.cancel();
                     self.measure.on = false;
@@ -1565,6 +1614,7 @@ impl App {
                 self.measure.update(event);
                 if self.measure.on {
                     self.redactor.stop();
+                    self.preparer.stop();
                     self.adder.on = false;
                     self.adder.cancel();
                     self.snapping = false;
@@ -1575,6 +1625,7 @@ impl App {
             }
             Message::ToggleSnapshot => {
                 self.redactor.stop();
+                self.preparer.stop();
                 self.adder.on = false;
                 self.adder.cancel();
                 self.measure.on = false;
@@ -1691,6 +1742,10 @@ impl App {
                 if self.redactor.on {
                     self.redactor.release();
                     return Task::none();
+                }
+                if self.preparer.on {
+                    self.preparer.release(self.form.fields());
+                    return self.preparer.focus().map_or_else(Task::none, operation::focus);
                 }
                 if self.snapshot.is_some_and(|s| s.dragging) {
                     return self.take_snapshot();
@@ -3611,6 +3666,20 @@ impl App {
         if let Some(card) = self.redactor.card() {
             layers.push(modal(card, Message::Redact(redact::Event::Cancel)));
         }
+        if self.preparer.on && self.doc.is_some() {
+            layers.push(
+                container(self.preparer.bar())
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(Center)
+                    .align_y(iced::Bottom)
+                    .into(),
+            );
+        }
+        if let Some(card) = self.preparer.card() {
+            layers.push(modal(card, Message::Prepare(prepare::Event::Cancel)));
+        }
         if self.measure.on && self.doc.is_some() {
             layers.push(
                 container(self.measure.bar())
@@ -3953,7 +4022,12 @@ impl App {
                             })
                             .into_iter()
                             .flatten();
-                        let fields = self.form.overlays(index, self.page_map(index));
+                        let fields = if self.preparer.on {
+                            self.preparer
+                                .overlays(index, self.page_map(index), self.form.fields())
+                        } else {
+                            self.form.overlays(index, self.page_map(index))
+                        };
                         let measured = self.measure.overlay(
                             index,
                             self.page_map(index),
@@ -4067,7 +4141,12 @@ impl App {
                         } else {
                             mouse::Interaction::ResizingDiagonallyUp
                         }
-                    } else if self.snapping || self.measure.on || self.adder.on || self.redactor.on {
+                    } else if self.snapping
+                        || self.measure.on
+                        || self.adder.on
+                        || self.redactor.on
+                        || self.preparer.on
+                    {
                         mouse::Interaction::Crosshair
                     } else if over_link {
                         mouse::Interaction::Pointer

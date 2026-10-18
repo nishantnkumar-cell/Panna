@@ -6,6 +6,7 @@ pub(crate) mod crypt;
 mod field;
 pub(crate) mod lex;
 mod marks;
+mod new_field;
 mod pack;
 mod picture;
 mod rebuild;
@@ -407,6 +408,62 @@ pub(crate) fn watermark(
             extra.under.extend(under);
             extra.over.extend(over);
         }
+    }
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+/// A form field to make.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewField {
+    pub page: usize,
+    /// Where it goes, in the same space as [`crate::TextBox`] page text.
+    pub rect: crate::TextBox,
+    pub name: String,
+    /// Shown when the pointer rests on it.
+    pub tooltip: String,
+    pub required: bool,
+    pub kind: NewFieldKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NewFieldKind {
+    Text {
+        multiline: bool,
+    },
+    CheckBox,
+    /// A drop-down list of these choices.
+    Dropdown(Vec<String>),
+}
+
+/// `doc` with the fields in `add` added to the form, and the fields `drop` (with their
+/// widgets `widgets`) taken out of it.
+pub(crate) fn form_fields(
+    doc: Input<'_>,
+    count: usize,
+    add: &[NewField],
+    drop: &[ObjRef],
+    widgets: &[(usize, ObjRef)],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for field in add {
+        let extra = extras
+            .get_mut(field.page)
+            .ok_or(SaveError::NoSuchPage(field.page))?;
+        extra.fields.push(field.clone());
+    }
+    for (page, widget) in widgets {
+        if let Some(extra) = extras.get_mut(*page) {
+            extra.drop_annots.push(*widget);
+        }
+    }
+    if let Some(first) = extras.first_mut() {
+        first.drop_fields.extend_from_slice(drop);
     }
     rebuild_from(
         &[doc],

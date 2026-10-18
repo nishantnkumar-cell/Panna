@@ -236,6 +236,11 @@ impl Form {
     }
 
     /// The inputs for `page`'s fields, positioned over the page at its current zoom.
+    /// The document's fields, as last loaded.
+    pub fn fields(&self) -> &[Field] {
+        &self.fields
+    }
+
     pub fn overlays<'a>(&'a self, page: usize, map: PageMap) -> Vec<Element<'a, Message>> {
         let mut out = Vec::new();
         for (index, field) in self.fields.iter().enumerate() {
