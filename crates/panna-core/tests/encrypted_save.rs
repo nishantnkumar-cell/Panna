@@ -51,8 +51,10 @@ fn changes_save_into_encrypted_files() {
             assert_eq!(&saved[..bytes.len()], bytes, "{method}");
             let text = String::from_utf8_lossy(&saved[bytes.len()..]).into_owned();
             assert!(text.contains("/Encrypt 6 0 R"), "{method}: {text}");
+            // Encrypted strings are random-looking hex, which can contain any four digits, but
+            // a plain text string would start with the byte order mark.
             assert!(
-                !text.contains("Tester") && !text.contains("FEFF"),
+                !text.contains("Tester") && !text.contains("<FEFF"),
                 "{method}: strings left in the clear"
             );
 
