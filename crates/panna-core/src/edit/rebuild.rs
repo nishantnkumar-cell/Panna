@@ -271,6 +271,8 @@ pub(crate) struct Extra {
     pub over: Vec<super::marks::Drawing>,
     /// Annotations to draw into the page's content and remove.
     pub flatten: Flatten,
+    /// Links to add: left, top, right, bottom from the top-left corner of the page as shown.
+    pub links: Vec<([f64; 4], crate::LinkTarget)>,
 }
 
 /// Hidden information to leave out of the new file.
@@ -599,7 +601,7 @@ pub(crate) fn rebuild(
                 // Annotations drawn into the page, and the ones left as they are.
                 let mut flattened = Vec::new();
                 let mut kept = String::new();
-                let filtering = extra.flatten.any() || clean.annotations();
+                let filtering = extra.flatten.any() || clean.annotations() || !extra.links.is_empty();
                 if filtering
                     && let Some(annots) = dict.get::<hayro::hayro_syntax::object::Array<'_>>(b"Annots")
                 {
@@ -716,6 +718,41 @@ pub(crate) fn rebuild(
                     }
                     None => cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media),
                 };
+                if !extra.links.is_empty() {
+                    let (matrix, _, height) = shown_space(shown, rotate);
+                    let [a, b, c, d, e, f] = matrix;
+                    let user = |x: f64, y: f64| (a * x + c * (height - y) + e, b * x + d * (height - y) + f);
+                    for ([x0, top, x1, bottom], target) in &extra.links {
+                        let action = match target {
+                            crate::LinkTarget::Uri(uri) if crate::safe_uri(uri) => {
+                                format!(
+                                    "/A << /S /URI /URI ({}) >>",
+                                    super::annot::literal(uri.as_bytes())
+                                )
+                            }
+                            crate::LinkTarget::Page(i) => match page_nums.get(*i) {
+                                Some(num) => format!("/Dest [{num} 0 R /Fit]"),
+                                None => continue,
+                            },
+                            crate::LinkTarget::Uri(_) => continue,
+                        };
+                        let (ux0, uy0) = user(*x0, *top);
+                        let (ux1, uy1) = user(*x1, *bottom);
+                        let link = w.alloc();
+                        w.set(
+                            link,
+                            format!(
+                                "<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] /F 4 /P {num} 0 R {action} >>",
+                                n(ux0.min(ux1)),
+                                n(uy0.min(uy1)),
+                                n(ux0.max(ux1)),
+                                n(uy0.max(uy1)),
+                            )
+                            .into_bytes(),
+                        );
+                        kept.push_str(&format!("{link} 0 R "));
+                    }
+                }
                 if filtering && !kept.is_empty() {
                     body.extend_from_slice(format!("/Annots [{}]\n", kept.trim_end()).as_bytes());
                 }
@@ -730,6 +767,20 @@ pub(crate) fn rebuild(
                                 drawings: &[super::marks::Drawing]| {
                         let mut ops = String::new();
                         for drawing in drawings {
+                            let resources = match drawing.picture() {
+                                Some(image) => {
+                                    let mask = image.has_mask().then(|| w.alloc());
+                                    let (body, mask_body) =
+                                        image.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
+                                    let num = w.alloc();
+                                    w.set(num, body);
+                                    if let (Some(m), Some(b)) = (mask, mask_body) {
+                                        w.set(m, b);
+                                    }
+                                    format!("<< /XObject << /PaIm {num} 0 R >> >>")
+                                }
+                                None => drawing.resources(),
+                            };
                             let form = w.alloc();
                             w.set(
                                 form,
@@ -739,7 +790,7 @@ pub(crate) fn rebuild(
                                         n(width),
                                         n(height),
                                         matrix.map(n).join(" "),
-                                        drawing.resources()
+                                        resources
                                     ),
                                     &drawing.content(width, height),
                                 ),

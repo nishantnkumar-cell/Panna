@@ -171,6 +171,21 @@ pub(crate) enum Drawing {
         color: Color,
     },
     Background(Color),
+    /// Lines of text added to the page, the first line's top-left corner at `x`, `top`
+    /// (from the top of the page as shown).
+    Text {
+        x: f64,
+        top: f64,
+        lines: Vec<String>,
+        size: f64,
+        color: Color,
+    },
+    /// A picture added to the page, filling `rect` (left, top, right, bottom from the
+    /// top-left corner of the page as shown).
+    Picture {
+        rect: [f64; 4],
+        image: super::picture::StampImage,
+    },
     /// One, then the other.
     Both(Box<Drawing>, Box<Drawing>),
 }
@@ -194,6 +209,14 @@ impl Drawing {
                 a = n(a)
             ),
             None => RESOURCES.to_owned(),
+        }
+    }
+
+    /// The picture it draws, which needs objects of its own.
+    pub(crate) fn picture(&self) -> Option<&super::picture::StampImage> {
+        match self {
+            Drawing::Picture { image, .. } => Some(image),
+            _ => None,
         }
     }
 
@@ -251,6 +274,39 @@ impl Drawing {
                 out.push_str(") Tj ET Q EMC\n");
                 out
             }
+            Drawing::Text {
+                x,
+                top,
+                lines,
+                size,
+                color,
+            } => {
+                let mut out = format!(
+                    "BT /PaHe {} Tf {} rg {} TL ",
+                    n(*size),
+                    rgb(*color),
+                    n(size * f64::from(super::annot::LINE_HEIGHT))
+                );
+                // The first baseline sits an ascent below the top.
+                let _ = write!(out, "{} {} Td", n(*x), n(height - top - size * 0.77));
+                for (i, line) in lines.iter().enumerate() {
+                    out.push_str(if i == 0 { " (" } else { " T* (" });
+                    out.push_str(&literal(&win_ansi(line)));
+                    out.push_str(") Tj");
+                }
+                out.push_str(" ET\n");
+                out
+            }
+            Drawing::Picture {
+                rect: [x0, top, x1, bottom],
+                ..
+            } => format!(
+                "q {} 0 0 {} {} {} cm /PaIm Do Q\n",
+                n(x1 - x0),
+                n(bottom - top),
+                n(*x0),
+                n(height - bottom)
+            ),
             Drawing::Both(a, b) => a.content(width, height) + &b.content(width, height),
         }
     }

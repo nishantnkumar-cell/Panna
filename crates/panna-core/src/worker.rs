@@ -45,6 +45,11 @@ pub enum PageEdit {
         pages: Vec<usize>,
         mark: crate::Watermark,
     },
+    /// Adds text, pictures or links to a page.
+    Add {
+        page: usize,
+        additions: Vec<crate::Addition>,
+    },
     /// Removes hidden information.
     Clean(crate::Cleanup),
     /// Gives the document new password protection, or removes it.
@@ -524,6 +529,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Flatten { comments, fields } => current
                         .flattened(comments, fields)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::Add { page, additions } => current
+                        .with_additions(page, &additions)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Watermark { pages, mark } => current
                         .with_watermark(&pages, &mark)

@@ -408,6 +408,72 @@ pub(crate) fn watermark(
     )
 }
 
+/// Something added to a page itself, rather than as a comment. Places are in points from the
+/// top-left corner of the page as shown (the same space as [`crate::TextBox`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Addition {
+    /// Lines of text in Helvetica, the first line's top-left corner at `at`.
+    Text {
+        at: (f32, f32),
+        text: String,
+        size: f32,
+        color: Color,
+    },
+    /// A picture filling `rect`.
+    Picture { rect: crate::TextBox, image: StampImage },
+    /// An area that opens a web or email address, or goes to a page, when clicked.
+    Link {
+        rect: crate::TextBox,
+        target: crate::LinkTarget,
+    },
+}
+
+/// Every page of `doc`, with `additions` added to page `page`.
+pub(crate) fn add(
+    doc: Input<'_>,
+    count: usize,
+    page: usize,
+    additions: &[Addition],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    let extra = extras.get_mut(page).ok_or(SaveError::NoSuchPage(page))?;
+    let corners = |r: &crate::TextBox| [r.x0, r.y0, r.x1, r.y1].map(f64::from);
+    for addition in additions {
+        match addition {
+            Addition::Text {
+                at,
+                text,
+                size,
+                color,
+            } => {
+                let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+                if lines.iter().all(|l| l.trim().is_empty()) {
+                    continue;
+                }
+                extra.over.push(marks::Drawing::Text {
+                    x: f64::from(at.0),
+                    top: f64::from(at.1),
+                    lines,
+                    size: f64::from(size.clamp(1.0, 500.0)),
+                    color: *color,
+                });
+            }
+            Addition::Picture { rect, image } => extra.over.push(marks::Drawing::Picture {
+                rect: corners(rect),
+                image: image.clone(),
+            }),
+            Addition::Link { rect, target } => extra.links.push((corners(rect), target.clone())),
+        }
+    }
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
 /// Every page of `doc` in a file without password protection, to hand to the printing
 /// system, if the file's permissions allow printing.
 pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveError> {

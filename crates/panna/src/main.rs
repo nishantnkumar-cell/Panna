@@ -4,6 +4,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod add;
 mod annotate;
 mod clipboard;
 mod colors;
@@ -245,6 +246,10 @@ enum Message {
     /// Show or hide layer n.
     ShowLayer(usize, bool),
     Measure(measure::Event),
+    /// Adding text, pictures and links to pages.
+    Add(add::Event),
+    AddPictureChosen(Option<PathBuf>),
+    AddPictureLoaded(Result<panna_core::StampImage, String>),
     /// Turn the snapshot tool on or off.
     ToggleSnapshot,
     SnapshotTaken(Result<panna_core::RenderedPage, String>),
@@ -306,6 +311,7 @@ struct App {
     snapping: bool,
     snapshot: Option<Snapshot>,
     measure: measure::Measure,
+    adder: add::Adder,
     annotate: annotate::Annotate,
     form: form::Form,
     /// Asking whether to reset the form.
@@ -645,6 +651,7 @@ impl App {
             snapping: false,
             snapshot: None,
             measure: measure::Measure::default(),
+            adder: add::Adder::default(),
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -987,6 +994,12 @@ impl App {
                 } else if self.snapping {
                     self.snapping = false;
                     self.snapshot = None;
+                } else if self.adder.on {
+                    if self.adder.busy() {
+                        self.adder.cancel();
+                    } else {
+                        self.adder.on = false;
+                    }
                 } else if self.measure.on {
                     if self.measure.active() {
                         self.measure.clear();
@@ -1098,6 +1111,10 @@ impl App {
             Message::Find(event) => self.find_event(event),
             Message::PagePointer(page, position) => {
                 self.hover = Some((page, position));
+                if self.adder.on {
+                    self.adder.hover(page, self.page_map(page).to_page(position));
+                    return Task::none();
+                }
                 if self.measure.on {
                     self.measure.hover(page, self.page_map(page).to_page(position));
                     return Task::none();
@@ -1116,6 +1133,12 @@ impl App {
                     && let Some(selection) = &mut self.selection
                 {
                     selection.focus = caret;
+                }
+                Task::none()
+            }
+            Message::PagePress(page) if self.adder.on => {
+                if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
+                    self.adder.press(page, self.page_map(page).to_page(position));
                 }
                 Task::none()
             }
@@ -1348,9 +1371,59 @@ impl App {
                 }
                 Task::batch([self.request_visible(), self.request_thumbnails()])
             }
+            Message::Add(event) => {
+                if self.saving {
+                    return Task::none();
+                }
+                self.all_tools = false;
+                let pages = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                let outcome = self.adder.update(event, pages);
+                if self.adder.on {
+                    self.measure.on = false;
+                    self.measure.clear();
+                    self.snapping = false;
+                    self.snapshot = None;
+                    self.selection = None;
+                    if self.annotate.open {
+                        self.annotate.update(annotate::Event::Toggle);
+                    }
+                }
+                self.after_adding(outcome)
+            }
+            Message::AddPictureChosen(None) => {
+                self.adder.cancel();
+                Task::none()
+            }
+            Message::AddPictureChosen(Some(path)) => {
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let result = std::fs::read(&path)
+                        .map_err(|e| format!("Couldn't open the picture: {e}"))
+                        .and_then(|bytes| panna_core::StampImage::decode(&bytes));
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::AddPictureLoaded(
+                        result.unwrap_or_else(|_| Err("The picture couldn't be read.".into())),
+                    )
+                })
+            }
+            Message::AddPictureLoaded(result) => {
+                let image = match result {
+                    Ok(image) => Some(image),
+                    Err(e) => {
+                        self.notice = Some(e);
+                        None
+                    }
+                };
+                let outcome = self.adder.picture(image);
+                self.after_adding(outcome)
+            }
             Message::Measure(event) => {
                 self.measure.update(event);
                 if self.measure.on {
+                    self.adder.on = false;
+                    self.adder.cancel();
                     self.snapping = false;
                     self.snapshot = None;
                     self.selection = None;
@@ -1358,6 +1431,8 @@ impl App {
                 Task::none()
             }
             Message::ToggleSnapshot => {
+                self.adder.on = false;
+                self.adder.cancel();
                 self.measure.on = false;
                 self.measure.clear();
                 self.snapping = !self.snapping;
@@ -1465,6 +1540,10 @@ impl App {
                 self.copy_primary()
             }
             Message::PointerReleased => {
+                if self.adder.on {
+                    let outcome = self.adder.release();
+                    return self.after_adding(outcome);
+                }
                 if self.snapshot.is_some_and(|s| s.dragging) {
                     return self.take_snapshot();
                 }
@@ -2408,6 +2487,33 @@ impl App {
 
     /// Sends a page change to the worker, with unsaved comments and form entries first so
     /// they go along.
+    /// Carries out what adding to a page asked for: the change itself, a picture to choose,
+    /// or the card's input to focus.
+    fn after_adding(&mut self, outcome: add::Outcome) -> Task<Message> {
+        match outcome {
+            add::Outcome::Add(page, addition) => self.edit_pages(
+                PageEdit::Add {
+                    page,
+                    additions: vec![addition],
+                },
+                page,
+                false,
+            ),
+            add::Outcome::PickPicture => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Add a picture")
+                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::AddPictureChosen,
+            ),
+            add::Outcome::Nothing => self.adder.focus().map_or_else(Task::none, operation::focus),
+        }
+    }
+
     fn edit_pages(&mut self, edit: PageEdit, show: usize, undo: bool) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
         if self.dirty() {
@@ -3272,6 +3378,20 @@ impl App {
         // Overlays always go in one stack above the body, so opening or closing one doesn't
         // move the body in the widget tree and reset its scroll position.
         let mut layers = vec![body];
+        if self.adder.on && self.doc.is_some() {
+            layers.push(
+                container(self.adder.bar())
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(Center)
+                    .align_y(iced::Bottom)
+                    .into(),
+            );
+        }
+        if let Some(card) = self.adder.card() {
+            layers.push(modal(card, Message::Add(add::Event::Cancel)));
+        }
         if self.measure.on && self.doc.is_some() {
             layers.push(
                 container(self.measure.bar())
@@ -3603,6 +3723,7 @@ impl App {
                             self.page_map(index),
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                         );
+                        let adding = self.adder.overlay(index, self.page_map(index));
                         let snapshot = self.snapshot.filter(|s| s.page == index).map(|s| {
                             let (x, y, w, h) = s.rect();
                             let zoom = self.zoom;
@@ -3643,6 +3764,7 @@ impl App {
                             && fields.is_empty()
                             && snapshot.is_none()
                             && measured.is_none()
+                            && adding.is_none()
                         {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
@@ -3654,6 +3776,7 @@ impl App {
                             layers.extend(fields);
                             layers.extend(snapshot);
                             layers.extend(measured);
+                            layers.extend(adding);
                             iced::widget::Stack::with_children(layers).into()
                         }
                     }
@@ -3701,7 +3824,7 @@ impl App {
                         } else {
                             mouse::Interaction::ResizingDiagonallyUp
                         }
-                    } else if self.snapping || self.measure.on {
+                    } else if self.snapping || self.measure.on || self.adder.on {
                         mouse::Interaction::Crosshair
                     } else if over_link {
                         mouse::Interaction::Pointer

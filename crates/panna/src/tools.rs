@@ -40,13 +40,18 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
         .push(has_doc.then(|| {
             column![
                 tool(
+                    Icon::EditPage,
+                    "Add text, pictures or links to pages",
+                    Message::Add(crate::add::Event::Toggle)
+                ),
+                tool(
                     Icon::CommentsImport,
-                    "Add comments from a file (FDF, XFDF)…",
+                    "Add comments from a file…",
                     Message::ImportComments
                 ),
                 tool(
                     Icon::CommentsExport,
-                    "Save comments to a file (FDF, XFDF)…",
+                    "Save comments to a file…",
                     Message::ExportComments
                 ),
             ]

@@ -1206,25 +1206,7 @@ impl Annotate {
         let current = self.picked_annotation().map_or_else(|| self.color(), |a| a.color);
         let mut swatches = Column::new().spacing(4).align_x(Center);
         for (i, color) in SWATCHES.iter().enumerate() {
-            let c = to_iced(*color, 1.0);
-            let selected = *color == current;
-            let swatch = button(space().width(16).height(16))
-                .padding(0)
-                .style(move |theme: &Theme, _| button::Style {
-                    background: Some(c.into()),
-                    border: iced::Border {
-                        color: if selected {
-                            theme.extended_palette().primary.strong.color
-                        } else {
-                            theme.extended_palette().background.strong.color
-                        },
-                        width: if selected { 3.0 } else { 1.0 },
-                        radius: 9.0.into(),
-                    },
-                    ..button::Style::default()
-                })
-                .on_press(ev(Event::Color(i)));
-            swatches = swatches.push(icons::with_tip(swatch, COLOR_NAMES.get(i).copied().unwrap_or("")));
+            swatches = swatches.push(swatch(*color, *color == current, ev(Event::Color(i))));
         }
         let opacity = icons::with_tip(
             vertical_slider(0.1..=1.0, self.opacity(), move |v| ev(Event::Opacity(v)))
@@ -1313,6 +1295,34 @@ impl Annotate {
         .style(container::rounded_box);
         Some(card.into())
     }
+}
+
+/// A round colour button, named in its tip, ringed when `selected`.
+pub fn swatch<'a>(color: Color, selected: bool, on_press: Message) -> Element<'a, Message> {
+    let c = to_iced(color, 1.0);
+    let name = SWATCHES
+        .iter()
+        .position(|s| *s == color)
+        .and_then(|i| COLOR_NAMES.get(i))
+        .copied()
+        .unwrap_or("");
+    let button = button(space().width(16).height(16))
+        .padding(0)
+        .style(move |theme: &Theme, _| button::Style {
+            background: Some(c.into()),
+            border: iced::Border {
+                color: if selected {
+                    theme.extended_palette().primary.strong.color
+                } else {
+                    theme.extended_palette().background.strong.color
+                },
+                width: if selected { 3.0 } else { 1.0 },
+                radius: 9.0.into(),
+            },
+            ..button::Style::default()
+        })
+        .on_press(on_press);
+    icons::with_tip(button, name)
 }
 
 /// The card for choosing which stamp to place.

@@ -408,6 +408,23 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with text, pictures or links added to page `page`, as a new file.
+    pub fn with_additions(
+        &self,
+        page: usize,
+        additions: &[crate::Addition],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::add(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                page,
+                additions,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The document with `mark` drawn on the pages at `pages`, as a new file.
     pub fn with_watermark(
         &self,
