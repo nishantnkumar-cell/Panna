@@ -21,6 +21,9 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     if modifiers.shift() && !modifiers.command() && key == Key::Named(Named::F3) {
         return Some(Message::Find(Event::Prev));
     }
+    if modifiers.command() && key == Key::Named(Named::Tab) {
+        return Some(Message::NextTab(!modifiers.shift()));
+    }
     if modifiers.command() && modifiers.shift() {
         return match key.as_ref() {
             Key::Character("g" | "G") => Some(Message::Find(Event::Prev)),
@@ -38,6 +41,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     if modifiers.command() {
         return match key.as_ref() {
             Key::Character("o") => Some(Message::OpenDialog),
+            Key::Character("w") => Some(Message::CloseTab),
             Key::Character("d") => Some(Message::ToggleProperties),
             Key::Character("l") => Some(Message::Present),
             Key::Character("=" | "+") => Some(Message::ZoomIn),

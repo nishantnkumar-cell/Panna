@@ -297,6 +297,14 @@ enum Message {
         result: Result<Vec<Comment>, SaveError>,
     },
     CloseRequested(window::Id),
+    /// Show the document in tab n.
+    SwitchTab(usize),
+    /// Show the next (or previous) tab.
+    NextTab(bool),
+    /// Close the document shown.
+    CloseTab,
+    /// Close the document in tab n.
+    CloseTabAt(usize),
     Confirm(Choice),
     DismissNotice,
     Ignore,
@@ -305,6 +313,12 @@ enum Message {
 struct App {
     next_doc_id: u64,
     doc: Option<OpenDoc>,
+    /// The other open documents, in tab order with the shown one left out.
+    parked: Vec<Parked>,
+    /// Where the shown document's tab sits among them.
+    active_tab: usize,
+    /// Files still to open in tabs of their own, last first.
+    to_open: Vec<PathBuf>,
     status: Status,
     zoom: f32,
     /// View rotation in clockwise quarter turns (0–3), applied to every page.
@@ -393,8 +407,8 @@ enum Screen {
 #[derive(Debug, Clone)]
 enum Pending {
     Close,
-    Open(PathBuf),
-    OpenDialog,
+    /// Close the document shown, keeping the others open.
+    CloseTab,
 }
 
 /// Reads `files`, makes a PDF of them and writes it to `target`, on a thread of its own.
@@ -455,6 +469,33 @@ enum Status {
         /// A password was tried and rejected.
         wrong: bool,
     },
+}
+
+/// An open document in a tab that isn't shown, with how it was being viewed.
+struct Parked {
+    doc: OpenDoc,
+    zoom: f32,
+    rotation: u8,
+    offset: (f32, f32),
+    find: find::Find,
+    annotate: annotate::Annotate,
+    form: form::Form,
+    comparison: Option<compare::Comparison>,
+    page_edits: usize,
+    dirty: bool,
+}
+
+impl Parked {
+    fn name(&self) -> String {
+        tab_name(&self.doc)
+    }
+}
+
+fn tab_name(doc: &OpenDoc) -> String {
+    doc.path.file_name().map_or_else(
+        || doc.path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 struct OpenDoc {
@@ -622,6 +663,9 @@ impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
         let mut app = Self {
+            parked: Vec::new(),
+            active_tab: 0,
+            to_open: Vec::new(),
             next_doc_id: 0,
             doc: None,
             status: Status::Idle,
@@ -679,8 +723,14 @@ impl App {
         let scale = window::oldest()
             .and_then(window::scale_factor)
             .map(Message::ScaleFactor);
-        let open = match std::env::args_os().nth(1) {
-            Some(arg) => app.open(PathBuf::from(arg), None),
+        // Each file named opens in a tab of its own, one after another.
+        let mut files: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+        files.reverse();
+        let open = match files.pop() {
+            Some(first) => {
+                app.to_open = files;
+                app.open(first, None)
+            }
             None => Task::none(),
         };
         (app, Task::batch([scale, open]))
@@ -748,10 +798,6 @@ impl App {
             self.all_tools = false;
         }
         match message {
-            Message::OpenDialog if self.dirty() => {
-                self.confirm = Some(Pending::OpenDialog);
-                Task::none()
-            }
             Message::OpenDialog => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -763,13 +809,7 @@ impl App {
                 },
                 Message::FileChosen,
             ),
-            Message::FileChosen(Some(path)) => {
-                if self.dirty() {
-                    self.confirm = Some(Pending::Open(path));
-                    return Task::none();
-                }
-                self.open(path, None)
-            }
+            Message::FileChosen(Some(path)) => self.open(path, None),
             Message::FileChosen(None) | Message::Ignore => Task::none(),
             Message::Opened(id, result) => {
                 let Some(doc) = self.doc.as_mut().filter(|d| d.id == id) else {
@@ -795,13 +835,17 @@ impl App {
                         self.status = Status::Idle;
                         self.zoom = 1.0;
                         self.viewport.offset_y = 0.0;
-                        Task::batch([
+                        let shown = Task::batch([
                             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y: 0.0 }),
                             self.request_visible(),
                             self.request_thumbnails(),
                             self.request_search_text(),
                             self.request_comment_text(),
-                        ])
+                        ]);
+                        match self.to_open.pop() {
+                            Some(next) => Task::batch([shown, self.open(next, None)]),
+                            None => shown,
+                        }
                     }
                     Err(OpenError::PasswordRequired) => {
                         self.status = Status::Password {
@@ -2395,7 +2439,47 @@ impl App {
                     self.confirm = Some(Pending::Close);
                     return Task::none();
                 }
+                // Another tab with unsaved changes is shown and asked about first.
+                if let Some(i) = self.parked.iter().position(|t| t.dirty) {
+                    let tab = if i < self.active_tab { i } else { i + 1 };
+                    let shown = self.switch_tab(tab);
+                    self.confirm = Some(Pending::Close);
+                    return shown;
+                }
                 window::close(id)
+            }
+            Message::SwitchTab(tab) => self.switch_tab(tab),
+            Message::NextTab(forward) => {
+                let count = self.parked.len() + 1;
+                if count < 2 {
+                    return Task::none();
+                }
+                let tab = if forward {
+                    (self.active_tab + 1) % count
+                } else {
+                    (self.active_tab + count - 1) % count
+                };
+                self.switch_tab(tab)
+            }
+            Message::CloseTabAt(tab) => {
+                if tab == self.active_tab {
+                    return self.update(Message::CloseTab);
+                }
+                let shown = self.switch_tab(tab);
+                if self.active_tab == tab {
+                    return Task::batch([shown, self.update(Message::CloseTab)]);
+                }
+                shown
+            }
+            Message::CloseTab => {
+                if self.doc.is_none() || self.saving || self.pages_busy || self.printing {
+                    return Task::none();
+                }
+                if self.dirty() {
+                    self.confirm = Some(Pending::CloseTab);
+                    return Task::none();
+                }
+                self.close_tab()
             }
             Message::Confirm(choice) => {
                 let Some(pending) = self.confirm.take() else {
@@ -2794,9 +2878,21 @@ impl App {
     /// Carries out an action that was waiting on "Save changes?".
     fn proceed(&mut self, pending: Pending) -> Task<Message> {
         match pending {
-            Pending::Close => iced::exit(),
-            Pending::Open(path) => self.open(path, None),
-            Pending::OpenDialog => self.update(Message::OpenDialog),
+            Pending::Close => {
+                // Any other tab with unsaved changes is asked about in turn.
+                self.doc = None;
+                match self.parked.iter().position(|t| t.dirty) {
+                    Some(i) => {
+                        let tab = self.parked.remove(i);
+                        self.active_tab = i;
+                        let shown = self.unpark(tab);
+                        self.confirm = Some(Pending::Close);
+                        shown
+                    }
+                    None => iced::exit(),
+                }
+            }
+            Pending::CloseTab => self.close_tab(),
         }
     }
 
@@ -3158,7 +3254,197 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// Takes the shown document out of view, with how it was being viewed, ending any tool
+    /// in use on it.
+    fn park(&mut self) -> Option<Parked> {
+        let dirty = self.dirty();
+        let doc = self.doc.take()?;
+        self.measure.on = false;
+        self.measure.clear();
+        self.adder.on = false;
+        self.adder.cancel();
+        self.redactor.stop();
+        self.preparer.stop();
+        self.snapping = false;
+        self.snapshot = None;
+        self.selection = None;
+        self.hover = None;
+        self.show_properties = false;
+        Some(Parked {
+            doc,
+            zoom: self.zoom,
+            rotation: self.rotation,
+            offset: (self.viewport.offset_x, self.viewport.offset_y),
+            find: std::mem::take(&mut self.find),
+            annotate: std::mem::replace(&mut self.annotate, annotate::Annotate::new()),
+            form: std::mem::take(&mut self.form),
+            comparison: self.comparison.take(),
+            page_edits: std::mem::take(&mut self.page_edits),
+            dirty,
+        })
+    }
+
+    /// Shows a parked document again where it was left.
+    fn unpark(&mut self, tab: Parked) -> Task<Message> {
+        let mut doc = tab.doc;
+        // Replies for it while it was out of view were dropped, so it asks again.
+        for slot in &mut doc.pages {
+            slot.pending_scale = None;
+        }
+        for thumb in &mut doc.thumbs {
+            thumb.pending = false;
+        }
+        for text in &mut doc.texts {
+            text.pending = false;
+        }
+        self.doc = Some(doc);
+        self.zoom = tab.zoom;
+        self.rotation = tab.rotation;
+        self.viewport.offset_x = tab.offset.0;
+        self.viewport.offset_y = tab.offset.1;
+        self.find = tab.find;
+        self.annotate = tab.annotate;
+        self.form = tab.form;
+        self.comparison = tab.comparison;
+        self.page_edits = tab.page_edits;
+        self.status = Status::Idle;
+        self.page_input = (self.current_page() + 1).to_string();
+        Task::batch([
+            operation::scroll_to(
+                scroll_id(),
+                AbsoluteOffset {
+                    x: tab.offset.0,
+                    y: tab.offset.1,
+                },
+            ),
+            self.request_visible(),
+            self.request_thumbnails(),
+            self.request_search_text(),
+        ])
+    }
+
+    /// Shows tab `tab` (counting the shown one).
+    fn switch_tab(&mut self, tab: usize) -> Task<Message> {
+        if tab == self.active_tab
+            || tab > self.parked.len()
+            || self.saving
+            || self.pages_busy
+            || self.printing
+        {
+            return Task::none();
+        }
+        let wanted = if tab < self.active_tab { tab } else { tab - 1 };
+        if wanted >= self.parked.len() {
+            return Task::none();
+        }
+        let next = self.parked.remove(wanted);
+        if let Some(current) = self.park() {
+            self.parked
+                .insert(self.active_tab.min(self.parked.len()), current);
+        }
+        self.active_tab = tab;
+        self.unpark(next)
+    }
+
+    /// Closes the shown document, showing the next tab (or the start screen).
+    fn close_tab(&mut self) -> Task<Message> {
+        let _ = self.park();
+        self.find = find::Find::default();
+        self.annotate = annotate::Annotate::new();
+        self.form = form::Form::default();
+        self.comparison = None;
+        self.page_edits = 0;
+        self.status = Status::Idle;
+        if self.parked.is_empty() {
+            self.active_tab = 0;
+            return Task::none();
+        }
+        let at = self.active_tab.min(self.parked.len() - 1);
+        let next = self.parked.remove(at);
+        self.active_tab = at;
+        self.unpark(next)
+    }
+
+    /// The row of tabs, when more than one document is open.
+    fn tab_bar(&self) -> Element<'_, Message> {
+        if self.parked.is_empty() {
+            return space().height(0).into();
+        }
+        let shown = self
+            .doc
+            .as_ref()
+            .map(tab_name)
+            .unwrap_or_else(|| match &self.status {
+                Status::Loading(path) | Status::Password { path, .. } => path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+                _ => "New tab".to_owned(),
+            });
+        let mut names: Vec<(String, bool)> = self.parked.iter().map(|t| (t.name(), t.dirty)).collect();
+        names.insert(self.active_tab.min(names.len()), (shown, self.dirty()));
+        let tabs = names.into_iter().enumerate().map(|(i, (name, dirty))| {
+            let active = i == self.active_tab;
+            let label = if dirty { format!("{name} •") } else { name };
+            let tab = row![
+                button(text(label).size(13).wrapping(text::Wrapping::None))
+                    .padding([4, 8])
+                    .style(button::text)
+                    .on_press(Message::SwitchTab(i)),
+                icons::button(
+                    Icon::Close,
+                    "Close this document (Ctrl+W)",
+                    Some(Message::CloseTabAt(i))
+                ),
+            ]
+            .align_y(Center);
+            container(tab)
+                .max_width(240)
+                .clip(true)
+                .style(move |theme: &iced::Theme| {
+                    let palette = theme.extended_palette();
+                    let style = container::Style::default().border(iced::Border {
+                        color: palette.background.strong.color,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    });
+                    if active {
+                        style.background(palette.background.base.color)
+                    } else {
+                        style.background(palette.background.weak.color)
+                    }
+                })
+                .into()
+        });
+        container(scrollable(row(tabs).spacing(4).padding([4, 8])).direction(
+            scrollable::Direction::Horizontal(scrollable::Scrollbar::new().width(4).scroller_width(4)),
+        ))
+        .width(Fill)
+        .into()
+    }
+
     fn open(&mut self, path: PathBuf, password: Option<String>) -> Task<Message> {
+        // A file already open in a tab is shown rather than opened again.
+        if password.is_none() {
+            if self
+                .doc
+                .as_ref()
+                .is_some_and(|d| d.path == path && !d.info.pages.is_empty())
+            {
+                return Task::none();
+            }
+            if let Some(i) = self.parked.iter().position(|t| t.doc.path == path) {
+                let tab = if i < self.active_tab { i } else { i + 1 };
+                return self.switch_tab(tab);
+            }
+        }
+        // The document shown keeps its tab; the new one opens in a tab after it.
+        if matches!(self.status, Status::Idle)
+            && self.doc.as_ref().is_some_and(|d| !d.info.pages.is_empty())
+            && let Some(tab) = self.park()
+        {
+            self.parked.insert(self.active_tab.min(self.parked.len()), tab);
+            self.active_tab += 1;
+        }
         let id = self.next_doc_id;
         self.next_doc_id += 1;
         self.show_properties = false;
@@ -3637,6 +3923,7 @@ impl App {
         };
         // Overlays always go in one stack above the body, so opening or closing one doesn't
         // move the body in the widget tree and reset its scroll position.
+        let body = column![self.tab_bar(), body].into();
         let mut layers = vec![body];
         if self.adder.on && self.doc.is_some() {
             layers.push(

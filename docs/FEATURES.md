@@ -21,7 +21,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Select and copy text | V1 | Done; drag or double-click, Ctrl+C; across pages; Linux middle-click paste |
 | Copy image / snapshot tool | Later | Done: the camera button turns on the snapshot tool; dragging over a page copies a picture of the area, as shown and with unsaved changes, to the clipboard at 144 dpi or sharper. Esc turns it off |
 | Internal links and cross-references | V1 | Done: page links jump straight there; web and mail links ask first, then go to the system browser or mail program (Panna itself stays offline). Links that launch programs, open files or run scripts are ignored |
-| Tabs / multiple documents open | Later | |
+| Tabs / multiple documents open | Done | Opening a file while another is open adds a tab, and each tab keeps its own zoom, place, search, comments and form entries. Ctrl+Tab and Ctrl+Shift+Tab move between tabs, Ctrl+W closes one (asking about unsaved changes), and closing the window asks about every tab with unsaved changes. Files named on the command line open in tabs of their own |
 | Full-screen / presentation mode | Later | Done: full screen keeping the tools (F11), and presenting one page at a time on black (Ctrl+L, as in Acrobat); click, Space or arrows to move, Escape to leave |
 | Night mode / custom page colours (accessibility) | Later | Done: original, dark (hues kept, lightness inverted) and sepia, cycled from the moon button or Ctrl+Shift+D; remembered |
 | Recent files list | V1 | Done; stored locally only |
