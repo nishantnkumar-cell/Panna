@@ -31,6 +31,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("n" | "N") => Some(Message::FocusPageBox),
             Key::Character("c" | "C") => Some(Message::Annotate(annotate::Event::Toggle)),
             Key::Character("t" | "T") => Some(Message::NextSpread),
+            Key::Character("d" | "D") => Some(Message::NextColors),
             _ => None,
         };
     }

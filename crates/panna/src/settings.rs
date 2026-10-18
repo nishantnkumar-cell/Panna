@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use iced::Point;
 
+use crate::colors::PageColors;
 use crate::layout::Spread;
 use crate::sidebar::{Side, Tab};
 use crate::toolbar::Dock;
@@ -21,6 +22,7 @@ pub struct Settings {
     pub sidebar_side: Side,
     pub sidebar_tab: Tab,
     pub spread: Spread,
+    pub colors: PageColors,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -34,6 +36,7 @@ impl Default for Settings {
             sidebar_side: Side::Left,
             sidebar_tab: Tab::Thumbnails,
             spread: Spread::Single,
+            colors: PageColors::Normal,
             recent: Vec::new(),
         }
     }
@@ -91,6 +94,7 @@ impl Settings {
                 "sidebar.side" => out.sidebar_side = Side::parse(value.trim()).unwrap_or(out.sidebar_side),
                 "sidebar.tab" => out.sidebar_tab = Tab::parse(value.trim()).unwrap_or(out.sidebar_tab),
                 "view.spread" => out.spread = Spread::parse(value.trim()).unwrap_or(out.spread),
+                "view.colors" => out.colors = PageColors::parse(value.trim()).unwrap_or(out.colors),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
                     out.recent.push(PathBuf::from(value));
@@ -103,7 +107,7 @@ impl Settings {
 
     fn serialize(&self) -> String {
         let mut out = format!(
-            "toolbar.dock={}\ntoolbar.x={}\ntoolbar.y={}\nsidebar.open={}\nsidebar.side={}\nsidebar.tab={}\nview.spread={}\n",
+            "toolbar.dock={}\ntoolbar.x={}\ntoolbar.y={}\nsidebar.open={}\nsidebar.side={}\nsidebar.tab={}\nview.spread={}\nview.colors={}\n",
             self.toolbar_dock.as_str(),
             self.toolbar_pos.x,
             self.toolbar_pos.y,
@@ -111,6 +115,7 @@ impl Settings {
             self.sidebar_side.as_str(),
             self.sidebar_tab.as_str(),
             self.spread.as_str(),
+            self.colors.as_str(),
         );
         // Paths that aren't UTF-8 or contain line breaks can't be stored in this format.
         for path in &self.recent {
@@ -158,6 +163,7 @@ mod tests {
             sidebar_side: Side::Right,
             sidebar_tab: Tab::Bookmarks,
             spread: Spread::TwoCover,
+            colors: PageColors::Sepia,
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);

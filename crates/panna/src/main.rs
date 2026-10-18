@@ -5,6 +5,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod annotate;
+mod colors;
 mod comments;
 mod find;
 mod form;
@@ -105,6 +106,7 @@ enum Message {
     FitPage,
     RotateCw,
     NextSpread,
+    NextColors,
     RotateCcw,
     PrevPage,
     NextPage,
@@ -638,6 +640,16 @@ impl App {
                 Task::batch([zoom_task, self.go_to_page(page)])
             }
             Message::RotateCw => self.rotate(1),
+            Message::NextColors => {
+                self.settings.colors = self.settings.colors.next();
+                self.settings.save();
+                // Every page and thumbnail is drawn again in the new colours.
+                if let Some(doc) = &mut self.doc {
+                    doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
+                    doc.thumbs.iter_mut().for_each(|thumb| *thumb = Thumb::default());
+                }
+                Task::batch([self.request_visible(), self.request_thumbnails()])
+            }
             Message::NextSpread => {
                 self.settings.spread = self.settings.spread.next();
                 self.settings.save();
@@ -1568,7 +1580,11 @@ impl App {
             slot.pending_scale = Some(scale);
             let (tx, rx) = futures_channel::oneshot::channel();
             let rotation = self.rotation;
-            doc.worker.render(index, scale, rotation, move |result| {
+            let colors = self.settings.colors;
+            doc.worker.render(index, scale, rotation, move |mut result| {
+                if let Ok(page) = &mut result {
+                    colors.apply(&mut page.rgba);
+                }
                 let _ = tx.send(result);
             });
             let doc_id = doc.id;
@@ -1637,8 +1653,12 @@ impl App {
             let scale = doc.thumb_layout.size(index).0 / size.width.max(1.0) * self.scale_factor;
             thumb.pending = true;
             let (tx, rx) = futures_channel::oneshot::channel();
+            let colors = self.settings.colors;
             doc.worker
-                .render_thumbnail(index, scale, rotation, move |result| {
+                .render_thumbnail(index, scale, rotation, move |mut result| {
+                    if let Ok(page) = &mut result {
+                        colors.apply(&mut page.rgba);
+                    }
                     let _ = tx.send(result);
                 });
             let doc_id = doc.id;
@@ -1720,6 +1740,16 @@ impl App {
                     Spread::TwoCover => format!("Two pages with cover: click for single page ({m}Shift+T)"),
                 },
                 on(Message::NextSpread),
+            ),
+            icons::toggle(
+                Icon::Moon,
+                format!(
+                    "Page colours: {} (click for {}, {m}Shift+D)",
+                    self.settings.colors.label(),
+                    self.settings.colors.next().label()
+                ),
+                self.settings.colors != colors::PageColors::Normal,
+                Message::NextColors,
             ),
             gap(),
             icons::button(
