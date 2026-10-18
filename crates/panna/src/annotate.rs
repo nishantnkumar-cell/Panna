@@ -2,11 +2,13 @@
 //! with undo and redo.
 
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
-use iced::widget::{Column, button, column, container, row, space, text, text_editor, vertical_slider};
-use iced::{Center, Element, Point, Rectangle, Renderer, Size, Theme, mouse};
+use iced::widget::{
+    Column, button, column, container, row, space, text, text_editor, text_input, vertical_slider,
+};
+use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
     Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, ObjRef, ReviewState,
-    TextBox, text_width, wrap,
+    STAMPS, TextBox, stamp_label, text_width, wrap,
 };
 
 use crate::Message;
@@ -29,10 +31,11 @@ pub enum Tool {
     Line,
     Polygon,
     Cloud,
+    Stamp,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 13] = [
+    pub const ALL: [Tool; 14] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
@@ -46,6 +49,7 @@ impl Tool {
         Tool::Line,
         Tool::Polygon,
         Tool::Cloud,
+        Tool::Stamp,
     ];
 
     fn icon(self) -> Icon {
@@ -63,6 +67,7 @@ impl Tool {
             Tool::Line => Icon::Line,
             Tool::Polygon => Icon::Polygon,
             Tool::Cloud => Icon::Cloud,
+            Tool::Stamp => Icon::Stamp,
         }
     }
 
@@ -81,6 +86,7 @@ impl Tool {
             Tool::Line => "Draw a line",
             Tool::Polygon => "Draw a polygon: click each corner, double-click or Enter to finish",
             Tool::Cloud => "Draw a cloud: click each corner, double-click or Enter to finish",
+            Tool::Stamp => "Add a stamp such as Approved or Draft: click, or drag to size it",
         };
         format!("{what} ({})", self.key().to_ascii_uppercase())
     }
@@ -101,6 +107,7 @@ impl Tool {
             Tool::Line => 'l',
             Tool::Polygon => 'g',
             Tool::Cloud => 'c',
+            Tool::Stamp => 's',
         }
     }
 
@@ -150,6 +157,8 @@ pub const SWATCHES: [Color; 6] = [
 const STROKE_WIDTH: f32 = 2.0;
 const TEXT_SIZE: f32 = 12.0;
 const TEXT_BOX_WIDTH: f32 = 200.0;
+/// Height of a stamp placed with a click, in points.
+const STAMP_HEIGHT: f32 = 34.0;
 /// Drags shorter than this (in points) count as clicks.
 const CLICK_SLOP: f32 = 3.0;
 /// Most corners one polygon or cloud can have.
@@ -183,6 +192,21 @@ pub enum Event {
     Reply(Thread),
     /// Sets a saved comment's review status.
     SetStatus(Thread, ReviewState),
+    /// Places the standard stamp at this index of [`STAMPS`].
+    Stamp(usize),
+    /// Typing a custom stamp's text.
+    StampText(String),
+    /// Places a stamp with the typed text.
+    StampCustom,
+}
+
+/// Where a stamp goes, while its kind is being chosen.
+#[derive(Debug, Clone)]
+pub struct Stamping {
+    page: usize,
+    /// The dragged box, or a point (an empty box) for a click.
+    at: TextBox,
+    custom: String,
 }
 
 /// A saved comment that replies and statuses attach to.
@@ -248,6 +272,7 @@ pub struct Annotate {
     redo: Vec<Snapshot>,
     pub draft: Option<Draft>,
     pub editing: Option<Editing>,
+    pub stamping: Option<Stamping>,
     author: String,
     /// Saved comments Panna can redraw, so they can be moved and restyled.
     saved: Vec<(CommentId, Annotation)>,
@@ -659,7 +684,26 @@ impl Annotate {
                     return Outcome::Changed;
                 }
             }
-            Event::EditCancel => self.editing = None,
+            Event::EditCancel => {
+                self.editing = None;
+                self.stamping = None;
+            }
+            Event::Stamp(i) => {
+                if let Some(name) = STAMPS.get(i) {
+                    return self.place_stamp((*name).to_owned());
+                }
+            }
+            Event::StampText(value) => {
+                if let Some(s) = &mut self.stamping {
+                    s.custom = value.chars().filter(|c| !c.is_control()).take(60).collect();
+                }
+            }
+            Event::StampCustom => {
+                let text = self.stamping.as_ref().map(|s| s.custom.trim().to_owned());
+                if let Some(text) = text.filter(|t| !t.is_empty()) {
+                    return self.place_stamp(text);
+                }
+            }
             Event::FinishShape => return self.finish_shape(),
             Event::Reply(thread) => {
                 self.unpick();
@@ -693,6 +737,43 @@ impl Annotate {
             }
         }
         Outcome::Nothing
+    }
+
+    /// Adds the stamp being placed. A click centres a stamp sized to its words on the point.
+    fn place_stamp(&mut self, name: String) -> Outcome {
+        let Some(stamping) = self.stamping.take() else {
+            return Outcome::Nothing;
+        };
+        let at = stamping.at;
+        let rect = if at.width() >= CLICK_SLOP && at.height() >= CLICK_SLOP {
+            at
+        } else {
+            let h = STAMP_HEIGHT;
+            let w = (text_width(&stamp_label(&name)) as f32 * 1.06 * h * 0.55 + h * 0.8).max(h * 2.0);
+            TextBox {
+                x0: at.x0 - w / 2.0,
+                y0: at.y0 - h / 2.0,
+                x1: at.x0 + w / 2.0,
+                y1: at.y0 + h / 2.0,
+            }
+        };
+        self.record();
+        let chosen = self.colors.get(Tool::Stamp.index()).copied().flatten();
+        self.push(
+            stamping.page,
+            Kind::Stamp {
+                rect,
+                name: name.clone(),
+            },
+            Tool::Stamp,
+            String::new(),
+        );
+        if chosen.is_none()
+            && let Some(a) = self.items.last_mut()
+        {
+            a.color = stamp_color(&name);
+        }
+        Outcome::Changed
     }
 
     /// Adds a new annotation made with `tool`.
@@ -936,6 +1017,23 @@ impl Annotate {
                 return Outcome::Nothing;
             }
             Tool::Pen => Kind::Ink(vec![draft.points]),
+            Tool::Stamp => {
+                self.stamping = Some(Stamping {
+                    page: draft.page,
+                    at: if dragged {
+                        rect
+                    } else {
+                        TextBox {
+                            x0: start.0,
+                            y0: start.1,
+                            x1: start.0,
+                            y1: start.1,
+                        }
+                    },
+                    custom: String::new(),
+                });
+                return Outcome::Nothing;
+            }
             _ if !dragged => return Outcome::Nothing,
             Tool::Rect => Kind::Rect(rect),
             Tool::Ellipse => Kind::Ellipse(rect),
@@ -1035,6 +1133,9 @@ impl Annotate {
 
     /// The card for typing a note's or text box's text.
     pub fn editor(&self) -> Option<Element<'_, Message>> {
+        if let Some(stamping) = &self.stamping {
+            return Some(stamp_card(stamping));
+        }
         let editing = self.editing.as_ref()?;
         let ev = Message::Annotate;
         let title = match (editing.tool, editing.target.is_some()) {
@@ -1073,6 +1174,66 @@ impl Annotate {
         .padding(16)
         .style(container::rounded_box);
         Some(card.into())
+    }
+}
+
+/// The card for choosing which stamp to place.
+fn stamp_card(stamping: &Stamping) -> Element<'_, Message> {
+    let ev = Message::Annotate;
+    let mut grid = Column::new().spacing(6);
+    let (pairs, odd) = STAMPS.as_chunks::<2>();
+    let stamp = |i: usize, name: &str| {
+        let label = stamp_label(name);
+        button(text(label).size(12).width(Fill).align_x(Center))
+            .style(button::secondary)
+            .width(Fill)
+            .on_press(ev(Event::Stamp(i)))
+    };
+    for (row_index, pair) in pairs.iter().enumerate() {
+        let i = row_index * 2;
+        grid = grid.push(row![stamp(i, pair[0]), stamp(i + 1, pair[1])].spacing(6));
+    }
+    for name in odd {
+        grid = grid.push(stamp(STAMPS.len() - 1, name));
+    }
+    let custom = row![
+        text_input("Your own words", &stamping.custom)
+            .id(stamp_input_id())
+            .on_input(move |v| ev(Event::StampText(v)))
+            .on_submit(ev(Event::StampCustom)),
+        button("Add").on_press_maybe((!stamping.custom.trim().is_empty()).then(|| ev(Event::StampCustom))),
+    ]
+    .spacing(6);
+    container(
+        column![
+            text("Stamp").size(16),
+            grid,
+            custom,
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(Event::EditCancel)),
+            ],
+        ]
+        .spacing(10)
+        .width(340),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
+pub fn stamp_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("stamp-text")
+}
+
+/// The usual colour for a standard stamp: green for approval, red for warnings, blue otherwise.
+fn stamp_color(name: &str) -> Color {
+    match name {
+        "Approved" | "Final" | "ForPublicRelease" => SWATCHES[1],
+        "NotApproved" | "Confidential" | "TopSecret" | "Expired" | "NotForPublicRelease" => SWATCHES[3],
+        _ => SWATCHES[2],
     }
 }
 
@@ -1118,6 +1279,7 @@ fn can_resize(a: &Annotation) -> bool {
             | Kind::Ink(_)
             | Kind::Line { .. }
             | Kind::Polygon { .. }
+            | Kind::Stamp { .. }
     )
 }
 
@@ -1240,7 +1402,7 @@ impl canvas::Program<Message> for Preview<'_> {
                     b.close();
                 }
             }),
-            Tool::Rect | Tool::TextBox => Path::rectangle(top_left, size),
+            Tool::Rect | Tool::TextBox | Tool::Stamp => Path::rectangle(top_left, size),
             Tool::Ellipse => Path::new(|b| {
                 b.ellipse(canvas::path::arc::Elliptical {
                     center: Point::new(top_left.x + size.width / 2.0, top_left.y + size.height / 2.0),
@@ -1329,6 +1491,42 @@ mod tests {
             a.items.first().map(|i| (i.page, i.contents.as_str())),
             Some((2, "x"))
         );
+    }
+
+    #[test]
+    fn a_stamp_is_chosen_then_placed_on_the_click() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Stamp));
+        a.press(1, (100.0, 50.0));
+        a.release();
+        assert!(a.stamping.is_some() && a.items.is_empty());
+        assert!(matches!(a.update(Event::Stamp(0)), Outcome::Changed));
+        let Some(Annotation {
+            page: 1,
+            kind: Kind::Stamp { rect, name },
+            color,
+            ..
+        }) = a.items.first()
+        else {
+            panic!("no stamp: {:?}", a.items);
+        };
+        assert_eq!(name, "Approved");
+        assert_eq!(*color, SWATCHES[1]);
+        assert!((rect.x0 + rect.x1 - 200.0).abs() < 0.01 && (rect.height() - STAMP_HEIGHT).abs() < 0.01);
+        assert!(a.stamping.is_none());
+
+        // A custom stamp, dragged to size, in the colour picked for the tool.
+        a.update(Event::Color(4));
+        a.press(0, (10.0, 10.0));
+        a.drag(0, (110.0, 40.0));
+        a.release();
+        a.update(Event::StampText("Checked by Jo".into()));
+        assert!(matches!(a.update(Event::StampCustom), Outcome::Changed));
+        assert!(matches!(
+            a.items.get(1),
+            Some(Annotation { kind: Kind::Stamp { rect, name }, color, .. })
+                if name == "Checked by Jo" && rect.x1 == 110.0 && *color == SWATCHES[4]
+        ));
     }
 
     #[test]

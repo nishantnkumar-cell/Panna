@@ -44,7 +44,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Free text / text box comments | V1 | Done; Helvetica, wrapped to the box |
 | Freehand drawing (ink) | V1 | Done |
 | Shapes: rectangle, ellipse, line, arrow, polygon, cloud | V1 | Done: click each corner of a polygon or cloud, then double-click, press Enter or click the first corner to finish; Escape drops it |
-| Stamps (Approved, Draft, custom image stamps) | Later | |
+| Stamps (Approved, Draft, custom image stamps) | Later | Partly done: the 14 standard stamps and stamps with your own words (S key), movable and resizable. Image stamps to come |
 | Comment list panel, replies, status (accepted/rejected) | V1 | Done: Comments tab in the navigation pane, quotes highlighted text, click to jump. Saved comments can be replied to and given a review status (accepted, rejected, cancelled, completed); replies show in the comment's thread and are saved as standard /IRT reply annotations, which other PDF viewers read as threads |
 | Edit / move / delete annotations, colour and opacity | V1 | Six-colour palette per tool done; any comment, saved or new, can be deleted from the list (undoable; removed from the file on save, with its pop-up). Drag any comment to move it; recolour it or set its opacity (slider) while selected; Delete key removes it. Saved comments of kinds Panna draws are redrawn on change. Drag a selected shape, drawing or text box by a corner handle to resize it; double-click a comment to edit its text |
 | Undo / redo | V1 | Done (Ctrl+Z, Ctrl+Y) |

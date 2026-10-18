@@ -51,6 +51,12 @@ pub enum Kind {
         points: Vec<(f32, f32)>,
         cloud: bool,
     },
+    /// A rubber stamp: a word such as APPROVED in a rounded frame. `name` is its PDF name,
+    /// one of [`STAMPS`] or the stamp's own text.
+    Stamp {
+        rect: TextBox,
+        name: String,
+    },
     /// A reply to a saved comment, or with `state`, a review status set on it. It has no look
     /// of its own: viewers show it in the comment's thread. `at` is the comment's place.
     Reply {
@@ -119,7 +125,10 @@ impl Annotation {
                 *x += dx;
                 *y += dy;
             }
-            Kind::FreeText { rect, .. } | Kind::Rect(rect) | Kind::Ellipse(rect) => shift(rect),
+            Kind::FreeText { rect, .. }
+            | Kind::Rect(rect)
+            | Kind::Ellipse(rect)
+            | Kind::Stamp { rect, .. } => shift(rect),
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
                     *x += dx;
@@ -172,7 +181,10 @@ impl Annotation {
             | Kind::StrikeOut(_)
             | Kind::Note { .. }
             | Kind::Reply { .. } => {}
-            Kind::FreeText { rect, .. } | Kind::Rect(rect) | Kind::Ellipse(rect) => map_box(rect),
+            Kind::FreeText { rect, .. }
+            | Kind::Rect(rect)
+            | Kind::Ellipse(rect)
+            | Kind::Stamp { rect, .. } => map_box(rect),
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
                     (*x, *y) = (fx(*x), fy(*y));
@@ -453,6 +465,43 @@ impl Annotation {
                 bounds.grow(width);
                 "Polygon"
             }
+            Kind::Stamp { rect, name } => {
+                let [x0, y0, x1, y1] = user_box(rect);
+                bounds.add(x0, y0);
+                bounds.add(x1, y1);
+                let (w, h) = (x1 - x0, y1 - y0);
+                let border = (h.min(w) * 0.07).clamp(1.0, 6.0);
+                let _ = write!(content, "{color} RG {} w ", n(border));
+                rounded_rect(
+                    &mut content,
+                    x0 + border,
+                    y0 + border,
+                    x1 - border,
+                    y1 - border,
+                    h * 0.2,
+                );
+                content.push_str("S ");
+                let label = stamp_label(name);
+                // Helvetica-Bold runs about 6% wider than the Helvetica widths we have.
+                let em = text_width(&label).max(0.5) * 1.06;
+                let size = (h * 0.55).min((w - 4.0 * border - h * 0.3).max(1.0) / em);
+                resources.push_str(
+                    "/Font << /HeBo << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold \
+                     /Encoding /WinAnsiEncoding >> >> ",
+                );
+                let _ = write!(
+                    content,
+                    "BT /HeBo {} Tf {color} rg {} {} Td (",
+                    n(size),
+                    n(x0 + (w - em * size) / 2.0),
+                    // Capitals are about 0.72 of the size tall.
+                    n(y0 + (h - size * 0.72) / 2.0),
+                );
+                content.push_str(&literal(&win_ansi(&label)));
+                content.push_str(") Tj ET ");
+                let _ = write!(extra, "/Name /{} ", pdf_name(name));
+                "Stamp"
+            }
             Kind::Reply { to, at, state } => {
                 let [x0, y0, x1, y1] = user_box(at);
                 bounds.add(x0, y0);
@@ -594,6 +643,108 @@ impl Bounds {
     fn rect(&self) -> [f64; 4] {
         self.0.unwrap_or([0.0, 0.0, 1.0, 1.0])
     }
+}
+
+/// A rectangle with corners rounded by `r`, as a closed path.
+fn rounded_rect(out: &mut String, x0: f64, y0: f64, x1: f64, y1: f64, r: f64) {
+    let r = r.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0).max(0.0);
+    // Control points for a quarter circle drawn with one Bézier curve.
+    let k = r * (1.0 - 0.552_284_8);
+    let _ = write!(out, "{} {} m ", n(x0 + r), n(y0));
+    let _ = write!(out, "{} {} l ", n(x1 - r), n(y0));
+    let _ = write!(
+        out,
+        "{} {} {} {} {} {} c ",
+        n(x1 - k),
+        n(y0),
+        n(x1),
+        n(y0 + k),
+        n(x1),
+        n(y0 + r)
+    );
+    let _ = write!(out, "{} {} l ", n(x1), n(y1 - r));
+    let _ = write!(
+        out,
+        "{} {} {} {} {} {} c ",
+        n(x1),
+        n(y1 - k),
+        n(x1 - k),
+        n(y1),
+        n(x1 - r),
+        n(y1)
+    );
+    let _ = write!(out, "{} {} l ", n(x0 + r), n(y1));
+    let _ = write!(
+        out,
+        "{} {} {} {} {} {} c ",
+        n(x0 + k),
+        n(y1),
+        n(x0),
+        n(y1 - k),
+        n(x0),
+        n(y1 - r)
+    );
+    let _ = write!(out, "{} {} l ", n(x0), n(y0 + r));
+    let _ = write!(
+        out,
+        "{} {} {} {} {} {} c h ",
+        n(x0),
+        n(y0 + k),
+        n(x0 + k),
+        n(y0),
+        n(x0 + r),
+        n(y0)
+    );
+}
+
+/// The standard stamp names from the PDF specification, in the order Panna offers them.
+pub const STAMPS: [&str; 14] = [
+    "Approved",
+    "NotApproved",
+    "Draft",
+    "Final",
+    "Confidential",
+    "ForComment",
+    "Experimental",
+    "Expired",
+    "AsIs",
+    "Departmental",
+    "Sold",
+    "TopSecret",
+    "ForPublicRelease",
+    "NotForPublicRelease",
+];
+
+/// The words shown on a stamp: a standard name spelled out in capitals ("NOT APPROVED"), or a
+/// custom stamp's own text.
+pub fn stamp_label(name: &str) -> String {
+    if !STAMPS.contains(&name) {
+        return name.to_owned();
+    }
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if i > 0 && c.is_ascii_uppercase() {
+            out.push(' ');
+        }
+        out.push(c.to_ascii_uppercase());
+    }
+    out
+}
+
+/// `s` as the body of a PDF name: bytes other than plain printable ASCII become `#xx`.
+fn pdf_name(s: &str) -> String {
+    if s.is_empty() {
+        return "Draft".to_owned();
+    }
+    let mut out = String::new();
+    for b in s.bytes() {
+        if (0x21..=0x7e).contains(&b) && !b"#()<>[]{}/%".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "#{b:02X}");
+        }
+    }
+    out
 }
 
 fn ellipse(out: &mut String, x0: f64, y0: f64, x1: f64, y1: f64) {
@@ -803,6 +954,15 @@ mod tests {
         a.kind = Kind::Note { x: 1.0, y: 1.0 };
         a.resize(tb(1.0, 1.0, 21.0, 21.0), tb(0.0, 0.0, 50.0, 50.0));
         assert_eq!(a.kind, Kind::Note { x: 1.0, y: 1.0 });
+    }
+
+    #[test]
+    fn stamp_labels_and_names() {
+        assert_eq!(stamp_label("NotApproved"), "NOT APPROVED");
+        assert_eq!(stamp_label("Reviewed by Jo"), "Reviewed by Jo");
+        assert_eq!(pdf_name("Approved"), "Approved");
+        assert_eq!(pdf_name("Seen (Jo)"), "Seen#20#28Jo#29");
+        assert_eq!(pdf_name("Ré"), "R#C3#A9");
     }
 
     #[test]

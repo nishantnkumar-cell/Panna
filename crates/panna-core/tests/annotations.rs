@@ -136,6 +136,15 @@ fn every_kind_saves_and_reopens() {
             to: (190.0, 90.0),
             arrow: true,
         },
+        Kind::Stamp {
+            rect: TextBox {
+                x0: 20.0,
+                y0: 50.0,
+                x1: 140.0,
+                y1: 80.0,
+            },
+            name: "Approved".into(),
+        },
     ];
     let doc = reopen(build(&objects(true)));
     let all: Vec<Annotation> = kinds.into_iter().map(annotation).collect();
@@ -150,6 +159,7 @@ fn every_kind_saves_and_reopens() {
         "Ink",
         "Circle",
         "Line",
+        "Stamp",
     ] {
         assert!(
             text.contains(&format!("/Subtype /{}", subtype.trim_start_matches('/'))),
@@ -163,6 +173,7 @@ fn every_kind_saves_and_reopens() {
     // The free text is drawn and extractable.
     let page_text = doc.page_text(0).unwrap();
     assert!(page_text.slice(0..page_text.len()).contains("Hello (world)"));
+    assert!(page_text.slice(0..page_text.len()).contains("APPROVED"));
 }
 
 #[test]
@@ -251,6 +262,14 @@ fn saved_comments_come_back_editable() {
             points: polygon,
             cloud: true,
         }),
+        annotation(Kind::Stamp {
+            rect,
+            name: "NotApproved".into(),
+        }),
+        annotation(Kind::Stamp {
+            rect,
+            name: "Seen (Jo) é".into(),
+        }),
     ];
     let saved = doc.with_annotations(&shapes).unwrap();
     let listed = reopen(saved).info().unwrap().comments;
@@ -259,10 +278,11 @@ fn saved_comments_come_back_editable() {
             .editable
             .as_ref()
             .expect("Panna's own comments are editable");
-        assert_eq!(
-            (back.color, back.width, &back.author),
-            (original.color, original.width, &original.author)
-        );
+        assert_eq!((back.color, &back.author), (original.color, &original.author));
+        // Stamps have no line width of their own.
+        if !matches!(original.kind, Kind::Stamp { .. }) {
+            assert_eq!(back.width, original.width);
+        }
         assert!((back.opacity - original.opacity).abs() < 0.01);
         match (&original.kind, &back.kind) {
             (Kind::Rect(a), Kind::Rect(b)) => {
@@ -285,6 +305,11 @@ fn saved_comments_come_back_editable() {
                 }
                 let label = if *cloud { "Cloud" } else { "Polygon" };
                 assert_eq!(comment.kind.label(), label);
+            }
+            (Kind::Stamp { rect: a, name }, Kind::Stamp { rect: b, name: n }) => {
+                assert_eq!(name, n);
+                assert!((a.x0 - b.x0).abs() < 0.01 && (a.y1 - b.y1).abs() < 0.01, "{b:?}");
+                assert_eq!(comment.kind.label(), "Stamp");
             }
             other => panic!("came back as {other:?}"),
         }

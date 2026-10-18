@@ -18,7 +18,10 @@ mod worker;
 
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
-pub use edit::{Annotation, Changes, Color, Kind, LINE_HEIGHT, NOTE_SIZE, SaveError, text_width, wrap};
+pub use edit::{
+    Annotation, Changes, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, SaveError, stamp_label, text_width,
+    wrap,
+};
 pub use formats::Format;
 pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
 pub use limits::Limits;

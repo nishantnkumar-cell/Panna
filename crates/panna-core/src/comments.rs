@@ -33,9 +33,10 @@ pub enum CommentKind {
     Line,
     Polygon,
     Cloud,
+    Stamp,
     /// A reply in another comment's thread, or a review status set on it.
     Reply,
-    /// Any other markup, with its PDF subtype name (Stamp, Polygon, Caret, …).
+    /// Any other markup, with its PDF subtype name (Caret, FileAttachment, …).
     Other(String),
 }
 
@@ -52,6 +53,7 @@ impl CommentKind {
             "Circle" => Self::Ellipse,
             "Line" => Self::Line,
             "Polygon" => Self::Polygon,
+            "Stamp" => Self::Stamp,
             "Link" | "Widget" | "Popup" | "PrinterMark" | "TrapNet" | "Watermark" | "3D" | "RichMedia"
             | "Screen" | "Movie" | "Sound" => return None,
             other => Self::Other(other.to_owned()),
@@ -72,6 +74,7 @@ impl CommentKind {
             Self::Line => "Line",
             Self::Polygon => "Polygon",
             Self::Cloud => "Cloud",
+            Self::Stamp => "Stamp",
             Self::Reply => "Reply",
             Self::Other(name) => name,
         }
@@ -242,6 +245,11 @@ impl From<&Annotation> for Comment {
                 } else {
                     CommentKind::Polygon
                 }
+            }
+            Kind::Stamp { rect, .. } => {
+                add(rect.x0, rect.y0);
+                add(rect.x1, rect.y1);
+                CommentKind::Stamp
             }
             Kind::Reply { at, .. } => {
                 add(at.x0, at.y0);
@@ -506,6 +514,19 @@ fn editable(
                 cloud: is_cloudy(annot),
             }
         }
+        // Only Panna's own stamps: redrawing another program's would lose its artwork.
+        "Stamp"
+            if annot
+                .get::<hayro::hayro_syntax::object::String<'_>>(b"NM")
+                .is_some_and(|nm| decode_text_string(nm.as_bytes()).starts_with("panna-")) =>
+        {
+            Kind::Stamp {
+                rect: inner(1.0),
+                name: annot
+                    .get::<Name<'_>>(b"Name")
+                    .map_or_else(|| "Draft".to_owned(), |n| n.as_str().to_owned()),
+            }
+        }
         "Ink" => {
             let mut strokes = Vec::new();
             let mut points = 0;
@@ -600,8 +621,8 @@ mod tests {
             Some(CommentKind::Underline)
         );
         assert_eq!(
-            CommentKind::from_subtype("Stamp"),
-            Some(CommentKind::Other("Stamp".into()))
+            CommentKind::from_subtype("Caret"),
+            Some(CommentKind::Other("Caret".into()))
         );
     }
 

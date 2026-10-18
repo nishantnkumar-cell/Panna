@@ -14,7 +14,7 @@ use hayro::hayro_interpret::TransformExt;
 use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 
-pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, text_width, wrap};
+pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
 
 use crate::{CommentId, FieldValue, ObjRef};
 

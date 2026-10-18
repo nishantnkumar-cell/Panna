@@ -787,6 +787,8 @@ impl App {
                 } else if self.find.open {
                     self.find.open = false;
                     self.find.rescan(&[]);
+                } else if self.annotate.stamping.is_some() {
+                    self.annotate.stamping = None;
                 } else if self.annotate.draft.is_some() {
                     self.annotate.update(annotate::Event::CancelShape);
                 } else if self.screen == Screen::Full
