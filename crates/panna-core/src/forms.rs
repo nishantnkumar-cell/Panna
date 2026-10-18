@@ -81,6 +81,8 @@ pub struct Field {
     pub tooltip: String,
     pub kind: FieldKind,
     pub value: FieldValue,
+    /// What resetting the form puts back (/DV): empty or off when the file names none.
+    pub default: FieldValue,
     pub read_only: bool,
     pub required: bool,
     /// Font size from the default appearance; 0 means fit to the field.
@@ -249,23 +251,27 @@ fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widget
         _ => return,
     };
     let button = matches!(kind, FieldKind::CheckBox | FieldKind::Radio);
-    let value = if button {
-        FieldValue::State(
-            node.get::<Name<'_>>(b"V")
-                .map(|n| n.as_str().to_owned())
-                .filter(|v| v != "Off"),
-        )
-    } else {
-        // A multi-select list's value is an array; the first item stands for it.
-        let v = text(node, b"V").or_else(|| {
-            node.get::<Array<'_>>(b"V").and_then(|a| {
-                a.iter::<hayro::hayro_syntax::object::String<'_>>()
-                    .next()
-                    .map(|s| decode_text_string(s.as_bytes()))
-            })
-        });
-        FieldValue::Text(v.unwrap_or_default())
+    let read_value = |key: &[u8]| {
+        if button {
+            FieldValue::State(
+                node.get::<Name<'_>>(key)
+                    .map(|n| n.as_str().to_owned())
+                    .filter(|v| v != "Off"),
+            )
+        } else {
+            // A multi-select list's value is an array; the first item stands for it.
+            let v = text(node, key).or_else(|| {
+                node.get::<Array<'_>>(key).and_then(|a| {
+                    a.iter::<hayro::hayro_syntax::object::String<'_>>()
+                        .next()
+                        .map(|s| decode_text_string(s.as_bytes()))
+                })
+            });
+            FieldValue::Text(v.unwrap_or_default())
+        }
     };
+    let value = read_value(b"V");
+    let default = read_value(b"DV");
     let da = here.da.as_ref().or(ctx.default_da.as_ref());
     let (font_size, color) = da.map_or((0.0, Color::BLACK), |da| appearance(da));
     let mut placed = Vec::new();
@@ -304,6 +310,7 @@ fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widget
         tooltip: text(node, b"TU").unwrap_or_default(),
         kind,
         value,
+        default,
         read_only: flags & 1 != 0,
         required: flags & 2 != 0,
         font_size,

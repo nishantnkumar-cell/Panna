@@ -51,6 +51,7 @@ pub enum Icon {
     Annotate,
     Delete,
     Check,
+    Eraser,
 }
 
 impl Icon {
@@ -99,6 +100,7 @@ impl Icon {
             Icon::Annotate => include_bytes!("../icons/message-square-plus.svg"),
             Icon::Delete => include_bytes!("../icons/trash-2.svg"),
             Icon::Check => include_bytes!("../icons/check.svg"),
+            Icon::Eraser => include_bytes!("../icons/eraser.svg"),
         }
     }
 }
@@ -193,7 +195,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 43] = [
+    const ALL: [Icon; 44] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -237,6 +239,7 @@ mod tests {
         Icon::Annotate,
         Icon::Delete,
         Icon::Check,
+        Icon::Eraser,
     ];
 
     #[test]

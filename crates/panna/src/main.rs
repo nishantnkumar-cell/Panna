@@ -139,6 +139,9 @@ enum Message {
     /// Tab and Shift+Tab: the next or previous form field.
     FocusNext,
     FocusPrevious,
+    /// The Reset form button, then the answer to its confirmation.
+    ResetForm,
+    ConfirmReset(bool),
     AnnotationsApplied {
         doc: u64,
         result: Result<(), SaveError>,
@@ -181,6 +184,8 @@ struct App {
     selecting: bool,
     annotate: annotate::Annotate,
     form: form::Form,
+    /// Asking whether to reset the form.
+    confirm_reset: bool,
     saving: bool,
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
@@ -300,6 +305,29 @@ fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Messag
     )
 }
 
+fn reset_view<'a>() -> Element<'a, Message> {
+    container(
+        column![
+            text("Reset the form?").size(16),
+            text("Every field goes back to its starting value. You can still close without saving to keep what the file has.")
+                .style(text::secondary),
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(Message::ConfirmReset(false)),
+                button("Reset").on_press(Message::ConfirmReset(true)),
+            ]
+            .spacing(8),
+        ]
+        .spacing(12)
+        .width(400),
+    )
+    .padding(18)
+    .style(container::rounded_box)
+    .into()
+}
+
 fn password_id() -> iced::widget::Id {
     iced::widget::Id::new("password")
 }
@@ -332,6 +360,7 @@ impl App {
             selecting: false,
             annotate: annotate::Annotate::new(),
             form: form::Form::default(),
+            confirm_reset: false,
             saving: false,
             confirm: None,
             after_save: None,
@@ -593,7 +622,9 @@ impl App {
                 Task::none()
             }
             Message::CloseOverlays => {
-                if self.show_properties {
+                if self.confirm_reset {
+                    self.confirm_reset = false;
+                } else if self.show_properties {
                     self.show_properties = false;
                 } else if self.find.open {
                     self.find.open = false;
@@ -760,6 +791,16 @@ impl App {
             Message::Form(event) => {
                 if !self.saving {
                     self.form.update(event);
+                }
+                Task::none()
+            }
+            Message::ResetForm => {
+                self.confirm_reset = self.form.can_reset() && !self.saving;
+                Task::none()
+            }
+            Message::ConfirmReset(reset) => {
+                if std::mem::take(&mut self.confirm_reset) && reset {
+                    self.form.reset();
                 }
                 Task::none()
             }
@@ -1494,6 +1535,11 @@ impl App {
                 self.annotate.open,
                 Message::Annotate(annotate::Event::Toggle),
             ),
+            icons::button(
+                Icon::Eraser,
+                "Reset form",
+                self.form.can_reset().then_some(Message::ResetForm),
+            ),
             gap(),
             icons::button(
                 Icon::Properties,
@@ -1564,6 +1610,9 @@ impl App {
         if let Some(card) = self.annotate.editor() {
             layers.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
         }
+        if self.confirm_reset {
+            layers.push(modal(reset_view(), Message::ConfirmReset(false)));
+        }
         if self.confirm.is_some() {
             layers.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
         }
@@ -1608,7 +1657,7 @@ impl App {
         container(
             column![
                 text(format!("Save your changes to “{name}”?")).size(16),
-                text("Your comments and drawings will be lost if you don't save them.")
+                text("Your comments, drawings and form entries will be lost if you don't save them.")
                     .style(text::secondary),
                 row![
                     button("Don't save")

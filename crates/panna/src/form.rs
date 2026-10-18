@@ -79,6 +79,27 @@ impl Form {
         self.load(&fields);
     }
 
+    /// Whether resetting would change anything.
+    pub fn can_reset(&self) -> bool {
+        self.fields
+            .iter()
+            .zip(&self.values)
+            .any(|(f, v)| f.editable() && f.default != *v)
+    }
+
+    /// Puts every field back to its default, as Acrobat's Reset Form does.
+    pub fn reset(&mut self) {
+        for (i, (field, value)) in self.fields.iter().zip(&mut self.values).enumerate() {
+            if !field.editable() {
+                continue;
+            }
+            *value = field.default.clone();
+            if let (Some(editor), FieldValue::Text(t)) = (self.editors.get_mut(&i), &field.default) {
+                *editor = text_editor::Content::with_text(t);
+            }
+        }
+    }
+
     /// Fields whose values differ from the file's.
     pub fn changes(&self) -> Vec<(ObjRef, FieldValue)> {
         self.fields
@@ -358,6 +379,10 @@ mod tests {
             name: format!("f{number}"),
             tooltip: String::new(),
             kind,
+            default: match &value {
+                FieldValue::Text(_) => FieldValue::Text(String::new()),
+                FieldValue::State(_) => FieldValue::State(None),
+            },
             value,
             read_only: false,
             required: false,
@@ -445,6 +470,15 @@ mod tests {
         f.update(Event::Text(0, "y".into()));
         f.discard();
         assert_eq!(f.values[0], FieldValue::Text("x".into()));
+    }
+
+    #[test]
+    fn resetting_restores_defaults() {
+        let mut f = form();
+        assert!(f.can_reset());
+        f.reset();
+        assert_eq!(f.values[2], FieldValue::State(None));
+        assert!(!f.can_reset() && f.dirty());
     }
 
     #[test]
