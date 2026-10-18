@@ -6,6 +6,7 @@ pub(crate) mod crypt;
 mod field;
 pub(crate) mod lex;
 mod marks;
+mod pack;
 mod picture;
 mod rebuild;
 mod update;
@@ -498,6 +499,30 @@ fn rebuild_from(
     output: Output<'_>,
     clean: Cleanup,
 ) -> Result<Vec<u8>, SaveError> {
+    rebuild_with(docs, plan, extras, output, clean, false)
+}
+
+/// Every page of `doc` in as small a file as can be written without changing how anything
+/// looks (see [`pack`]).
+pub(crate) fn compacted(doc: Input<'_>, count: usize) -> Result<Vec<u8>, SaveError> {
+    rebuild_with(
+        &[doc],
+        &every_page(count),
+        &[],
+        Output::Keep,
+        Cleanup::default(),
+        true,
+    )
+}
+
+fn rebuild_with(
+    docs: &[Input<'_>],
+    plan: &[PageSource],
+    extras: &[rebuild::Extra],
+    output: Output<'_>,
+    clean: Cleanup,
+    compact: bool,
+) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
     let mut first = None;
     for (i, &(pdf, bytes, password)) in docs.iter().enumerate() {
@@ -534,7 +559,7 @@ fn rebuild_from(
         sources.push(rebuild::Source { pdf, bytes, crypt });
     }
     let (info, encryption) = first.ok_or(SaveError::Damaged)?;
-    rebuild::rebuild(&sources, plan, extras, info, encryption, clean)
+    rebuild::rebuild(&sources, plan, extras, info, encryption, clean, compact)
 }
 
 /// The /Encrypt dictionary's bytes, whether the trailer holds it or refers to it.

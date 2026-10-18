@@ -538,6 +538,7 @@ pub(crate) fn rebuild(
     info: Option<ObjRef>,
     encryption: Option<Encryption>,
     clean: Cleanup,
+    compact: bool,
 ) -> Result<Vec<u8>, SaveError> {
     let first = sources.first().ok_or(SaveError::Damaged)?;
     let info = info.filter(|_| !clean.metadata);
@@ -898,15 +899,48 @@ pub(crate) fn rebuild(
         w.set(num, body);
     }
 
+    if compact {
+        super::pack::merge_duplicates(&mut w.objects, &[catalog_num, pages_num]);
+        super::pack::compress_streams(&mut w.objects);
+    }
+    write_file(w.objects, catalog_num, info_num, encryption.as_ref(), compact)
+}
+
+/// The file: a header, every object (sealed for an encrypted file), then the cross-reference
+/// table and trailer. With `compact`, objects that aren't streams go into compressed object
+/// streams and the cross-reference table is a compressed stream too.
+fn write_file(
+    mut objects: Vec<Option<Vec<u8>>>,
+    catalog_num: u32,
+    info_num: Option<u32>,
+    encryption: Option<&Encryption>,
+    compact: bool,
+) -> Result<Vec<u8>, SaveError> {
+    let mut packed = HashMap::new();
+    let mut stream_nums = Vec::new();
+    if compact {
+        let (streams, places) = super::pack::object_streams(&objects, &[]);
+        for body in streams {
+            objects.push(Some(body));
+            stream_nums.push(objects.len() as u32);
+        }
+        packed = places;
+    }
     // Encrypted output: everything but the encryption dictionary itself is sealed.
-    let encrypt_num = encryption.as_ref().map(|_| w.alloc());
+    let encrypt_num = encryption.map(|_| {
+        objects.push(None);
+        objects.len() as u32
+    });
     let mut out = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
-    let mut offsets = Vec::with_capacity(w.objects.len());
-    for (i, body) in w.objects.iter().enumerate() {
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (i, body) in objects.iter().enumerate() {
         let num = i as u32 + 1;
         offsets.push(out.len());
+        if packed.contains_key(&num) {
+            continue;
+        }
         let body = body.as_deref().unwrap_or(b"null");
-        let body = match &encryption {
+        let body = match encryption {
             Some(e) if Some(num) == encrypt_num => e.dict.clone(),
             Some(e) => e.crypt.seal(num, 0, body)?,
             None => body.to_vec(),
@@ -916,22 +950,62 @@ pub(crate) fn rebuild(
         out.extend_from_slice(b"\nendobj\n");
     }
     let xref_at = out.len();
+    let mut trailer = format!("/Root {catalog_num} 0 R ");
+    if let Some(info) = info_num {
+        let _ = write!(trailer, "/Info {info} 0 R ");
+    }
+    if let (Some(e), Some(num)) = (encryption, encrypt_num) {
+        let _ = write!(
+            trailer,
+            "/Encrypt {num} 0 R /ID {} ",
+            String::from_utf8_lossy(&e.id)
+        );
+    }
+    if compact {
+        // The cross-reference stream is the last object, and lists itself.
+        let size = objects.len() + 2;
+        let mut table = super::pack::xref_entry(0, 0, 65535).to_vec();
+        for (i, offset) in offsets.iter().enumerate() {
+            let num = i as u32 + 1;
+            let entry = match packed.get(&num) {
+                Some(&(s, index)) => super::pack::xref_entry(
+                    2,
+                    stream_nums.get(s).copied().ok_or(SaveError::Damaged)?,
+                    u16::try_from(index).map_err(|_| SaveError::Damaged)?,
+                ),
+                None => {
+                    super::pack::xref_entry(1, u32::try_from(*offset).map_err(|_| SaveError::Damaged)?, 0)
+                }
+            };
+            table.extend_from_slice(&entry);
+        }
+        table.extend_from_slice(&super::pack::xref_entry(
+            1,
+            u32::try_from(xref_at).map_err(|_| SaveError::Damaged)?,
+            0,
+        ));
+        let data = super::pack::deflate(&table);
+        out.extend_from_slice(
+            format!(
+                "{} 0 obj\n<< /Type /XRef /Size {size} /W [1 4 2] {trailer}/Filter /FlateDecode /Length {} >>\nstream\n",
+                size - 1,
+                data.len()
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(&data);
+        out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_at}\n%%EOF\n").as_bytes());
+        return Ok(out);
+    }
     let mut xref = format!("xref\n0 {}\n0000000000 65535 f\r\n", offsets.len() + 1);
     for offset in offsets {
         let _ = write!(xref, "{offset:010} 00000 n\r\n");
     }
     let _ = write!(
         xref,
-        "trailer\n<< /Size {} /Root {catalog_num} 0 R ",
-        w.objects.len() + 1
+        "trailer\n<< /Size {} {trailer}>>\nstartxref\n{xref_at}\n%%EOF\n",
+        objects.len() + 1
     );
-    if let Some(info) = info_num {
-        let _ = write!(xref, "/Info {info} 0 R ");
-    }
-    if let (Some(e), Some(num)) = (&encryption, encrypt_num) {
-        let _ = write!(xref, "/Encrypt {num} 0 R /ID {} ", String::from_utf8_lossy(&e.id));
-    }
-    let _ = write!(xref, ">>\nstartxref\n{xref_at}\n%%EOF\n");
     out.extend_from_slice(xref.as_bytes());
     Ok(out)
 }

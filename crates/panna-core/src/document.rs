@@ -408,6 +408,14 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document in as small a file as can be written without changing how it looks.
+    pub fn compacted(&self) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::compacted((&self.pdf, &self.bytes, &self.password), self.page_count())
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The document with text, pictures or links added to page `page`, as a new file.
     pub fn with_additions(
         &self,

@@ -518,7 +518,7 @@ fn files(attachments: &[Attachment]) -> Element<'_, Message> {
 }
 
 /// A file size in bytes, KB or MB.
-fn size_text(bytes: u64) -> String {
+pub fn size_text(bytes: u64) -> String {
     #[allow(clippy::cast_precision_loss)] // only shown rounded
     let b = bytes as f64;
     if bytes < 1024 {

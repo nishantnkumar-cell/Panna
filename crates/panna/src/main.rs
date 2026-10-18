@@ -234,6 +234,10 @@ enum Message {
     FormDataExportTo(Option<PathBuf>),
     ImportFormData,
     FormDataChosen(Option<PathBuf>),
+    /// Save a smaller copy of the document.
+    Compact,
+    CompactTo(Option<PathBuf>),
+    Compacted(Result<(u64, u64), SaveError>),
     ExportComments,
     CommentsExportTo(Option<PathBuf>),
     ImportComments,
@@ -1239,6 +1243,50 @@ impl App {
                     }
                     Err(e) => self.notice = Some(format!("Couldn't read the form data: {e}")),
                 }
+                Task::none()
+            }
+            Message::Compact => {
+                self.all_tools = false;
+                let name = format!("{} (smaller).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a smaller copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::CompactTo,
+                )
+            }
+            Message::CompactTo(None) => Task::none(),
+            Message::CompactTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Unsaved changes go into the copy too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_compacted(path, move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::Compacted(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::Compacted(result) => {
+                self.notice = Some(match result {
+                    Ok((before, after)) if after < before => format!(
+                        "Saved a copy {} smaller: {} instead of {}.",
+                        sidebar::size_text(before - after),
+                        sidebar::size_text(after),
+                        sidebar::size_text(before)
+                    ),
+                    Ok(_) => "Saved a copy. This file was already about as small as it gets.".into(),
+                    Err(e) => e.to_string(),
+                });
                 Task::none()
             }
             Message::ExportComments => {

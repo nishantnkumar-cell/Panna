@@ -18,6 +18,7 @@ type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
+type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 
 /// Earlier versions kept for undoing page changes.
@@ -87,6 +88,8 @@ enum Reply {
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
     Print(PrintReply),
+    /// Writes a smaller copy of the document.
+    Compact(PathBuf, CompactReply),
     /// Writes the document's comments to a comments file.
     ExportComments(PathBuf, crate::DataFormat, String, ExtractReply),
     /// Reads a comments file into annotations for this document.
@@ -282,6 +285,20 @@ impl RenderWorker {
         });
     }
 
+    /// Writes a smaller copy of the document (with the changes last given to it) to `path`,
+    /// and replies with the sizes before and after, in bytes.
+    pub fn save_compacted(
+        &self,
+        path: PathBuf,
+        reply: impl FnOnce(Result<(u64, u64), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Compact(path, Box::new(reply)),
+        });
+    }
+
     /// Writes the document's comments (as last given to it) to a comments file at `path`.
     pub fn export_comments(
         &self,
@@ -462,6 +479,10 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 Reply::ExportComments(path, format, name, reply) => {
                     reply(write_atomically(&path, &current.comments_file(format, &name)));
                 }
+                Reply::Compact(path, reply) => reply(current.compacted().and_then(|bytes| {
+                    write_atomically(&path, &bytes)?;
+                    Ok((current.bytes().len() as u64, bytes.len() as u64))
+                })),
                 Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
                 Reply::Snapshot {
                     page,

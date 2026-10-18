@@ -103,7 +103,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Web page → PDF | Skip | Needs network |
 | Scan to PDF (from scanner) | Later | OS scanner APIs |
 | OCR (make scanned PDF searchable) | Later | Local OCR engine; the Tesseract C++ dependency would need sandboxing |
-| Optimise / reduce file size | Later | |
+| Optimise / reduce file size | Later | Done: "Save a smaller copy…" in All tools writes a copy with uncompressed and lightly compressed streams compressed harder, identical streams (fonts, pictures) kept once, unused objects dropped, and small objects packed into compressed object streams. Pages look exactly the same; pictures are not yet downsampled |
 | PDF/A, PDF/X conversion and preflight checks | Later | |
 
 ## 7. Security and signatures
