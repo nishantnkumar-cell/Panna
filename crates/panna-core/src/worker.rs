@@ -81,6 +81,14 @@ enum Reply {
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
     Print(PrintReply),
+    /// A page drawn at a scale and turned, then cut to an area.
+    Snapshot {
+        page: usize,
+        scale: f32,
+        rotation: u8,
+        area: [f32; 4],
+        reply: RenderReply,
+    },
 }
 
 struct Job {
@@ -227,6 +235,30 @@ impl RenderWorker {
         });
     }
 
+    /// A picture of part of page `index` as shown, with unsaved changes: the page drawn at
+    /// `scale`, turned `rotation` quarter turns, then cut to `area` (see
+    /// [`RenderedPage::cropped`]). Never replaced by other requests.
+    pub fn snapshot(
+        &self,
+        index: usize,
+        scale: f32,
+        rotation: u8,
+        area: [f32; 4],
+        reply: impl FnOnce(Result<RenderedPage, RenderError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Snapshot {
+                page: index,
+                scale,
+                rotation,
+                area,
+                reply: Box::new(reply),
+            },
+        });
+    }
+
     /// The whole document with unsaved changes, without password protection, for printing.
     pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -370,6 +402,16 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     }
                 }
                 Reply::Print(reply) => reply(current.print_copy()),
+                Reply::Snapshot {
+                    page,
+                    scale,
+                    rotation,
+                    area,
+                    reply,
+                } => {
+                    let page = current.render_page(&cache, page, scale);
+                    reply(page.map(|p| p.rotated(rotation).cropped(area)));
+                }
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
                 Reply::Export(export, reply) => reply(export_pages(current, &cache, &export)),

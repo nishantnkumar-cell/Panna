@@ -15,6 +15,8 @@ panna-core = { path = "../panna-core", version = "0.1.0" }
 iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "image-without-codecs", "svg", "canvas", "thread-pool", "linux-theme-detection", "x11", "wayland", "web-colors"] }
 rfd = "0.17"
 futures-channel = "0.3"
+# Pictures on the system clipboard (iced only copies text).
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 # The Windows and macOS print dialogs.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]

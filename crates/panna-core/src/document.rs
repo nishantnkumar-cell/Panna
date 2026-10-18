@@ -77,6 +77,37 @@ impl RenderedPage {
             rgba,
         }
     }
+
+    /// The part of the bitmap inside `area`, given as `[left, top, right, bottom]` fractions of
+    /// its width and height. At least one pixel is kept.
+    pub fn cropped(self, area: [f32; 4]) -> Self {
+        let (w, h) = (self.width as usize, self.height as usize);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let at = |f: f32, size: usize| ((f.clamp(0.0, 1.0) * size as f32).round() as usize).min(size);
+        let [l, t, r, b] = area;
+        let (x0, x1) = (at(l.min(r), w), at(l.max(r), w));
+        let (y0, y1) = (at(t.min(b), h), at(t.max(b), h));
+        let x0 = x0.min(w.saturating_sub(1));
+        let y0 = y0.min(h.saturating_sub(1));
+        let (cw, ch) = (x1.max(x0 + 1).min(w) - x0, y1.max(y0 + 1).min(h) - y0);
+        if w == 0 || h == 0 {
+            return self;
+        }
+        let mut rgba = Vec::with_capacity(cw * ch * 4);
+        for row in y0..y0 + ch {
+            let start = (row * w + x0) * 4;
+            rgba.extend_from_slice(self.rgba.get(start..start + cw * 4).unwrap_or_default());
+        }
+        Self {
+            width: cw as u32,
+            height: ch as u32,
+            rgba,
+        }
+    }
 }
 
 impl fmt::Debug for RenderedPage {
@@ -612,6 +643,27 @@ fn format_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crops_to_an_area() {
+        // 4×2 pixels, each pixel's red value its index.
+        let page = RenderedPage {
+            width: 4,
+            height: 2,
+            rgba: (0..8u8).flat_map(|i| [i, 0, 0, 255]).collect(),
+        };
+        let part = page.clone().cropped([0.75, 1.0, 0.25, 0.5]);
+        assert_eq!((part.width, part.height), (2, 1));
+        assert_eq!(part.rgba.iter().step_by(4).copied().collect::<Vec<_>>(), [5, 6]);
+        // Nothing selected still keeps a pixel; out of range is clamped.
+        let dot = page.clone().cropped([2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(
+            (dot.width, dot.height, dot.rgba.first().copied()),
+            (1, 1, Some(7))
+        );
+        let all = page.clone().cropped([-1.0, -1.0, 2.0, 2.0]);
+        assert_eq!(all, page);
+    }
 
     #[test]
     fn decodes_text_strings() {

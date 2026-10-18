@@ -19,7 +19,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Go to page, next/previous page | V1 | Done |
 | Text search (find, find next, match case, whole word) | V1 | Done: search panel in the sidebar listing every result in context, like Word (Ctrl+F, F3/Shift+F3); includes hidden OCR text |
 | Select and copy text | V1 | Done; drag or double-click, Ctrl+C; across pages; Linux middle-click paste |
-| Copy image / snapshot tool | Later | |
+| Copy image / snapshot tool | Later | Done: the camera button turns on the snapshot tool; dragging over a page copies a picture of the area, as shown and with unsaved changes, to the clipboard at 144 dpi or sharper. Esc turns it off |
 | Internal links and cross-references | V1 | Done: page links jump straight there; web and mail links ask first, then go to the system browser or mail program (Panna itself stays offline). Links that launch programs, open files or run scripts are ignored |
 | Tabs / multiple documents open | Later | |
 | Full-screen / presentation mode | Later | Done: full screen keeping the tools (F11), and presenting one page at a time on black (Ctrl+L, as in Acrobat); click, Space or arrows to move, Escape to leave |

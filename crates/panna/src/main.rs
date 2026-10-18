@@ -5,6 +5,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod annotate;
+mod clipboard;
 mod colors;
 mod comments;
 mod export;
@@ -87,6 +88,26 @@ fn window_settings() -> window::Settings {
             ..Default::default()
         },
         ..Default::default()
+    }
+}
+
+/// An area dragged out with the snapshot tool, in view points (view pixels at 100%).
+#[derive(Debug, Clone, Copy)]
+struct Snapshot {
+    page: usize,
+    from: Point,
+    to: Point,
+    dragging: bool,
+    /// Its picture is on the clipboard.
+    copied: bool,
+}
+
+impl Snapshot {
+    /// (x, y, width, height) in view points.
+    fn rect(self) -> (f32, f32, f32, f32) {
+        let (x0, x1) = (self.from.x.min(self.to.x), self.from.x.max(self.to.x));
+        let (y0, y1) = (self.from.y.min(self.to.y), self.from.y.max(self.to.y));
+        (x0, y0, x1 - x0, y1 - y0)
     }
 }
 
@@ -206,6 +227,9 @@ enum Message {
     },
     Find(find::Event),
     PagePointer(usize, Point),
+    /// Turn the snapshot tool on or off.
+    ToggleSnapshot,
+    SnapshotTaken(Result<panna_core::RenderedPage, String>),
     PagePress(usize),
     PageDoubleClick(usize),
     PointerReleased,
@@ -260,6 +284,9 @@ struct App {
     hover: Option<(usize, Point)>,
     /// A drag-selection is in progress.
     selecting: bool,
+    /// The snapshot tool is on: dragging over a page copies a picture of the area.
+    snapping: bool,
+    snapshot: Option<Snapshot>,
     annotate: annotate::Annotate,
     form: form::Form,
     /// Asking whether to reset the form.
@@ -594,6 +621,8 @@ impl App {
             confirm: None,
             after_save: None,
             notice: None,
+            snapping: false,
+            snapshot: None,
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -932,6 +961,9 @@ impl App {
                 }
                 if self.confirm_link.is_some() {
                     self.confirm_link = None;
+                } else if self.snapping {
+                    self.snapping = false;
+                    self.snapshot = None;
                 } else if self.extracting.is_some() {
                     self.extracting = None;
                 } else if self.cropping.is_some() {
@@ -1037,6 +1069,10 @@ impl App {
             Message::Find(event) => self.find_event(event),
             Message::PagePointer(page, position) => {
                 self.hover = Some((page, position));
+                if let Some(snap) = self.snapshot.as_mut().filter(|s| s.dragging && s.page == page) {
+                    snap.to = Point::new(position.x / self.zoom, position.y / self.zoom);
+                    return Task::none();
+                }
                 if self.annotate.busy() {
                     let at = self.page_map(page).to_page(position);
                     self.annotate.drag(page, at);
@@ -1047,6 +1083,40 @@ impl App {
                     && let Some(selection) = &mut self.selection
                 {
                     selection.focus = caret;
+                }
+                Task::none()
+            }
+            Message::PagePress(page) if self.snapping => {
+                self.selection = None;
+                self.snapshot = self.hover.filter(|(p, _)| *p == page).map(|(_, position)| {
+                    let at = Point::new(position.x / self.zoom, position.y / self.zoom);
+                    Snapshot {
+                        page,
+                        from: at,
+                        to: at,
+                        dragging: true,
+                        copied: false,
+                    }
+                });
+                Task::none()
+            }
+            Message::ToggleSnapshot => {
+                self.snapping = !self.snapping;
+                self.snapshot = None;
+                Task::none()
+            }
+            Message::SnapshotTaken(result) => {
+                let copied = result.and_then(|p| clipboard::copy_picture(p.width, p.height, p.rgba));
+                match copied {
+                    Ok(()) => {
+                        if let Some(snap) = &mut self.snapshot {
+                            snap.copied = true;
+                        }
+                    }
+                    Err(e) => {
+                        self.snapshot = None;
+                        self.notice = Some(format!("Couldn't copy the picture: {e}"));
+                    }
                 }
                 Task::none()
             }
@@ -1132,6 +1202,9 @@ impl App {
                 self.copy_primary()
             }
             Message::PointerReleased => {
+                if self.snapshot.is_some_and(|s| s.dragging) {
+                    return self.take_snapshot();
+                }
                 if let Some(index) = self.pending_link.take()
                     && let Some(page) = self.hover.map(|(p, _)| p)
                     && self.link_under(page) == Some(index)
@@ -2195,6 +2268,50 @@ impl App {
     }
 
     /// On Linux, selected text also goes to the primary selection for middle-click paste.
+    /// Copies a picture of the area dragged out with the snapshot tool, as shown and with
+    /// unsaved changes, drawn sharper than the screen when the page is small enough.
+    fn take_snapshot(&mut self) -> Task<Message> {
+        let Some(snap) = self.snapshot.as_mut() else {
+            return Task::none();
+        };
+        snap.dragging = false;
+        let snap = *snap;
+        let (x, y, w, h) = snap.rect();
+        // A click rather than a drag.
+        if w * self.zoom < 4.0 || h * self.zoom < 4.0 {
+            self.snapshot = None;
+            return Task::none();
+        }
+        let Some(doc) = &self.doc else { return Task::none() };
+        let Some(size) = doc.info.pages.get(snap.page).copied() else {
+            return Task::none();
+        };
+        let (vw, vh) = if self.rotation % 2 == 1 {
+            (size.height, size.width)
+        } else {
+            (size.width, size.height)
+        };
+        if vw <= 0.0 || vh <= 0.0 {
+            return Task::none();
+        }
+        let area = [x / vw, y / vh, (x + w) / vw, (y + h) / vh];
+        // At least 144 dpi, or the screen's sharpness, but never a page over 40 megapixels.
+        let scale = (self.zoom * self.scale_factor)
+            .max(2.0)
+            .min((40.0e6 / (vw * vh)).sqrt());
+        if self.dirty() {
+            doc.worker.set_changes(self.changes(), |_| {});
+        }
+        let (tx, rx) = futures_channel::oneshot::channel();
+        doc.worker
+            .snapshot(snap.page, scale, self.rotation, area, move |result| {
+                let _ = tx.send(result.map_err(|e| e.to_string()));
+            });
+        Task::perform(rx, |result| {
+            Message::SnapshotTaken(result.unwrap_or_else(|_| Err("the page couldn't be drawn".into())))
+        })
+    }
+
     fn copy_primary(&self) -> Task<Message> {
         match self.selected_text() {
             Some(text) if cfg!(target_os = "linux") => iced::clipboard::write_primary(text),
@@ -2794,6 +2911,16 @@ impl App {
                 self.annotate.open,
                 Message::Annotate(annotate::Event::Toggle),
             ),
+            icons::toggle(
+                Icon::Camera,
+                if self.snapping {
+                    "Stop taking snapshots (Esc)"
+                } else {
+                    "Snapshot: drag over a page to copy a picture of it"
+                },
+                self.snapping,
+                Message::ToggleSnapshot,
+            ),
             icons::button(
                 Icon::Eraser,
                 "Reset form",
@@ -3173,7 +3300,46 @@ impl App {
                             .into_iter()
                             .flatten();
                         let fields = self.form.overlays(index, self.page_map(index));
-                        if marks.is_empty() && preview.is_none() && outline.is_none() && fields.is_empty() {
+                        let snapshot = self.snapshot.filter(|s| s.page == index).map(|s| {
+                            let (x, y, w, h) = s.rect();
+                            let zoom = self.zoom;
+                            let label: Element<'_, Message> = if s.copied {
+                                container(text("Copied").size(12))
+                                    .padding([2, 6])
+                                    .style(|theme: &iced::Theme| {
+                                        let palette = theme.extended_palette();
+                                        container::Style::default()
+                                            .background(palette.primary.strong.color)
+                                            .color(palette.primary.strong.text)
+                                    })
+                                    .into()
+                            } else {
+                                space().into()
+                            };
+                            Element::from(
+                                pin(container(label)
+                                    .width((w * zoom).max(1.0))
+                                    .height((h * zoom).max(1.0))
+                                    .style(|theme: &iced::Theme| {
+                                        let palette = theme.extended_palette();
+                                        container::Style::default()
+                                            .background(palette.primary.base.color.scale_alpha(0.12))
+                                            .border(iced::Border {
+                                                color: palette.primary.base.color,
+                                                width: 1.5,
+                                                radius: 0.0.into(),
+                                            })
+                                    }))
+                                .x(x * zoom)
+                                .y(y * zoom),
+                            )
+                        });
+                        if marks.is_empty()
+                            && preview.is_none()
+                            && outline.is_none()
+                            && fields.is_empty()
+                            && snapshot.is_none()
+                        {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
                             let mut layers = vec![image(handle.clone()).width(width).height(height).into()];
@@ -3182,6 +3348,7 @@ impl App {
                             layers.extend(outline);
                             layers.extend(handles);
                             layers.extend(fields);
+                            layers.extend(snapshot);
                             iced::widget::Stack::with_children(layers).into()
                         }
                     }
@@ -3229,6 +3396,8 @@ impl App {
                         } else {
                             mouse::Interaction::ResizingDiagonallyUp
                         }
+                    } else if self.snapping {
+                        mouse::Interaction::Crosshair
                     } else if over_link {
                         mouse::Interaction::Pointer
                     } else if self.annotate.is_moving() {
