@@ -51,7 +51,7 @@ impl TextBox {
         ((self.x0 + self.x1) / 2.0, (self.y0 + self.y1) / 2.0)
     }
 
-    fn union(self, other: TextBox) -> TextBox {
+    pub(crate) fn union(self, other: TextBox) -> TextBox {
         TextBox {
             x0: self.x0.min(other.x0),
             y0: self.y0.min(other.y0),
@@ -82,6 +82,10 @@ impl PageText {
 
     pub(crate) fn chars(&self) -> &[char] {
         &self.chars
+    }
+
+    pub(crate) fn boxes(&self) -> &[TextBox] {
+        &self.boxes
     }
 
     pub fn is_empty(&self) -> bool {

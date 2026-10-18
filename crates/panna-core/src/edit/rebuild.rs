@@ -1185,10 +1185,43 @@ fn form_with_fields(
 /// The pictures page `index` draws itself, in the order they're drawn, each as the box it
 /// covers in the same space as page text.
 pub(crate) fn page_pictures(pdf: &Pdf, index: usize) -> Vec<crate::TextBox> {
-    let (pages, _) = page_tree(pdf);
-    let Some((r, dict)) = pages.get(index) else {
+    let Some((content, res, to_shown, height)) = shown_page(pdf, index) else {
         return Vec::new();
     };
+    let mut lookup = super::redact::Resources { dict: res };
+    super::redact::placed_images(&content, &mut lookup)
+        .iter()
+        .map(|p| shown_box(to_shown, height, p.bounds()))
+        .collect()
+}
+
+/// The rectangles and straight lines page `index` draws, as shown (see
+/// [`super::redact::drawn_shapes`]); a line's box runs from end to end.
+pub(crate) fn page_shapes(pdf: &Pdf, index: usize) -> (Vec<crate::TextBox>, Vec<crate::TextBox>) {
+    let Some((content, _, to_shown, height)) = shown_page(pdf, index) else {
+        return (Vec::new(), Vec::new());
+    };
+    let (rects, lines) = super::redact::drawn_shapes(&content);
+    (
+        rects
+            .into_iter()
+            .map(|r| shown_box(to_shown, height, r))
+            .collect(),
+        lines
+            .into_iter()
+            .map(|l| shown_box(to_shown, height, l))
+            .collect(),
+    )
+}
+
+/// Page `index`'s content and resources, with the matrix from its user space to shown space
+/// (bottom up) and its shown height.
+fn shown_page<'a>(
+    pdf: &'a Pdf,
+    index: usize,
+) -> Option<(Vec<u8>, Option<Dict<'a>>, super::redact::Matrix, f64)> {
+    let (pages, _) = page_tree(pdf);
+    let (r, dict) = pages.get(index)?;
     let rotate = inherited(pdf, *r, dict, b"Rotate")
         .and_then(|(_, v)| std::str::from_utf8(v).ok()?.trim().parse::<f64>().ok())
         .map_or(0, |v| (v as i64).rem_euclid(360));
@@ -1196,26 +1229,20 @@ pub(crate) fn page_pictures(pdf: &Pdf, index: usize) -> Vec<crate::TextBox> {
     let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
     let shown = cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media);
     let res = inherited(pdf, *r, dict, b"Resources").and_then(|(owner, raw)| resolved(pdf, owner, raw));
-    let content = page_content(dict);
-    let mut lookup = super::redact::Resources { dict: res };
     let (matrix, _, height) = shown_space(shown, rotate);
-    let Some(inv) = super::redact::invert(matrix) else {
-        return Vec::new();
-    };
-    super::redact::placed_images(&content, &mut lookup)
-        .iter()
-        .map(|p| {
-            let [x0, y0, x1, y1] = p.bounds();
-            let a = super::redact::apply(inv, x0, y0);
-            let b = super::redact::apply(inv, x1, y1);
-            crate::TextBox {
-                x0: a.0.min(b.0) as f32,
-                y0: (height - a.1.max(b.1)) as f32,
-                x1: a.0.max(b.0) as f32,
-                y1: (height - a.1.min(b.1)) as f32,
-            }
-        })
-        .collect()
+    let to_shown = super::redact::invert(matrix)?;
+    Some((page_content(dict), res, to_shown, height))
+}
+
+fn shown_box(to_shown: super::redact::Matrix, height: f64, [x0, y0, x1, y1]: [f64; 4]) -> crate::TextBox {
+    let a = super::redact::apply(to_shown, x0, y0);
+    let b = super::redact::apply(to_shown, x1, y1);
+    crate::TextBox {
+        x0: a.0.min(b.0) as f32,
+        y0: (height - a.1.max(b.1)) as f32,
+        x1: a.0.max(b.0) as f32,
+        y1: (height - a.1.min(b.1)) as f32,
+    }
 }
 
 /// A page's content, all its streams decoded and joined.

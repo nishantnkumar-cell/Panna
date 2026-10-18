@@ -9,6 +9,7 @@ mod attachments;
 mod commentdata;
 mod comments;
 mod compare;
+mod detect;
 mod document;
 mod edit;
 mod export;

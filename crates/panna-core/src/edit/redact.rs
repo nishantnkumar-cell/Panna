@@ -839,6 +839,96 @@ pub(crate) fn placed_images(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Plac
     out
 }
 
+/// Rectangles and straight lines `content` paints itself (not inside forms), in page space:
+/// the boxes of `re` rectangles, and each straight segment as `[x0, y0, x1, y1]`.
+pub(crate) fn drawn_shapes(content: &[u8]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
+    /// Shapes kept at most, so a page of hatching stays cheap.
+    const MAX_SHAPES: usize = 20_000;
+    let mut lex = Lexer {
+        data: content,
+        pos: 0,
+    };
+    let mut stack: Vec<Matrix> = Vec::new();
+    let mut ctm = IDENTITY;
+    let mut operands: Vec<Operand> = Vec::new();
+    let (mut rects, mut lines) = (Vec::new(), Vec::new());
+    let (mut path_rects, mut path_lines) = (Vec::new(), Vec::new());
+    let mut at: Option<(f64, f64)> = None;
+    let mut start: Option<(f64, f64)> = None;
+    loop {
+        lex.skip();
+        let Some(token) = lex.token(0) else { break };
+        let range = match token {
+            Token::Operand(o) => {
+                operands.push(o);
+                continue;
+            }
+            Token::ArrayEnd | Token::DictEnd => {
+                operands.push(Operand::Other);
+                continue;
+            }
+            Token::Operator(range) => range,
+        };
+        let nums: Vec<f64> = operands.iter().filter_map(Operand::number).collect();
+        match content.get(range).unwrap_or_default() {
+            b"q" if stack.len() < MAX_STACK => stack.push(ctm),
+            b"Q" => ctm = stack.pop().unwrap_or(ctm),
+            b"cm" => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    ctm = concat([a, b, c, d, e, f], ctm);
+                }
+            }
+            b"m" => {
+                if let [x, y] = nums[..] {
+                    at = Some(apply(ctm, x, y));
+                    start = at;
+                }
+            }
+            b"l" => {
+                if let ([x, y], Some(from)) = (&nums[..], at) {
+                    let to = apply(ctm, *x, *y);
+                    path_lines.push([from.0, from.1, to.0, to.1]);
+                    at = Some(to);
+                }
+            }
+            b"h" => {
+                if let (Some(from), Some(to)) = (at, start) {
+                    path_lines.push([from.0, from.1, to.0, to.1]);
+                    at = start;
+                }
+            }
+            b"c" | b"v" | b"y" => {
+                // Curves aren't fields' edges; carry on from where they end.
+                if let [.., x, y] = nums[..] {
+                    at = Some(apply(ctm, x, y));
+                }
+            }
+            b"re" => {
+                if let [x, y, w, h] = nums[..] {
+                    path_rects.push(bounds(ctm, [x, y, x + w, y + h]));
+                }
+            }
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if rects.len() + lines.len() < MAX_SHAPES {
+                    rects.append(&mut path_rects);
+                    lines.append(&mut path_lines);
+                }
+                path_rects.clear();
+                path_lines.clear();
+                at = None;
+            }
+            b"n" => {
+                path_rects.clear();
+                path_lines.clear();
+                at = None;
+            }
+            _ => {}
+        }
+        operands.clear();
+    }
+    (rects, lines)
+}
+
 /// The inverse of `m`, unless it squashes everything flat.
 pub(crate) fn invert(m: Matrix) -> Option<Matrix> {
     let det = m[0] * m[3] - m[1] * m[2];

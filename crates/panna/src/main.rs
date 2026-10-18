@@ -260,6 +260,10 @@ enum Message {
     Redact(redact::Event),
     Prepare(prepare::Event),
     EditPictures(pictures::Event),
+    FieldsDetected {
+        doc: u64,
+        result: Result<Vec<panna_core::NewField>, String>,
+    },
     ReadAloud(speech::Event),
     /// A reading aloud ended: whether all was said, or why not.
     SpeechDone {
@@ -1637,6 +1641,23 @@ impl App {
                         let show = add.first().map_or(self.current_page(), |f| f.page);
                         self.edit_pages(PageEdit::FormFields { add, remove }, show, false)
                     }
+                    prepare::Outcome::Detect => {
+                        let Some(doc) = &self.doc else { return Task::none() };
+                        let (tx, rx) = futures_channel::oneshot::channel();
+                        doc.worker.detect_fields(move |result| {
+                            let _ = tx.send(result);
+                        });
+                        self.notice = Some("Looking for fields…".into());
+                        let id = doc.id;
+                        Task::perform(rx, move |result| Message::FieldsDetected {
+                            doc: id,
+                            result: match result {
+                                Ok(Ok(fields)) => Ok(fields),
+                                Ok(Err(e)) => Err(format!("Fields couldn't be looked for: {e}")),
+                                Err(_) => Err("Fields couldn't be looked for.".into()),
+                            },
+                        })
+                    }
                 }
             }
             Message::EditPictures(event) => {
@@ -1703,6 +1724,38 @@ impl App {
                     }
                 }
                 Task::none()
+            }
+            Message::FieldsDetected { doc, result } => {
+                if self.doc.as_ref().is_none_or(|d| d.id != doc) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(add) if add.is_empty() => {
+                        self.notice = Some("No more places for fields were found.".into());
+                        Task::none()
+                    }
+                    Ok(add) => {
+                        self.notice = Some(match add.len() {
+                            1 => "Added 1 field. Undo it from the page tools if it isn't right.".into(),
+                            n => format!(
+                                "Added {n} fields. Undo them from the page tools if they aren't right."
+                            ),
+                        });
+                        let show = add.first().map_or(0, |f| f.page);
+                        self.edit_pages(
+                            PageEdit::FormFields {
+                                add,
+                                remove: Vec::new(),
+                            },
+                            show,
+                            false,
+                        )
+                    }
+                    Err(e) => {
+                        self.notice = Some(e);
+                        Task::none()
+                    }
+                }
             }
             Message::PicturesFound { doc, page, boxes } => {
                 if self.doc.as_ref().is_some_and(|d| d.id == doc) {

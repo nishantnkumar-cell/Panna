@@ -484,6 +484,36 @@ impl Document {
         catch_unwind(AssertUnwindSafe(|| crate::edit::page_pictures(&self.pdf, page))).unwrap_or_default()
     }
 
+    /// Where form fields could go on each page: blanks, empty boxes and lines to write on,
+    /// and box characters, named after the words beside them. Places that already have a
+    /// field are left out.
+    pub fn detect_fields(&self) -> Result<Vec<crate::NewField>, RenderError> {
+        let fields = self.info().map_err(|_| RenderError::EngineCrashed)?.fields;
+        let mut out = Vec::new();
+        for index in 0..self.page_count() {
+            let text = self.page_text(index)?;
+            let existing: Vec<crate::TextBox> = fields
+                .iter()
+                .flat_map(|f| f.widgets.iter())
+                .filter(|w| w.page == index)
+                .map(|w| w.at)
+                .collect();
+            let found = catch_unwind(AssertUnwindSafe(|| {
+                let (rects, lines) = crate::edit::page_shapes(&self.pdf, index);
+                crate::detect::detect(&crate::detect::Page {
+                    index,
+                    text: &text,
+                    rects: &rects,
+                    lines: &lines,
+                    existing: &existing,
+                })
+            }))
+            .map_err(|_| RenderError::EngineCrashed)?;
+            out.extend(found);
+        }
+        Ok(out)
+    }
+
     /// The document with pictures on page `page` moved, replaced or taken out, as a new
     /// file. Each change names a picture by its place in [`Document::pictures`].
     pub fn with_pictures_changed(

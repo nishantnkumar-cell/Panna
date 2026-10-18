@@ -53,6 +53,8 @@ pub enum Event {
     Done,
     Delete,
     Cancel,
+    /// Find where fields could go on every page.
+    Detect,
 }
 
 #[derive(Debug)]
@@ -110,6 +112,8 @@ pub enum Outcome {
         add: Vec<NewField>,
         remove: Vec<ObjRef>,
     },
+    /// Find where fields could go and add them.
+    Detect,
 }
 
 fn kind_label(kind: &FieldKind) -> &'static str {
@@ -166,6 +170,10 @@ impl Preparer {
                 self.cancel();
             }
             Event::Cancel => self.cancel(),
+            Event::Detect => {
+                self.cancel();
+                return Outcome::Detect;
+            }
             Event::Name(value) => {
                 if let Some(Pending::New { name, .. }) = &mut self.pending {
                     *name = clean(value);
@@ -399,6 +407,11 @@ impl Preparer {
             tool(Tool::Text, Icon::TextField, "Add a text field"),
             tool(Tool::CheckBox, Icon::CheckBoxField, "Add a check box"),
             tool(Tool::Dropdown, Icon::DropdownField, "Add a drop-down list"),
+            icons::button(
+                Icon::DetectFields,
+                "Find fields automatically, from blanks, lines and boxes",
+                Some(ev(Event::Detect))
+            ),
             text("Click or drag to add a field. Click a field to delete it.")
                 .size(13)
                 .width(370),

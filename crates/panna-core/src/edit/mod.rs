@@ -453,6 +453,11 @@ pub(crate) fn page_pictures(pdf: &Pdf, page: usize) -> Vec<crate::TextBox> {
     rebuild::page_pictures(pdf, page)
 }
 
+/// The rectangles and straight lines page `page` draws, as shown.
+pub(crate) fn page_shapes(pdf: &Pdf, page: usize) -> (Vec<crate::TextBox>, Vec<crate::TextBox>) {
+    rebuild::page_shapes(pdf, page)
+}
+
 /// A form field to make.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewField {
