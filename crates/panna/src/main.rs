@@ -45,6 +45,8 @@ const ZOOM_STEPS: &[f32] = &[
 ];
 /// Rendered pages kept around this many pages beyond the visible range.
 const KEEP_MARGIN: usize = 2;
+/// Size of a selected comment's corner handles, in logical pixels.
+const HANDLE: f32 = 8.0;
 
 fn main() -> iced::Result {
     iced::application(App::boot, App::update, App::view)
@@ -792,7 +794,7 @@ impl App {
                     let map = self.page_map(page);
                     let at = map.to_page(position);
                     let size = map.page_size();
-                    if self.annotate.grab(page, at, size) {
+                    if self.annotate.grab(page, at, size, HANDLE / self.zoom) {
                         self.selection = None;
                         return Task::none();
                     }
@@ -815,6 +817,16 @@ impl App {
                 let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) else {
                     return Task::none();
                 };
+                // With the select tool, double-clicking a comment edits its text.
+                if self.annotate.open
+                    && self.annotate.tool == annotate::Tool::Select
+                    && !self.saving
+                    && self
+                        .annotate
+                        .edit_text(page, self.page_map(page).to_page(position))
+                {
+                    return operation::focus(annotate::editor_id());
+                }
                 let Some(text) = self.page_text(page) else {
                     return Task::none();
                 };
@@ -1959,6 +1971,39 @@ impl App {
                                 .y(y),
                             )
                         });
+                        let handles = self
+                            .annotate
+                            .resizable(index)
+                            .filter(|_| !self.annotate.busy())
+                            .map(|b| {
+                                let map = self.page_map(index);
+                                [(b.x0, b.y0), (b.x1, b.y0), (b.x0, b.y1), (b.x1, b.y1)].map(|(x, y)| {
+                                    let (sx, sy, _, _) = map.rect(&TextBox {
+                                        x0: x,
+                                        y0: y,
+                                        x1: x,
+                                        y1: y,
+                                    });
+                                    Element::from(
+                                        pin(container(space()).width(HANDLE).height(HANDLE).style(
+                                            |theme: &iced::Theme| {
+                                                let palette = theme.extended_palette();
+                                                container::Style::default()
+                                                    .background(iced::Color::WHITE)
+                                                    .border(iced::Border {
+                                                        color: palette.primary.base.color,
+                                                        width: 1.5,
+                                                        radius: 1.0.into(),
+                                                    })
+                                            },
+                                        ))
+                                        .x(sx - HANDLE / 2.0)
+                                        .y(sy - HANDLE / 2.0),
+                                    )
+                                })
+                            })
+                            .into_iter()
+                            .flatten();
                         let fields = self.form.overlays(index, self.page_map(index));
                         if marks.is_empty() && preview.is_none() && outline.is_none() && fields.is_empty() {
                             image(handle.clone()).width(width).height(height).into()
@@ -1967,6 +2012,7 @@ impl App {
                             layers.extend(marks);
                             layers.extend(preview);
                             layers.extend(outline);
+                            layers.extend(handles);
                             layers.extend(fields);
                             iced::widget::Stack::with_children(layers).into()
                         }
@@ -1995,12 +2041,27 @@ impl App {
                                 .is_some()
                     });
                 let over_link = !self.selecting && self.link_under(index).is_some();
+                // Over a corner handle: which way it stretches.
+                let over_handle = self.hover.and_then(|(page, position)| {
+                    if page != index || self.annotate.busy() && !self.annotate.is_resizing() {
+                        return None;
+                    }
+                    let at = self.page_map(index).to_page(position);
+                    let (ax, ay) = self.annotate.handle_at(index, at, HANDLE / self.zoom)?;
+                    Some((at.0 - ax) * (at.1 - ay) > 0.0)
+                });
                 let content = mouse_area(content)
                     .on_move(move |p| Message::PagePointer(index, p))
                     .on_press(Message::PagePress(index))
                     .on_double_click(Message::PageDoubleClick(index))
                     .on_release(Message::PointerReleased)
-                    .interaction(if over_link {
+                    .interaction(if let Some(down) = over_handle {
+                        if down {
+                            mouse::Interaction::ResizingDiagonallyDown
+                        } else {
+                            mouse::Interaction::ResizingDiagonallyUp
+                        }
+                    } else if over_link {
                         mouse::Interaction::Pointer
                     } else if self.annotate.is_moving() {
                         mouse::Interaction::Grabbing

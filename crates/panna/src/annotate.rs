@@ -158,14 +158,18 @@ struct Moving {
     to: (f32, f32),
     /// The page's size, which the comment stays within.
     page: (f32, f32),
+    /// Set when a corner handle is dragged: the opposite corner, which stays put.
+    anchor: Option<(f32, f32)>,
 }
 
-/// A note or text box waiting for its text.
+/// A note or text box waiting for its text, or a comment whose text is being changed.
 pub struct Editing {
     page: usize,
     tool: Tool,
     at: TextBox,
     pub content: text_editor::Content,
+    /// The comment being changed; `None` for a new one.
+    target: Option<Picked>,
 }
 
 #[derive(Default)]
@@ -260,7 +264,30 @@ impl Annotate {
     }
 
     pub fn is_moving(&self) -> bool {
-        self.moving.is_some()
+        self.moving.as_ref().is_some_and(|m| m.anchor.is_none())
+    }
+
+    pub fn is_resizing(&self) -> bool {
+        self.moving.as_ref().is_some_and(|m| m.anchor.is_some())
+    }
+
+    /// The selected comment's box on `page`, if it can be resized by its corners.
+    pub fn resizable(&self, page: usize) -> Option<TextBox> {
+        let a = self
+            .picked_annotation()
+            .filter(|a| a.page == page && can_resize(a))?;
+        Some(Comment::from(a).at)
+    }
+
+    /// The corner handle of the selected comment under a point, if any: the opposite corner.
+    /// `slop` is how near counts, in points.
+    pub fn handle_at(&self, page: usize, (x, y): (f32, f32), slop: f32) -> Option<(f32, f32)> {
+        let b = self.resizable(page)?;
+        corners(b)
+            .into_iter()
+            .zip(corners(b).into_iter().rev())
+            .find(|((cx, cy), _)| (cx - x).abs() <= slop && (cy - y).abs() <= slop)
+            .map(|(_, opposite)| opposite)
     }
 
     fn picked_annotation(&self) -> Option<&Annotation> {
@@ -274,7 +301,9 @@ impl Annotate {
     pub fn picked_outline(&self, page: usize) -> Option<TextBox> {
         let a = self.picked_annotation().filter(|a| a.page == page)?;
         let mut b = Comment::from(a).at;
-        if let Some(m) = &self.moving {
+        if let Some(m) = self.moving.as_ref().filter(|m| m.anchor.is_some()) {
+            b = resized(m);
+        } else if let Some(m) = &self.moving {
             let (dx, dy) = clamp_shift(b, m);
             b = TextBox {
                 x0: b.x0 + dx,
@@ -315,7 +344,17 @@ impl Annotate {
 
     /// Selects the comment under the pointer and starts moving it. Returns false when there
     /// is none, so the press selects text instead.
-    pub fn grab(&mut self, page: usize, at: (f32, f32), size: (f32, f32)) -> bool {
+    pub fn grab(&mut self, page: usize, at: (f32, f32), size: (f32, f32), slop: f32) -> bool {
+        // A corner handle of the selected comment resizes it.
+        if let Some(anchor) = self.handle_at(page, at, slop) {
+            self.moving = Some(Moving {
+                from: at,
+                to: at,
+                page: size,
+                anchor: Some(anchor),
+            });
+            return true;
+        }
         let Some(picked) = self.hit(page, at) else {
             self.unpick();
             return false;
@@ -325,6 +364,32 @@ impl Annotate {
             from: at,
             to: at,
             page: size,
+            anchor: None,
+        });
+        true
+    }
+
+    /// Opens the editor on the text of the comment under a point (a double-click with the
+    /// select tool). Returns false when there is none.
+    pub fn edit_text(&mut self, page: usize, at: (f32, f32)) -> bool {
+        let Some(picked) = self.hit(page, at) else {
+            return false;
+        };
+        self.pick(picked);
+        let Some(a) = self.picked_annotation() else {
+            return false;
+        };
+        let tool = match a.kind {
+            Kind::Note { .. } => Tool::Note,
+            Kind::FreeText { .. } => Tool::TextBox,
+            _ => Tool::Select,
+        };
+        self.editing = Some(Editing {
+            page,
+            tool,
+            at: Comment::from(a).at,
+            content: text_editor::Content::with_text(&a.contents),
+            target: Some(picked),
         });
         true
     }
@@ -490,6 +555,14 @@ impl Annotate {
                     if editing.tool == Tool::TextBox && text.trim().is_empty() {
                         return Outcome::Nothing;
                     }
+                    if let Some(target) = editing.target {
+                        self.picked = Some(target);
+                        let unchanged = self.picked_annotation().is_none_or(|a| a.contents == text);
+                        if unchanged || !self.edit(true, |a| set_text(a, text)) {
+                            return Outcome::Nothing;
+                        }
+                        return Outcome::Changed;
+                    }
                     let kind = if editing.tool == Tool::Note {
                         Kind::Note {
                             x: editing.at.x0,
@@ -595,6 +668,15 @@ impl Annotate {
             let Some(b) = self.picked_annotation().map(|a| Comment::from(a).at) else {
                 return Outcome::Nothing;
             };
+            if m.anchor.is_some() {
+                let to = resized(&m);
+                let same =
+                    (to.x0 - b.x0).abs() + (to.y0 - b.y0).abs() + (to.x1 - b.x1).abs() + (to.y1 - b.y1).abs();
+                if same < 1.0 || !self.edit(true, |a| a.resize(b, to)) {
+                    return Outcome::Nothing;
+                }
+                return Outcome::Changed;
+            }
             let (dx, dy) = clamp_shift(b, &m);
             if dx.hypot(dy) < 1.0 || !self.edit(true, |a| a.translate(dx, dy)) {
                 return Outcome::Nothing;
@@ -630,6 +712,7 @@ impl Annotate {
                     tool: draft.tool,
                     at,
                     content: text_editor::Content::new(),
+                    target: None,
                 });
                 return Outcome::Nothing;
             }
@@ -728,11 +811,14 @@ impl Annotate {
     pub fn editor(&self) -> Option<Element<'_, Message>> {
         let editing = self.editing.as_ref()?;
         let ev = Message::Annotate;
-        let title = if editing.tool == Tool::Note {
-            "Note"
-        } else {
-            "Text box"
+        let title = match (editing.tool, editing.target.is_some()) {
+            (Tool::Note, false) => "Note",
+            (Tool::Note, true) => "Edit note",
+            (Tool::TextBox, false) => "Text box",
+            (Tool::TextBox, true) => "Edit text box",
+            _ => "Comment",
         };
+        let done = if editing.target.is_some() { "Save" } else { "Add" };
         let card = container(
             column![
                 text(title).size(16),
@@ -746,7 +832,7 @@ impl Annotate {
                     button("Cancel")
                         .style(button::secondary)
                         .on_press(ev(Event::EditCancel)),
-                    button("Add").on_press(ev(Event::EditDone)),
+                    button(done).on_press(ev(Event::EditDone)),
                 ]
                 .spacing(8),
             ]
@@ -789,6 +875,55 @@ fn fit_text_box(at: TextBox, text: &str) -> TextBox {
         x1: at.x0 + width.max(12.0),
         y1: at.y0 + height,
     }
+}
+
+/// Kinds that can be stretched by their corners: not notes (icon-sized) or text markup.
+fn can_resize(a: &Annotation) -> bool {
+    matches!(
+        a.kind,
+        Kind::Rect(_) | Kind::Ellipse(_) | Kind::FreeText { .. } | Kind::Ink(_) | Kind::Line { .. }
+    )
+}
+
+/// Top-left, top-right, bottom-left, bottom-right; reversed, each corner's opposite.
+fn corners(b: TextBox) -> [(f32, f32); 4] {
+    [(b.x0, b.y0), (b.x1, b.y0), (b.x0, b.y1), (b.x1, b.y1)]
+}
+
+/// The box while a corner is dragged: from the fixed corner to the pointer, kept on the page
+/// and at least a few points across.
+fn resized(m: &Moving) -> TextBox {
+    let (ax, ay) = m.anchor.unwrap_or(m.from);
+    let x = m.to.0.clamp(0.0, m.page.0.max(0.0));
+    let y = m.to.1.clamp(0.0, m.page.1.max(0.0));
+    const MIN: f32 = 4.0;
+    let x = if (x - ax).abs() < MIN {
+        ax + MIN.copysign(x - ax)
+    } else {
+        x
+    };
+    let y = if (y - ay).abs() < MIN {
+        ay + MIN.copysign(y - ay)
+    } else {
+        y
+    };
+    TextBox {
+        x0: ax.min(x),
+        y0: ay.min(y),
+        x1: ax.max(x),
+        y1: ay.max(y),
+    }
+}
+
+/// New text for a comment; a text box grows or shrinks in height to fit it.
+fn set_text(a: &mut Annotation, text: String) {
+    if let Kind::FreeText { rect, size } = &mut a.kind {
+        let size_f = size.max(1.0);
+        let lines = wrap(&text, f64::from((rect.width() - 4.0).max(10.0) / size_f));
+        let height = lines.len().max(1) as f32 * size_f * LINE_HEIGHT + 6.0;
+        rect.y1 = rect.y0 + height;
+    }
+    a.contents = text;
 }
 
 /// Whether a point (in page points) is on an annotation, with a little slack for thin lines.
@@ -1032,7 +1167,7 @@ mod tests {
     fn dragging_a_comment_moves_it_within_the_page() {
         let mut a = Annotate::new();
         rect_at(&mut a, 10.0);
-        assert!(a.grab(0, (30.0, 20.0), (200.0, 100.0)));
+        assert!(a.grab(0, (30.0, 20.0), (200.0, 100.0), 3.0));
         a.drag(0, (60.0, 500.0));
         assert!(matches!(a.release(), Outcome::Changed));
         // Down as far as the page allows, across by the full drag.
@@ -1043,7 +1178,60 @@ mod tests {
         );
         a.update(Event::Undo);
         assert!(matches!(a.items.first().map(|i| &i.kind), Some(Kind::Rect(r)) if r.x0 == 10.0));
-        assert!(!a.grab(0, (190.0, 90.0), (200.0, 100.0)) && a.picked.is_none());
+        assert!(!a.grab(0, (190.0, 90.0), (200.0, 100.0), 3.0) && a.picked.is_none());
+    }
+
+    #[test]
+    fn dragging_a_corner_resizes_the_selected_comment() {
+        let mut a = Annotate::new();
+        rect_at(&mut a, 10.0);
+        // Not selected yet: the corner just selects it (and would move it).
+        assert!(a.grab(0, (60.0, 40.0), (200.0, 100.0), 3.0) && !a.is_resizing());
+        a.release();
+        // Now the bottom-right corner stretches it, with the top-left fixed.
+        assert_eq!(a.handle_at(0, (59.0, 41.0), 3.0), Some((10.0, 10.0)));
+        assert!(a.grab(0, (60.0, 40.0), (200.0, 100.0), 3.0) && a.is_resizing());
+        a.drag(0, (110.0, 300.0));
+        assert!(matches!(a.release(), Outcome::Changed));
+        assert_eq!(
+            a.items.first().map(|i| &i.kind),
+            Some(&Kind::Rect(TextBox {
+                x0: 10.0,
+                y0: 10.0,
+                x1: 110.0,
+                y1: 100.0
+            }))
+        );
+        a.update(Event::Undo);
+        assert!(matches!(a.items.first().map(|i| &i.kind), Some(Kind::Rect(r)) if r.x1 == 60.0));
+    }
+
+    #[test]
+    fn editing_a_text_box_changes_its_text_and_height() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::TextBox));
+        a.press(0, (10.0, 10.0));
+        a.release();
+        a.editing.as_mut().unwrap().content = text_editor::Content::with_text("Hi");
+        a.update(Event::EditDone);
+        let before = a.items[0].clone();
+        a.update(Event::Tool(Tool::Select));
+        assert!(a.edit_text(0, (12.0, 12.0)));
+        assert_eq!(a.editing.as_ref().unwrap().content.text().trim_end(), "Hi");
+        a.editing.as_mut().unwrap().content = text_editor::Content::with_text("one\ntwo\nthree");
+        assert!(matches!(a.update(Event::EditDone), Outcome::Changed));
+        let after = &a.items[0];
+        assert_eq!(after.contents, "one\ntwo\nthree");
+        let height = |k: &Kind| match k {
+            Kind::FreeText { rect, .. } => rect.height(),
+            _ => 0.0,
+        };
+        assert!(height(&after.kind) > height(&before.kind) * 2.0);
+        // Nothing to save when the text is left as it was.
+        assert!(a.edit_text(0, (12.0, 12.0)));
+        assert!(matches!(a.update(Event::EditDone), Outcome::Nothing));
+        a.update(Event::Undo);
+        assert_eq!(a.items[0], before);
     }
 
     #[test]

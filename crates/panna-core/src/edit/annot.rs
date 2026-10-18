@@ -114,6 +114,46 @@ impl Annotation {
         }
     }
 
+    /// Stretches it so that what filled `from` fills `to` (both in page points). Markup tied
+    /// to text, and notes, which are always icon-sized, stay as they are.
+    pub fn resize(&mut self, from: TextBox, to: TextBox) {
+        // A flat dimension (a horizontal or vertical line) can only move, not stretch.
+        let axis = |lo: f32, hi: f32, new_lo: f32, new_hi: f32| {
+            let scale = if hi - lo > 0.01 {
+                (new_hi - new_lo) / (hi - lo)
+            } else {
+                1.0
+            };
+            move |v: f32| new_lo + (v - lo) * scale
+        };
+        let fx = axis(from.x0, from.x1, to.x0, to.x1);
+        let fy = axis(from.y0, from.y1, to.y0, to.y1);
+        let map_box = |b: &mut TextBox| {
+            let (x0, x1) = (fx(b.x0), fx(b.x1));
+            let (y0, y1) = (fy(b.y0), fy(b.y1));
+            *b = TextBox {
+                x0: x0.min(x1),
+                y0: y0.min(y1),
+                x1: x0.max(x1),
+                y1: y0.max(y1),
+            };
+        };
+        match &mut self.kind {
+            Kind::Highlight(_) | Kind::Underline(_) | Kind::StrikeOut(_) | Kind::Note { .. } => {}
+            Kind::FreeText { rect, .. } | Kind::Rect(rect) | Kind::Ellipse(rect) => map_box(rect),
+            Kind::Ink(strokes) => {
+                for (x, y) in strokes.iter_mut().flatten() {
+                    (*x, *y) = (fx(*x), fy(*y));
+                }
+            }
+            Kind::Line { from, to, .. } => {
+                for p in [from, to] {
+                    *p = (fx(p.0), fy(p.1));
+                }
+            }
+        }
+    }
+
     pub(crate) fn build(&self, page: &PageInfo, ap_ref: &str, name: &str, date: &str) -> Built {
         let map = |x: f32, y: f32| page.to_user * Point::new(f64::from(x), f64::from(y));
         let user_box = |b: &TextBox| {
@@ -587,6 +627,41 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn resizing_stretches_shapes_and_moves_flat_lines() {
+        let tb = |x0, y0, x1, y1| TextBox { x0, y0, x1, y1 };
+        let mut a = Annotation {
+            page: 0,
+            kind: Kind::Ink(vec![vec![(10.0, 10.0), (20.0, 30.0)]]),
+            color: Color::RED,
+            opacity: 1.0,
+            width: 1.0,
+            contents: String::new(),
+            author: String::new(),
+        };
+        a.resize(tb(10.0, 10.0, 20.0, 30.0), tb(10.0, 10.0, 40.0, 20.0));
+        assert_eq!(a.kind, Kind::Ink(vec![vec![(10.0, 10.0), (40.0, 20.0)]]));
+
+        a.kind = Kind::Line {
+            from: (0.0, 5.0),
+            to: (10.0, 5.0),
+            arrow: true,
+        };
+        a.resize(tb(0.0, 5.0, 10.0, 5.0), tb(0.0, 8.0, 20.0, 12.0));
+        assert_eq!(
+            a.kind,
+            Kind::Line {
+                from: (0.0, 8.0),
+                to: (20.0, 8.0),
+                arrow: true
+            }
+        );
+
+        a.kind = Kind::Note { x: 1.0, y: 1.0 };
+        a.resize(tb(1.0, 1.0, 21.0, 21.0), tb(0.0, 0.0, 50.0, 50.0));
+        assert_eq!(a.kind, Kind::Note { x: 1.0, y: 1.0 });
     }
 
     #[test]
