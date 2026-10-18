@@ -159,3 +159,92 @@ fn password_protection_is_kept() {
         assert_eq!(fields[0].name, "name", "{name}");
     }
 }
+
+#[test]
+fn the_worker_changes_pages_with_undo_and_saves() {
+    use panna_core::{Annotation, Changes, Color, Kind, PageEdit, RenderWorker, TextBox};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let dir = std::env::temp_dir().join(format!("panna-pages-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("three.pdf");
+    std::fs::write(&path, three_pages()).unwrap();
+    let other = dir.join("other.pdf");
+    std::fs::write(&other, three_pages()).unwrap();
+    let wait = Duration::from_secs(20);
+
+    let (tx, rx) = mpsc::channel();
+    let worker = RenderWorker::open(path.clone(), None, Limits::default(), move |r| {
+        let _ = tx.send(r.is_ok());
+    })
+    .unwrap();
+    assert!(rx.recv_timeout(wait).unwrap());
+    let pages = |edit: PageEdit| {
+        let (tx, rx) = mpsc::channel();
+        worker.edit_pages(edit, move |r| {
+            let _ = tx.send(r.map(|i| (i.pages.len(), i.comments.len())));
+        });
+        rx.recv_timeout(wait).unwrap()
+    };
+
+    // An unsaved comment on page 3 goes along when page 2 is removed.
+    let (tx, rx) = mpsc::channel();
+    let rect = TextBox {
+        x0: 10.0,
+        y0: 10.0,
+        x1: 50.0,
+        y1: 50.0,
+    };
+    worker.set_changes(
+        Changes {
+            add: vec![Annotation {
+                page: 2,
+                kind: Kind::Rect(rect),
+                color: Color([1.0, 0.0, 0.0]),
+                opacity: 1.0,
+                width: 2.0,
+                contents: String::new(),
+                author: String::new(),
+            }],
+            ..Changes::default()
+        },
+        move |r| {
+            let _ = tx.send(r);
+        },
+    );
+    assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()));
+    assert_eq!(pages(PageEdit::Plan(vec![page(0, 0), page(2, 0)])), Ok((2, 1)));
+    assert_eq!(
+        pages(PageEdit::InsertFile {
+            at: 1,
+            path: other.clone()
+        }),
+        Ok((5, 1))
+    );
+    assert_eq!(pages(PageEdit::Undo), Ok((2, 1)));
+    assert_eq!(
+        pages(PageEdit::Undo),
+        Ok((3, 1)),
+        "back to three pages, comment kept"
+    );
+    assert_eq!(pages(PageEdit::Plan(vec![page(2, 1)])), Ok((1, 1)));
+
+    let (tx, rx) = mpsc::channel();
+    let extracted = dir.join("extract.pdf");
+    worker.extract(vec![page(0, 0), page(0, 0)], extracted.clone(), move |r| {
+        let _ = tx.send(r);
+    });
+    assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()));
+    assert_eq!(open(std::fs::read(&extracted).unwrap(), None).page_count(), 2);
+
+    let (tx, rx) = mpsc::channel();
+    worker.save(path.clone(), move |r| {
+        let _ = tx.send(r.map(|c| c.len()));
+    });
+    assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(1));
+    let saved = open(std::fs::read(&path).unwrap(), None);
+    assert_eq!(saved.page_count(), 1);
+    assert!(text(&saved, 0).contains("Page 3"));
+    let _ = std::fs::remove_dir_all(dir);
+}

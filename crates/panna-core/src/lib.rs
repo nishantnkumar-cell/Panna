@@ -28,4 +28,4 @@ pub use limits::Limits;
 pub use links::{Link, LinkTarget, safe_uri};
 pub use outline::OutlineItem;
 pub use text::{FindOptions, PageText, TextBox};
-pub use worker::RenderWorker;
+pub use worker::{PageEdit, RenderWorker};
