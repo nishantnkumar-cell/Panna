@@ -499,7 +499,8 @@ impl Annotation {
                 );
                 content.push_str(&literal(&win_ansi(&label)));
                 content.push_str(") Tj ET ");
-                let _ = write!(extra, "/Name /{} ", pdf_name(name));
+                let name = if name.is_empty() { "Draft" } else { name };
+                let _ = write!(extra, "/Name {} ", super::field::name(name));
                 "Stamp"
             }
             Kind::Reply { to, at, state } => {
@@ -731,22 +732,6 @@ pub fn stamp_label(name: &str) -> String {
     out
 }
 
-/// `s` as the body of a PDF name: bytes other than plain printable ASCII become `#xx`.
-fn pdf_name(s: &str) -> String {
-    if s.is_empty() {
-        return "Draft".to_owned();
-    }
-    let mut out = String::new();
-    for b in s.bytes() {
-        if (0x21..=0x7e).contains(&b) && !b"#()<>[]{}/%".contains(&b) {
-            out.push(char::from(b));
-        } else {
-            let _ = write!(out, "#{b:02X}");
-        }
-    }
-    out
-}
-
 fn ellipse(out: &mut String, x0: f64, y0: f64, x1: f64, y1: f64) {
     const K: f64 = 0.552_284_75;
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
@@ -957,12 +942,9 @@ mod tests {
     }
 
     #[test]
-    fn stamp_labels_and_names() {
+    fn stamp_labels() {
         assert_eq!(stamp_label("NotApproved"), "NOT APPROVED");
         assert_eq!(stamp_label("Reviewed by Jo"), "Reviewed by Jo");
-        assert_eq!(pdf_name("Approved"), "Approved");
-        assert_eq!(pdf_name("Seen (Jo)"), "Seen#20#28Jo#29");
-        assert_eq!(pdf_name("Ré"), "R#C3#A9");
     }
 
     #[test]
