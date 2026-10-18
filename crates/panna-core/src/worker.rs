@@ -39,6 +39,11 @@ pub enum PageEdit {
         pages: Vec<usize>,
         marks: crate::HeaderFooter,
     },
+    /// Draws a watermark or background on these pages.
+    Watermark {
+        pages: Vec<usize>,
+        mark: crate::Watermark,
+    },
     /// Goes back to before the last page change.
     Undo,
 }
@@ -344,6 +349,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::HeaderFooter { pages, marks } => current
                         .with_header_footer(&pages, &marks)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::Watermark { pages, mark } => current
+                        .with_watermark(&pages, &mark)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                 };
                 match result.and_then(|doc| Ok((doc.info().map_err(|_| SaveError::Damaged)?, doc))) {

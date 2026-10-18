@@ -1,12 +1,12 @@
-//! Headers and footers: lines of text drawn at the top and bottom of pages, such as page
-//! numbers, a title, a date or Bates numbers.
+//! Headers and footers (lines of text at the top and bottom of pages, such as page numbers, a
+//! title, a date or Bates numbers), watermarks and page backgrounds.
 //!
-//! They become part of the page itself, in a form of their own that the page draws after its
-//! content, marked as pagination artifacts so that screen readers skip them.
+//! They become part of the page itself, each in a form of its own that the page draws before
+//! or after its content, marked as artifacts so that screen readers skip them.
 
 use std::fmt::Write as _;
 
-use super::annot::{literal, n, text_width, win_ansi};
+use super::annot::{Color, literal, n, text_width, win_ansi};
 
 /// Text for the top and bottom of pages. In the text, `{page}` is the page's number,
 /// `{page:6}` the same padded with zeros to six digits (for Bates numbers), `{pages}` the
@@ -90,8 +90,171 @@ pub(crate) struct Lines {
     margin: f64,
 }
 
-/// The font the text is drawn in, as it's named in the form's resources.
-pub(crate) const RESOURCES: &str = "<< /Font << /PaHe << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >>";
+/// Text across the middle of pages, such as DRAFT or CONFIDENTIAL, and a colour for the whole
+/// page behind its content. The text may use the fields headers and footers do.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Watermark {
+    pub text: String,
+    /// Text size in points; 0 or less fits the text to the page.
+    pub size: f32,
+    /// Degrees anticlockwise from level.
+    pub angle: f32,
+    /// From 0 (invisible) to 1 (solid).
+    pub opacity: f32,
+    pub color: Color,
+    /// Drawn behind the page's content instead of over it.
+    pub behind: bool,
+    /// A colour filling the page behind its content.
+    pub background: Option<Color>,
+}
+
+impl Default for Watermark {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            size: 0.0,
+            angle: 45.0,
+            opacity: 0.3,
+            color: Color([0.5, 0.5, 0.5]),
+            behind: false,
+            background: None,
+        }
+    }
+}
+
+impl Watermark {
+    /// Whether there is nothing to draw.
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty() && self.background.is_none()
+    }
+
+    /// What to draw on one page, numbered `number` of `total`, on `date`: behind the page's
+    /// content, and over it.
+    pub(crate) fn for_page(
+        &self,
+        number: u64,
+        total: usize,
+        date: &str,
+    ) -> (Option<Drawing>, Option<Drawing>) {
+        let text = Drawing::Watermark {
+            text: fill(&self.text, number, total, date),
+            size: f64::from(self.size.min(500.0)),
+            angle: f64::from(self.angle),
+            opacity: f64::from(self.opacity.clamp(0.0, 1.0)),
+            color: self.color,
+        };
+        let text = (!self.text.trim().is_empty()).then_some(text);
+        let background = self.background.map(Drawing::Background);
+        if self.behind {
+            // The colour first, so the text shows on it.
+            let both = match (background, text) {
+                (Some(b), Some(t)) => Some(Drawing::Both(Box::new(b), Box::new(t))),
+                (b, t) => b.or(t),
+            };
+            (both, None)
+        } else {
+            (background, text)
+        }
+    }
+}
+
+/// Something drawn on a page in a space with its origin at the bottom-left corner of the page
+/// as shown.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Drawing {
+    Lines(Lines),
+    Watermark {
+        text: String,
+        size: f64,
+        angle: f64,
+        opacity: f64,
+        color: Color,
+    },
+    Background(Color),
+    /// One, then the other.
+    Both(Box<Drawing>, Box<Drawing>),
+}
+
+/// The fonts and transparency the drawings use, as they're named in the forms' resources.
+pub(crate) const RESOURCES: &str = "<< /Font << \
+    /PaHe << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> \
+    /PaHB << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> >> >>";
+
+fn rgb(Color([r, g, b]): Color) -> String {
+    format!("{} {} {}", n(f64::from(r)), n(f64::from(g)), n(f64::from(b)))
+}
+
+impl Drawing {
+    /// The form's resources: the fonts, and the transparency a watermark needs.
+    pub(crate) fn resources(&self) -> String {
+        match self.opacity() {
+            Some(a) => format!(
+                "{} /ExtGState << /PaGS << /Type /ExtGState /CA {a} /ca {a} >> >> >>",
+                RESOURCES.trim_end_matches(">>").trim_end(),
+                a = n(a)
+            ),
+            None => RESOURCES.to_owned(),
+        }
+    }
+
+    fn opacity(&self) -> Option<f64> {
+        match self {
+            Drawing::Watermark { opacity, .. } => Some(*opacity),
+            Drawing::Both(a, b) => a.opacity().or(b.opacity()),
+            _ => None,
+        }
+    }
+
+    /// Drawing instructions for a page `width` by `height` points as shown.
+    pub(crate) fn content(&self, width: f64, height: f64) -> String {
+        match self {
+            Drawing::Lines(lines) => lines.content(width, height),
+            Drawing::Background(color) => format!(
+                "/Artifact << /Type /Pagination /Subtype /Background >> BDC {} rg 0 0 {} {} re f EMC\n",
+                rgb(*color),
+                n(width),
+                n(height)
+            ),
+            Drawing::Watermark {
+                text,
+                size,
+                angle,
+                opacity: _,
+                color,
+            } => {
+                // Helvetica-Bold runs about 6% wider than the Helvetica widths we have.
+                let em = text_width(text).max(0.5) * 1.06;
+                let (sin, cos) = angle.to_radians().sin_cos();
+                let size = if *size > 0.0 {
+                    *size
+                } else {
+                    // As large as fits within 90% of the page, turned.
+                    let along = 0.9 * width / (em * cos.abs() + 0.72 * sin.abs());
+                    let across = 0.9 * height / (em * sin.abs() + 0.72 * cos.abs());
+                    along.min(across).max(1.0)
+                };
+                let mut out = format!(
+                    "/Artifact << /Type /Pagination /Subtype /Watermark >> BDC q /PaGS gs {} {} {} {} {} {} cm BT /PaHB {} Tf {} rg {} {} Td (",
+                    n(cos),
+                    n(sin),
+                    n(-sin),
+                    n(cos),
+                    n(width / 2.0),
+                    n(height / 2.0),
+                    n(size),
+                    rgb(*color),
+                    n(-em * size / 2.0),
+                    // Centred on capitals, about 0.72 of the size tall.
+                    n(-0.36 * size),
+                );
+                out.push_str(&literal(&win_ansi(text)));
+                out.push_str(") Tj ET Q EMC\n");
+                out
+            }
+            Drawing::Both(a, b) => a.content(width, height) + &b.content(width, height),
+        }
+    }
+}
 
 impl Lines {
     /// Drawing instructions for a page `width` by `height` points as shown, with the origin
@@ -152,6 +315,27 @@ mod tests {
         assert_eq!(fill("{date}", 1, 1, "2026-10-18"), "2026-10-18");
         assert_eq!(fill("{other} {page", 1, 1, ""), "{other} {page");
         assert_eq!(fill("{page:x}", 1, 1, ""), "{page:x}");
+    }
+
+    #[test]
+    fn watermarks_fit_and_sit_behind_or_over() {
+        let mark = Watermark {
+            text: "DRAFT".into(),
+            background: Some(Color([1.0, 1.0, 0.9])),
+            ..Watermark::default()
+        };
+        let (under, over) = mark.for_page(1, 1, "");
+        assert!(matches!(under, Some(Drawing::Background(_))));
+        let over = over.unwrap();
+        assert!(over.resources().contains("/ca 0.3"));
+        let content = over.content(600.0, 800.0);
+        assert!(
+            content.contains("0.707 0.707 -0.707 0.707 300 400 cm"),
+            "{content}"
+        );
+        assert!(content.contains("(DRAFT) Tj"));
+        let (under, over) = Watermark { behind: true, ..mark }.for_page(1, 1, "");
+        assert!(matches!(under, Some(Drawing::Both(..))) && over.is_none());
     }
 
     #[test]

@@ -255,8 +255,9 @@ pub type Margins = [f32; 4];
 pub(crate) struct Extra {
     /// Margins to crop.
     pub crop: Option<Margins>,
-    /// Header and footer text to draw over the page.
-    pub marks: Option<super::marks::Lines>,
+    /// What to draw behind the page's content, and over it.
+    pub under: Vec<super::marks::Drawing>,
+    pub over: Vec<super::marks::Drawing>,
 }
 
 /// The smallest a cropped page may be, in points a side.
@@ -305,14 +306,13 @@ fn shown_space([x0, y0, x1, y1]: [f64; 4], rotate: i64) -> ([f64; 6], f64, f64) 
 }
 
 /// A page's resources (`owner`'s value, if it has any) as a new dictionary that also names
-/// form `form` as `name`.
-fn with_xobject<'a>(
+/// each of `forms` (a name and an object number).
+fn with_xobjects<'a>(
     w: &mut Writer,
     sources: &[Source<'a>],
     doc: usize,
     resources: Option<(ObjRef, &'a [u8])>,
-    name: &str,
-    form: u32,
+    forms: &[(String, u32)],
 ) -> Result<Vec<u8>, SaveError> {
     let pdf: &'a Pdf = sources.get(doc).ok_or(SaveError::Damaged)?.pdf;
     // A dictionary written in place, or the object it refers to, with the object it's in.
@@ -326,29 +326,34 @@ fn with_xobject<'a>(
             .then_some((owner, data))
     };
     let mut out = b"<<".to_vec();
-    let mut xobjects = format!("/{name} {form} 0 R").into_bytes();
-    let copy = |w: &mut Writer, out: &mut Vec<u8>, owner: ObjRef, data: &[u8], skip: &[u8]| {
-        for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
-            if key == skip {
-                continue;
+    let mut xobjects = Vec::new();
+    for (name, form) in forms {
+        xobjects.extend_from_slice(format!(" /{name} {form} 0 R").as_bytes());
+    }
+    let ours = |key: &[u8]| forms.iter().any(|(name, _)| name.as_bytes() == key);
+    let copy =
+        |w: &mut Writer, out: &mut Vec<u8>, owner: ObjRef, data: &[u8], skip: &dyn Fn(&[u8]) -> bool| {
+            for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
+                if skip(key) {
+                    continue;
+                }
+                out.extend_from_slice(b" /");
+                out.extend_from_slice(key);
+                out.push(b' ');
+                let value = data.get(value).ok_or(SaveError::Damaged)?;
+                out.extend(copy_syntax(w, sources, doc, owner, value)?);
             }
-            out.extend_from_slice(b" /");
-            out.extend_from_slice(key);
-            out.push(b' ');
-            let value = data.get(value).ok_or(SaveError::Damaged)?;
-            out.extend(copy_syntax(w, sources, doc, owner, value)?);
-        }
-        Ok::<_, SaveError>(())
-    };
+            Ok::<_, SaveError>(())
+        };
     if let Some((owner, data)) = resources.and_then(|(o, v)| resolve(o, v)) {
-        copy(w, &mut out, owner, data, b"XObject")?;
+        copy(w, &mut out, owner, data, &|k| k == b"XObject")?;
         let entries = lex::dict_entries(data).ok_or(SaveError::Damaged)?;
         if let Some((sub_owner, sub)) = entries
             .iter()
             .find(|(k, _)| *k == b"XObject")
             .and_then(|(_, v)| resolve(owner, data.get(v.clone())?))
         {
-            copy(w, &mut xobjects, sub_owner, sub, name.as_bytes())?;
+            copy(w, &mut xobjects, sub_owner, sub, &ours)?;
         }
     }
     out.extend_from_slice(b" /XObject <<");
@@ -441,7 +446,8 @@ pub(crate) fn rebuild(
                     if key == b"Parent" || INHERITED.contains(&key) {
                         continue;
                     }
-                    if key == b"Contents" && extra.marks.is_some() {
+                    let drawn = !extra.under.is_empty() || !extra.over.is_empty();
+                    if key == b"Contents" && drawn {
                         let value = data.get(value).ok_or(SaveError::Damaged)?;
                         contents = Some(copy_syntax(&mut w, sources, doc, *r, value)?);
                         continue;
@@ -458,7 +464,7 @@ pub(crate) fn rebuild(
                     let Some((owner, value)) = inherited(pdf, *r, dict, key) else {
                         continue;
                     };
-                    if key == b"Resources" && extra.marks.is_some() {
+                    if key == b"Resources" && (!extra.under.is_empty() || !extra.over.is_empty()) {
                         resources = Some((owner, value));
                         continue;
                     }
@@ -488,31 +494,42 @@ pub(crate) fn rebuild(
                     }
                     None => cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media),
                 };
-                if let Some(marks) = &extra.marks {
-                    let form = w.alloc();
+                if !extra.under.is_empty() || !extra.over.is_empty() {
                     let (matrix, width, height) = shown_space(shown, rotate);
                     let stream = |dict: &str, data: &str| {
                         format!("<< {dict}/Length {} >>\nstream\n{data}\nendstream", data.len()).into_bytes()
                     };
-                    w.set(
-                        form,
-                        stream(
-                            &format!(
-                                "/Type /XObject /Subtype /Form /BBox [0 0 {} {}] /Matrix [{}] /Resources {} ",
-                                n(width),
-                                n(height),
-                                matrix.map(n).join(" "),
-                                super::marks::RESOURCES
-                            ),
-                            &marks.content(width, height),
-                        ),
-                    );
+                    let mut forms = Vec::new();
+                    let mut draw = |w: &mut Writer, drawings: &[super::marks::Drawing]| {
+                        let mut ops = String::new();
+                        for drawing in drawings {
+                            let form = w.alloc();
+                            w.set(
+                                form,
+                                stream(
+                                    &format!(
+                                        "/Type /XObject /Subtype /Form /BBox [0 0 {} {}] /Matrix [{}] /Resources {} ",
+                                        n(width),
+                                        n(height),
+                                        matrix.map(n).join(" "),
+                                        drawing.resources()
+                                    ),
+                                    &drawing.content(width, height),
+                                ),
+                            );
+                            let name = format!("PannaMarks{form}");
+                            ops.push_str(&format!("/{name} Do "));
+                            forms.push((name, form));
+                        }
+                        ops
+                    };
                     // The page's own drawing is kept apart in q ... Q, so whatever state it
-                    // leaves behind doesn't move the header and footer.
+                    // leaves behind doesn't move what's drawn over it.
+                    let under = draw(&mut w, &extra.under);
+                    let over = draw(&mut w, &extra.over);
                     let (before, after) = (w.alloc(), w.alloc());
-                    w.set(before, stream("", "q"));
-                    let name = format!("PannaMarks{form}");
-                    w.set(after, stream("", &format!("Q /{name} Do")));
+                    w.set(before, stream("", &format!("{under}q")));
+                    w.set(after, stream("", &format!("Q {over}")));
                     let inner = contents.unwrap_or_default();
                     let inner = inner.trim_ascii();
                     let inner = inner
@@ -522,7 +539,7 @@ pub(crate) fn rebuild(
                     body.extend_from_slice(format!("/Contents [{before} 0 R ").as_bytes());
                     body.extend_from_slice(inner);
                     body.extend_from_slice(format!(" {after} 0 R]\n/Resources ").as_bytes());
-                    body.extend(with_xobject(&mut w, sources, doc, resources, &name, form)?);
+                    body.extend(with_xobjects(&mut w, sources, doc, resources, &forms)?);
                     body.push(b'\n');
                 }
                 body.extend_from_slice(format!("/Parent {pages_num} 0 R\n/Rotate {rotate}\n>>").as_bytes());

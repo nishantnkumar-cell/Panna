@@ -20,7 +20,7 @@ pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{
     Annotation, Changes, Color, HeaderFooter, Kind, LINE_HEIGHT, Margins, NOTE_SIZE, PageSource, STAMPS,
-    SaveError, StampImage, fill_header_footer, stamp_label, text_width, wrap,
+    SaveError, StampImage, Watermark, fill_header_footer, stamp_label, text_width, wrap,
 };
 pub use formats::Format;
 pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};

@@ -125,6 +125,8 @@ enum Message {
     Crop(pages::CropEvent),
     /// The Headers and footers card.
     Mark(pages::MarkEvent),
+    /// The Watermark card.
+    Watermark(pages::WatermarkEvent),
     /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
     /// The folder to save extracted pages to, a file each, once chosen.
@@ -250,6 +252,8 @@ struct App {
     cropping: Option<pages::Cropping>,
     /// Choosing headers and footers.
     marking: Option<pages::Marking>,
+    /// Choosing a watermark or page colour.
+    watermarking: Option<pages::Watermarking>,
     /// The pages being extracted, while their file or folder is chosen.
     extract_pages: Vec<usize>,
     /// What to do once unsaved changes are saved or discarded.
@@ -502,6 +506,7 @@ impl App {
             extracting: None,
             cropping: None,
             marking: None,
+            watermarking: None,
             extract_pages: Vec::new(),
             confirm: None,
             after_save: None,
@@ -840,6 +845,8 @@ impl App {
                     self.cropping = None;
                 } else if self.marking.is_some() {
                     self.marking = None;
+                } else if self.watermarking.is_some() {
+                    self.watermarking = None;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1138,6 +1145,39 @@ impl App {
                 self.edit_pages(PageEdit::InsertFile { at, path }, at, false)
             }
             Message::Extract(event) => self.extract(event),
+            Message::Watermark(event) => {
+                let Some(state) = &mut self.watermarking else {
+                    return Task::none();
+                };
+                let clean = |v: String, max: usize| v.chars().filter(|c| !c.is_control()).take(max).collect();
+                match event {
+                    pages::WatermarkEvent::Text(v) => state.text = clean(v, 200),
+                    pages::WatermarkEvent::Ink(i) => state.ink = i,
+                    pages::WatermarkEvent::Size(v) => state.size = clean(v, 6),
+                    pages::WatermarkEvent::Angle(v) => state.angle = clean(v, 6),
+                    pages::WatermarkEvent::Opacity(v) => state.opacity = v,
+                    pages::WatermarkEvent::Behind(v) => state.behind = v,
+                    pages::WatermarkEvent::UsePaper(on) => {
+                        state.paper = on.then_some(state.paper.unwrap_or(0))
+                    }
+                    pages::WatermarkEvent::Paper(i) => state.paper = Some(i),
+                    pages::WatermarkEvent::Range(v) => state.range = clean(v, 200),
+                    pages::WatermarkEvent::Cancel => self.watermarking = None,
+                    pages::WatermarkEvent::Go => {
+                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                        let Ok((pages, mark)) = pages::watermark_settings(state, count) else {
+                            return Task::none();
+                        };
+                        self.watermarking = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(PageEdit::Watermark { pages, mark }, current, false);
+                    }
+                }
+                Task::none()
+            }
             Message::Mark(event) => {
                 let Some(state) = &mut self.marking else {
                     return Task::none();
@@ -1488,6 +1528,11 @@ impl App {
                 },
                 Message::InsertFileChosen,
             ),
+            pages::Op::Watermark => {
+                let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                self.watermarking = Some(pages::Watermarking::new(count));
+                operation::focus(pages::watermark_input_id())
+            }
             pages::Op::HeaderFooter => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
                 self.marking = Some(pages::Marking::new(count));
@@ -2410,6 +2455,12 @@ impl App {
             layers.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
+            ));
+        }
+        if let (Some(state), Some(doc)) = (&self.watermarking, &self.doc) {
+            layers.push(modal(
+                pages::watermark_card(state, doc.pages.len()),
+                Message::Watermark(pages::WatermarkEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.marking, &self.doc) {

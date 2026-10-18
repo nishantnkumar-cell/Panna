@@ -3,7 +3,7 @@
 //! Each tool works on the current page and becomes a new page list for the worker, which
 //! rewrites the document in memory until it is saved.
 
-use iced::widget::{button, column, container, radio, row, space, text, text_input};
+use iced::widget::{button, checkbox, column, container, radio, row, slider, space, text, text_input};
 use iced::{Element, Theme};
 use panna_core::{PageSize, PageSource};
 
@@ -26,6 +26,8 @@ pub enum Op {
     Crop,
     /// Asks what text to put at the top and bottom of pages.
     HeaderFooter,
+    /// Asks what watermark or page colour to add.
+    Watermark,
     Delete,
     Undo,
 }
@@ -111,6 +113,11 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             Icon::PageNumbers,
             "Add page numbers, headers and footers",
             ev(Op::HeaderFooter, true)
+        ),
+        icons::button(
+            Icon::Watermark,
+            "Add a watermark or page colour",
+            ev(Op::Watermark, true)
         ),
         icons::button(Icon::Delete, "Delete this page", ev(Op::Delete, count > 1)),
         icons::button(
@@ -495,6 +502,251 @@ pub fn mark_card<'a>(state: &Marking, count: usize) -> Element<'a, Message> {
         ]
         .spacing(10)
         .width(580),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
+/// Watermark text colours: grey, red, blue, green, black.
+pub const INKS: [panna_core::Color; 5] = [
+    panna_core::Color([0.5, 0.5, 0.5]),
+    panna_core::Color([0.86, 0.15, 0.15]),
+    panna_core::Color([0.12, 0.44, 0.92]),
+    panna_core::Color([0.18, 0.63, 0.26]),
+    panna_core::Color([0.0, 0.0, 0.0]),
+];
+const INK_NAMES: [&str; 5] = ["Grey", "Red", "Blue", "Green", "Black"];
+
+/// Page colours: cream, pale yellow, pale blue, pale green, pale grey.
+pub const PAPERS: [panna_core::Color; 5] = [
+    panna_core::Color([1.0, 0.98, 0.92]),
+    panna_core::Color([1.0, 0.97, 0.75]),
+    panna_core::Color([0.88, 0.94, 1.0]),
+    panna_core::Color([0.9, 0.97, 0.9]),
+    panna_core::Color([0.93, 0.93, 0.93]),
+];
+const PAPER_NAMES: [&str; 5] = ["Cream", "Pale yellow", "Pale blue", "Pale green", "Pale grey"];
+
+/// The Watermark card, as chosen so far.
+#[derive(Debug, Clone)]
+pub struct Watermarking {
+    pub text: String,
+    /// Which of [`INKS`].
+    pub ink: usize,
+    /// Points, or empty to fit the page.
+    pub size: String,
+    /// Degrees anticlockwise.
+    pub angle: String,
+    pub opacity: f32,
+    pub behind: bool,
+    /// Which of [`PAPERS`], if any.
+    pub paper: Option<usize>,
+    pub range: String,
+}
+
+impl Watermarking {
+    pub fn new(count: usize) -> Self {
+        Self {
+            text: String::new(),
+            ink: 0,
+            size: String::new(),
+            angle: "45".into(),
+            opacity: 0.3,
+            behind: false,
+            paper: None,
+            range: format!("1-{count}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum WatermarkEvent {
+    Text(String),
+    Ink(usize),
+    Size(String),
+    Angle(String),
+    Opacity(f32),
+    Behind(bool),
+    /// Turns the page colour on or off.
+    UsePaper(bool),
+    Paper(usize),
+    Range(String),
+    Go,
+    Cancel,
+}
+
+pub fn watermark_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("watermark-text")
+}
+
+/// The pages to mark, each once, and the watermark; or what's wrong.
+pub fn watermark_settings(
+    state: &Watermarking,
+    count: usize,
+) -> Result<(Vec<usize>, panna_core::Watermark), String> {
+    let size = match state.size.trim().replace(',', ".") {
+        s if s.is_empty() => 0.0,
+        s => match s.parse::<f32>() {
+            Ok(v) if (4.0..=500.0).contains(&v) => v,
+            _ => {
+                return Err("The text size goes from 4 to 500 pt, or leave it empty to fit the page.".into());
+            }
+        },
+    };
+    let angle = match state.angle.trim().replace(',', ".") {
+        s if s.is_empty() => 0.0,
+        s => match s.parse::<f32>() {
+            Ok(v) if (-360.0..=360.0).contains(&v) => v,
+            _ => return Err("The angle goes from -360 to 360 degrees.".into()),
+        },
+    };
+    let mut seen = std::collections::HashSet::new();
+    let pages: Vec<usize> = parse_range(&state.range, count)?
+        .into_iter()
+        .filter(|p| seen.insert(*p))
+        .collect();
+    let mark = panna_core::Watermark {
+        text: state.text.clone(),
+        size,
+        angle,
+        opacity: state.opacity,
+        color: INKS.get(state.ink).copied().unwrap_or(INKS[0]),
+        behind: state.behind,
+        background: state.paper.and_then(|i| PAPERS.get(i).copied()),
+    };
+    if mark.is_empty() {
+        return Err("Enter the watermark's text, or choose a page colour.".into());
+    }
+    Ok((pages, mark))
+}
+
+/// A row of round colour buttons, with `picked` outlined.
+fn swatches<'a>(
+    colors: &[panna_core::Color],
+    names: &[&'static str],
+    picked: Option<usize>,
+    on: impl Fn(usize) -> Message,
+) -> Element<'a, Message> {
+    let mut out = iced::widget::Row::new().spacing(6).align_y(iced::Center);
+    for (i, panna_core::Color([r, g, b])) in colors.iter().enumerate() {
+        let c = iced::Color::from_rgb(*r, *g, *b);
+        let selected = picked == Some(i);
+        let swatch = button(space().width(18).height(18))
+            .padding(0)
+            .style(move |theme: &Theme, _| button::Style {
+                background: Some(c.into()),
+                border: iced::Border {
+                    color: if selected {
+                        theme.extended_palette().primary.strong.color
+                    } else {
+                        theme.extended_palette().background.strong.color
+                    },
+                    width: if selected { 3.0 } else { 1.0 },
+                    radius: 10.0.into(),
+                },
+                ..button::Style::default()
+            })
+            .on_press(on(i));
+        out = out.push(icons::with_tip(swatch, names.get(i).copied().unwrap_or("")));
+    }
+    out.into()
+}
+
+/// The Watermark card for a document of `count` pages.
+pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Message> {
+    let ev = Message::Watermark;
+    let parsed = watermark_settings(state, count);
+    let untouched = state.text.trim().is_empty() && state.paper.is_none();
+    let hint: Element<'a, Message> = match &parsed {
+        Err(e) if !untouched => text(e.clone())
+            .size(13)
+            .style(|theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().danger.base.color),
+            })
+            .into(),
+        _ => space().height(0).into(),
+    };
+    let behind = Some(state.behind);
+    let small = |label: &'static str,
+                 placeholder: &'static str,
+                 value: &str,
+                 unit: &'static str,
+                 on: fn(String) -> WatermarkEvent| {
+        row![
+            text(label),
+            text_input(placeholder, value)
+                .on_input(move |v| ev(on(v)))
+                .on_submit(ev(WatermarkEvent::Go))
+                .width(56),
+            text(unit).size(13),
+        ]
+        .spacing(6)
+        .align_y(iced::Center)
+    };
+    container(
+        column![
+            text("Watermark and page colour").size(16),
+            text_input("Text, such as DRAFT or CONFIDENTIAL", &state.text)
+                .id(watermark_input_id())
+                .on_input(move |v| ev(WatermarkEvent::Text(v)))
+                .on_submit(ev(WatermarkEvent::Go)),
+            row![
+                text("Colour").width(60),
+                swatches(&INKS, &INK_NAMES, Some(state.ink), move |i| ev(
+                    WatermarkEvent::Ink(i)
+                )),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            row![
+                small("Size", "Fit", &state.size, "pt", WatermarkEvent::Size),
+                small("Angle", "0", &state.angle, "°", WatermarkEvent::Angle),
+            ]
+            .spacing(16),
+            row![
+                text("Opacity").width(60),
+                slider(0.05..=1.0, state.opacity, move |v| ev(WatermarkEvent::Opacity(v))).step(0.05_f32),
+                text(format!("{}%", (state.opacity * 100.0).round())).width(44),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            radio("Over the page", false, behind, move |v| ev(
+                WatermarkEvent::Behind(v)
+            )),
+            radio("Behind the page's text and pictures", true, behind, move |v| ev(
+                WatermarkEvent::Behind(v)
+            )),
+            row![
+                checkbox(state.paper.is_some())
+                    .label("Page colour")
+                    .on_toggle(move |v| ev(WatermarkEvent::UsePaper(v))),
+                swatches(&PAPERS, &PAPER_NAMES, state.paper, move |i| ev(
+                    WatermarkEvent::Paper(i)
+                )),
+            ]
+            .spacing(12)
+            .align_y(iced::Center),
+            row![
+                text("Pages").width(60),
+                text_input(&format!("Such as 1-3, 5 (1 to {count})"), &state.range)
+                    .on_input(move |v| ev(WatermarkEvent::Range(v)))
+                    .on_submit(ev(WatermarkEvent::Go)),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            hint,
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(WatermarkEvent::Cancel)),
+                button("Add").on_press_maybe(parsed.is_ok().then_some(ev(WatermarkEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(420),
     )
     .padding(16)
     .style(container::rounded_box)

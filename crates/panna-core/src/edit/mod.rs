@@ -20,7 +20,7 @@ use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
 pub use picture::StampImage;
 
-pub use marks::{HeaderFooter, fill as fill_header_footer};
+pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer};
 pub use rebuild::{Margins, PageSource};
 
 use crate::{CommentId, FieldValue, ObjRef};
@@ -240,7 +240,7 @@ pub(crate) fn crop(
     let extras: Vec<rebuild::Extra> = (0..count)
         .map(|i| rebuild::Extra {
             crop: pages.contains(&i).then_some(margins),
-            marks: None,
+            ..rebuild::Extra::default()
         })
         .collect();
     rebuild_from(&[doc], &every_page(count), &extras, true)
@@ -258,7 +258,28 @@ pub(crate) fn header_footer(
     for (i, &page) in pages.iter().enumerate() {
         if let Some(extra) = extras.get_mut(page) {
             let number = u64::from(marks.first) + i as u64;
-            extra.marks = Some(marks.for_page(number, pages.len(), &date));
+            extra
+                .over
+                .push(marks::Drawing::Lines(marks.for_page(number, pages.len(), &date)));
+        }
+    }
+    rebuild_from(&[doc], &every_page(count), &extras, true)
+}
+
+/// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order.
+pub(crate) fn watermark(
+    doc: Input<'_>,
+    count: usize,
+    pages: &[usize],
+    mark: &Watermark,
+) -> Result<Vec<u8>, SaveError> {
+    let date = marks::today();
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for (i, &page) in pages.iter().enumerate() {
+        if let Some(extra) = extras.get_mut(page) {
+            let (under, over) = mark.for_page(1 + i as u64, pages.len(), &date);
+            extra.under.extend(under);
+            extra.over.extend(over);
         }
     }
     rebuild_from(&[doc], &every_page(count), &extras, true)

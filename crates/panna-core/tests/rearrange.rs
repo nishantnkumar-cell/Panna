@@ -358,3 +358,29 @@ fn headers_and_footers_keep_password_protection() {
         "{t}"
     );
 }
+
+#[test]
+fn watermarks_and_backgrounds_are_drawn() {
+    use panna_core::{Color, Watermark};
+    let doc = open(three_pages(), None);
+    let mark = Watermark {
+        text: "DRAFT {page}".into(),
+        background: Some(Color([1.0, 0.0, 0.0])),
+        ..Watermark::default()
+    };
+    let out = open(doc.with_watermark(&[0, 2], &mark).unwrap(), None);
+    assert!(text(&out, 0).contains("DRAFT 1"));
+    assert!(text(&out, 2).contains("DRAFT 2") && text(&out, 2).contains("Page 3"));
+    assert!(!text(&out, 1).contains("DRAFT"));
+    // The colour fills the page behind its content, corner to corner.
+    let cache = out.new_cache();
+    let page = out.render_page(&cache, 2, 1.0).unwrap();
+    let pixel = |x: u32, y: u32| {
+        let i = ((y * page.width + x) * 4) as usize;
+        page.rgba[i..i + 3].to_vec()
+    };
+    assert_eq!(pixel(2, 2), [255, 0, 0]);
+    assert_eq!(pixel(page.width - 3, page.height - 3), [255, 0, 0]);
+    let untouched = out.render_page(&cache, 1, 1.0).unwrap();
+    assert_eq!(untouched.rgba[..3], [255, 255, 255]);
+}
