@@ -32,7 +32,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Read-aloud | Later | Uses OS speech engine only |
 | Attachments panel (embedded files) | Later | Done: a paperclip tab in the sidebar, shown when a document has attached files (its own or on pages), lists each with size, page and description and saves a copy; files are never opened |
 | Layers (optional content) toggle | Later | Done: a Layers tab in the sidebar, shown when a document has layers, with a box to show or hide each one. Only the view changes, never the file |
-| Measuring tools (distance, area, perimeter) | Later | |
+| Measuring tools (distance, area, perimeter) | Later | Done: the ruler button measures the distance between two points, or the perimeter and area of a shape (double-click its last corner), in millimetres, centimetres, inches or points. Measurements are shown, not saved |
 | Compare two files | Later | Acrobat's compare is cloud-assisted; ours is local |
 
 ## 2. Commenting and annotation

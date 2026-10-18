@@ -80,6 +80,9 @@ pub enum Icon {
     Paperclip,
     Camera,
     Layers,
+    Ruler,
+    Pentagon,
+    Area,
 }
 
 impl Icon {
@@ -157,6 +160,9 @@ impl Icon {
             Icon::Paperclip => include_bytes!("../icons/paperclip.svg"),
             Icon::Camera => include_bytes!("../icons/camera.svg"),
             Icon::Layers => include_bytes!("../icons/layers-2.svg"),
+            Icon::Ruler => include_bytes!("../icons/ruler.svg"),
+            Icon::Pentagon => include_bytes!("../icons/pentagon.svg"),
+            Icon::Area => include_bytes!("../icons/land-plot.svg"),
         }
     }
 }
@@ -251,7 +257,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 72] = [
+    const ALL: [Icon; 75] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -324,6 +330,9 @@ mod tests {
         Icon::Paperclip,
         Icon::Camera,
         Icon::Layers,
+        Icon::Ruler,
+        Icon::Pentagon,
+        Icon::Area,
     ];
 
     #[test]

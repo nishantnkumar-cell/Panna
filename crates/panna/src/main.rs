@@ -14,6 +14,7 @@ mod form;
 mod icons;
 mod layout;
 mod links;
+mod measure;
 mod pages;
 mod print;
 mod protect;
@@ -229,6 +230,7 @@ enum Message {
     PagePointer(usize, Point),
     /// Show or hide layer n.
     ShowLayer(usize, bool),
+    Measure(measure::Event),
     /// Turn the snapshot tool on or off.
     ToggleSnapshot,
     SnapshotTaken(Result<panna_core::RenderedPage, String>),
@@ -289,6 +291,7 @@ struct App {
     /// The snapshot tool is on: dragging over a page copies a picture of the area.
     snapping: bool,
     snapshot: Option<Snapshot>,
+    measure: measure::Measure,
     annotate: annotate::Annotate,
     form: form::Form,
     /// Asking whether to reset the form.
@@ -627,6 +630,7 @@ impl App {
             notice: None,
             snapping: false,
             snapshot: None,
+            measure: measure::Measure::default(),
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -969,6 +973,12 @@ impl App {
                 } else if self.snapping {
                     self.snapping = false;
                     self.snapshot = None;
+                } else if self.measure.on {
+                    if self.measure.active() {
+                        self.measure.clear();
+                    } else {
+                        self.measure.update(measure::Event::Toggle);
+                    }
                 } else if self.extracting.is_some() {
                     self.extracting = None;
                 } else if self.cropping.is_some() {
@@ -1074,6 +1084,10 @@ impl App {
             Message::Find(event) => self.find_event(event),
             Message::PagePointer(page, position) => {
                 self.hover = Some((page, position));
+                if self.measure.on {
+                    self.measure.hover(page, self.page_map(page).to_page(position));
+                    return Task::none();
+                }
                 if let Some(snap) = self.snapshot.as_mut().filter(|s| s.dragging && s.page == page) {
                     snap.to = Point::new(position.x / self.zoom, position.y / self.zoom);
                     return Task::none();
@@ -1088,6 +1102,12 @@ impl App {
                     && let Some(selection) = &mut self.selection
                 {
                     selection.focus = caret;
+                }
+                Task::none()
+            }
+            Message::PagePress(page) if self.measure.on => {
+                if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
+                    self.measure.press(page, self.page_map(page).to_page(position));
                 }
                 Task::none()
             }
@@ -1132,7 +1152,18 @@ impl App {
                 }
                 Task::batch([self.request_visible(), self.request_thumbnails()])
             }
+            Message::Measure(event) => {
+                self.measure.update(event);
+                if self.measure.on {
+                    self.snapping = false;
+                    self.snapshot = None;
+                    self.selection = None;
+                }
+                Task::none()
+            }
             Message::ToggleSnapshot => {
+                self.measure.on = false;
+                self.measure.clear();
                 self.snapping = !self.snapping;
                 self.snapshot = None;
                 Task::none()
@@ -1196,6 +1227,10 @@ impl App {
                 let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) else {
                     return Task::none();
                 };
+                if self.measure.on {
+                    self.measure.finish();
+                    return Task::none();
+                }
                 // A double-click ends a polygon or cloud.
                 if self.annotate.open && self.annotate.tool.by_corners() {
                     let outcome = self.annotate.update(annotate::Event::FinishShape);
@@ -2949,6 +2984,16 @@ impl App {
                 Message::Annotate(annotate::Event::Toggle),
             ),
             icons::toggle(
+                Icon::Ruler,
+                if self.measure.on {
+                    "Stop measuring (Esc)"
+                } else {
+                    "Measure distance, perimeter and area"
+                },
+                self.measure.on,
+                Message::Measure(measure::Event::Toggle),
+            ),
+            icons::toggle(
                 Icon::Camera,
                 if self.snapping {
                     "Stop taking snapshots (Esc)"
@@ -3027,6 +3072,17 @@ impl App {
         // Overlays always go in one stack above the body, so opening or closing one doesn't
         // move the body in the widget tree and reset its scroll position.
         let mut layers = vec![body];
+        if self.measure.on && self.doc.is_some() {
+            layers.push(
+                container(self.measure.bar())
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(Center)
+                    .align_y(iced::Bottom)
+                    .into(),
+            );
+        }
         if let (Some(doc), true) = (&self.doc, self.show_properties) {
             layers.push(properties_view(&doc.info));
         }
@@ -3339,6 +3395,11 @@ impl App {
                             .into_iter()
                             .flatten();
                         let fields = self.form.overlays(index, self.page_map(index));
+                        let measured = self.measure.overlay(
+                            index,
+                            self.page_map(index),
+                            Size::new(size.width * self.zoom, size.height * self.zoom),
+                        );
                         let snapshot = self.snapshot.filter(|s| s.page == index).map(|s| {
                             let (x, y, w, h) = s.rect();
                             let zoom = self.zoom;
@@ -3378,6 +3439,7 @@ impl App {
                             && outline.is_none()
                             && fields.is_empty()
                             && snapshot.is_none()
+                            && measured.is_none()
                         {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
@@ -3388,6 +3450,7 @@ impl App {
                             layers.extend(handles);
                             layers.extend(fields);
                             layers.extend(snapshot);
+                            layers.extend(measured);
                             iced::widget::Stack::with_children(layers).into()
                         }
                     }
@@ -3435,7 +3498,7 @@ impl App {
                         } else {
                             mouse::Interaction::ResizingDiagonallyUp
                         }
-                    } else if self.snapping {
+                    } else if self.snapping || self.measure.on {
                         mouse::Interaction::Crosshair
                     } else if over_link {
                         mouse::Interaction::Pointer
