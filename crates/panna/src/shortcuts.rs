@@ -35,6 +35,10 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("c" | "C") => Some(Message::Annotate(annotate::Event::Toggle)),
             Key::Character("t" | "T") => Some(Message::NextSpread),
             Key::Character("d" | "D") => Some(Message::NextColors),
+            // Acrobat's Read Out Loud keys.
+            Key::Character("v" | "V") => Some(Message::ReadAloud(crate::speech::Event::Page)),
+            Key::Character("b" | "B") => Some(Message::ReadAloud(crate::speech::Event::ToEnd)),
+            Key::Character("e" | "E") => Some(Message::ReadAloud(crate::speech::Event::Stop)),
             _ => None,
         };
     }

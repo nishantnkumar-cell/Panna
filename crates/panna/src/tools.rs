@@ -41,6 +41,16 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             column![
                 tool(Icon::Shrink, "Save a smaller copy…", Message::Compact),
                 tool(
+                    Icon::ReadAloud,
+                    "Read this page aloud",
+                    Message::ReadAloud(crate::speech::Event::Page)
+                ),
+                tool(
+                    Icon::ReadAloud,
+                    "Read aloud to the end",
+                    Message::ReadAloud(crate::speech::Event::ToEnd)
+                ),
+                tool(
                     Icon::EditPage,
                     "Add text, pictures or links to pages",
                     Message::Add(crate::add::Event::Toggle)

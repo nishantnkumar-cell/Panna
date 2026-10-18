@@ -29,7 +29,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Print | Later | Done: Ctrl+P or the printer button opens the system print dialog: KDE or GNOME through the desktop print portal (also in Flatpak), Windows' print dialog, and macOS's print panel with preview. Prints unsaved changes too, and honours a file's "no printing" permission |
 | Document properties (title, author, page size, PDF version) | V1 | Done (Ctrl+D) |
 | Password-protected (encrypted) PDFs | V1 | Done |
-| Read-aloud | Later | Uses OS speech engine only |
+| Read-aloud | Later | Done: All tools › Read this page aloud (the selected text, if any) or Read aloud to the end, turning pages as it goes; Ctrl+Shift+V, Ctrl+Shift+B and Ctrl+Shift+E to stop, as in Acrobat. Uses the system speech only: Windows speech, macOS `say`, or Speech Dispatcher or eSpeak on Linux (not yet in the Flatpak). Text is handed over on standard input, never on a command line |
 | Attachments panel (embedded files) | Later | Done: a paperclip tab in the sidebar, shown when a document has attached files (its own or on pages), lists each with size, page and description and saves a copy; files are never opened |
 | Layers (optional content) toggle | Later | Done: a Layers tab in the sidebar, shown when a document has layers, with a box to show or hide each one. Only the view changes, never the file |
 | Measuring tools (distance, area, perimeter) | Later | Done: the ruler button measures the distance between two points, or the perimeter and area of a shape (double-click its last corner), in millimetres, centimetres, inches or points. Measurements are shown, not saved |

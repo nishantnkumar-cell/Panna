@@ -28,6 +28,7 @@ mod settings;
 mod shortcuts;
 mod sidebar;
 mod sign;
+mod speech;
 mod toolbar;
 mod tools;
 
@@ -259,6 +260,12 @@ enum Message {
     Redact(redact::Event),
     Prepare(prepare::Event),
     EditPictures(pictures::Event),
+    ReadAloud(speech::Event),
+    /// A reading aloud ended: whether all was said, or why not.
+    SpeechDone {
+        run: u64,
+        result: Result<bool, String>,
+    },
     PicturesFound {
         doc: u64,
         page: usize,
@@ -352,6 +359,7 @@ struct App {
     redactor: redact::Redactor,
     preparer: prepare::Preparer,
     picture_editor: pictures::PictureEditor,
+    reader: speech::Reader,
     /// The comparison with another file, while it's shown.
     comparison: Option<compare::Comparison>,
     annotate: annotate::Annotate,
@@ -727,6 +735,7 @@ impl App {
             redactor: redact::Redactor::default(),
             preparer: prepare::Preparer::default(),
             picture_editor: pictures::PictureEditor::default(),
+            reader: speech::Reader::default(),
             comparison: None,
         };
         let scale = window::oldest()
@@ -1197,6 +1206,9 @@ impl App {
                 let text = result.unwrap_or_default();
                 self.find.add_page(index, &text);
                 slot.text = Some(text);
+                if self.reader.waiting_for() == Some(index) {
+                    return self.go_on_reading();
+                }
                 if self.find.needs_first() {
                     return self.step_find(true);
                 }
@@ -1649,6 +1661,48 @@ impl App {
                 }
                 let ask = self.ask_pictures(self.current_page());
                 Task::batch([ask, self.after_pictures(outcome)])
+            }
+            Message::ReadAloud(event) => {
+                self.all_tools = false;
+                match event {
+                    speech::Event::Stop => {
+                        self.reader.stop();
+                        Task::none()
+                    }
+                    speech::Event::Page | speech::Event::ToEnd if self.doc.is_some() => {
+                        if matches!(event, speech::Event::Page)
+                            && let Some(text) = self.selected_text()
+                        {
+                            return match self.reader.read_text(&text) {
+                                Ok(task) => task,
+                                Err(e) => {
+                                    self.notice = Some(e);
+                                    Task::none()
+                                }
+                            };
+                        }
+                        let to_end = matches!(event, speech::Event::ToEnd);
+                        self.reader.read_page(self.current_page(), to_end);
+                        self.go_on_reading()
+                    }
+                    _ => Task::none(),
+                }
+            }
+            Message::SpeechDone { run, result } => {
+                let pages = self.doc.as_ref().map_or(0, |d| d.texts.len());
+                match result {
+                    Ok(all_said) => {
+                        if self.reader.done(run, all_said, pages) {
+                            return self.go_on_reading();
+                        }
+                    }
+                    Err(e) => {
+                        if self.reader.done(run, false, pages) || !self.reader.active() {
+                            self.notice = Some(e);
+                        }
+                    }
+                }
+                Task::none()
             }
             Message::PicturesFound { doc, page, boxes } => {
                 if self.doc.as_ref().is_some_and(|d| d.id == doc) {
@@ -2522,6 +2576,7 @@ impl App {
                     self.confirm = Some(Pending::Close);
                     return shown;
                 }
+                self.reader.stop();
                 window::close(id)
             }
             Message::SwitchTab(tab) => self.switch_tab(tab),
@@ -2930,6 +2985,32 @@ impl App {
         }
     }
 
+    /// Reads aloud the page the reader is on, once its text is known.
+    fn go_on_reading(&mut self) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        let texts = &doc.texts;
+        let result = self.reader.go_on(texts.len(), |i| {
+            let slot = texts.get(i)?;
+            slot.text.as_ref().map(|t| t.slice(0..t.len()))
+        });
+        match result {
+            Ok((speech::Next::NeedText(page), _)) => self.request_text(page..page + 1),
+            Ok((speech::Next::Show(page), task)) => {
+                let task = task.unwrap_or_else(Task::none);
+                if page == self.current_page() {
+                    task
+                } else {
+                    Task::batch([task, self.go_to_page(page)])
+                }
+            }
+            Ok((speech::Next::Nothing, task)) => task.unwrap_or_else(Task::none),
+            Err(e) => {
+                self.notice = Some(e);
+                Task::none()
+            }
+        }
+    }
+
     /// Asks the worker where page `page`'s pictures are, unless already asked.
     fn ask_pictures(&mut self, page: usize) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
@@ -3003,7 +3084,10 @@ impl App {
                         self.confirm = Some(Pending::Close);
                         shown
                     }
-                    None => iced::exit(),
+                    None => {
+                        self.reader.stop();
+                        iced::exit()
+                    }
                 }
             }
             Pending::CloseTab => self.close_tab(),
@@ -3380,6 +3464,7 @@ impl App {
         self.redactor.stop();
         self.preparer.stop();
         self.picture_editor.stop();
+        self.reader.stop();
         self.snapping = false;
         self.snapshot = None;
         self.selection = None;
@@ -4075,6 +4160,17 @@ impl App {
                     .height(Fill)
                     .padding(16)
                     .align_x(Center)
+                    .align_y(iced::Bottom)
+                    .into(),
+            );
+        }
+        if let Some(bar) = self.reader.bar() {
+            layers.push(
+                container(bar)
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(iced::Right)
                     .align_y(iced::Bottom)
                     .into(),
             );
