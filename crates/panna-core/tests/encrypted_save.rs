@@ -74,3 +74,65 @@ fn changes_save_into_encrypted_files() {
         }
     }
 }
+
+/// The app path: the worker shows unsaved changes, then saves them twice in a row.
+#[test]
+fn the_worker_keeps_the_password_for_changes_and_saves() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let dir = std::env::temp_dir().join(format!("panna-worker-crypt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("locked.pdf");
+    std::fs::write(&path, FIXTURES[1].1).unwrap();
+    let wait = Duration::from_secs(20);
+
+    let (tx, rx) = mpsc::channel();
+    let worker =
+        panna_core::RenderWorker::open(path.clone(), Some("secret".into()), Limits::default(), move |r| {
+            let _ = tx.send(r.is_ok());
+        })
+        .unwrap();
+    assert!(rx.recv_timeout(wait).unwrap());
+
+    let rect = |y0: f32| Annotation {
+        page: 0,
+        kind: Kind::Rect(TextBox {
+            x0: 100.0,
+            y0,
+            x1: 300.0,
+            y1: y0 + 50.0,
+        }),
+        color: Color([1.0, 0.0, 0.0]),
+        opacity: 1.0,
+        width: 4.0,
+        contents: String::new(),
+        author: String::new(),
+    };
+    for (round, y0) in [300.0, 400.0].into_iter().enumerate() {
+        let (tx, rx) = mpsc::channel();
+        worker.set_changes(
+            Changes {
+                add: vec![rect(y0)],
+                ..Changes::default()
+            },
+            move |r| {
+                let _ = tx.send(r);
+            },
+        );
+        assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()), "round {round}");
+        let (tx, rx) = mpsc::channel();
+        worker.save(path.clone(), move |r| {
+            let _ = tx.send(r.map(|c| c.len()));
+        });
+        assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(round + 1));
+        let (tx, rx) = mpsc::channel();
+        worker.set_changes(Changes::default(), move |r| {
+            let _ = tx.send(r);
+        });
+        assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()));
+    }
+    let saved = open(&std::fs::read(&path).unwrap(), "secret");
+    assert_eq!(saved.comments().len(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}

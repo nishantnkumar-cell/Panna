@@ -311,6 +311,11 @@ impl Document {
         catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default()
     }
 
+    /// Parses `bytes`, a later revision of this file, with the same password and limits.
+    pub fn reopen(&self, bytes: Vec<u8>) -> Result<Self, OpenError> {
+        Self::from_bytes(bytes, Some(&self.password), self.limits)
+    }
+
     pub fn limits(&self) -> Limits {
         self.limits
     }

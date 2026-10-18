@@ -246,9 +246,10 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     reply(Ok(()));
                     continue;
                 }
-                let result = base.with_changes(&list).and_then(|bytes| {
-                    Document::from_bytes(bytes, None, base.limits()).map_err(|_| SaveError::Damaged)
-                });
+                // The password goes along: an encrypted file stays encrypted with it.
+                let result = base
+                    .with_changes(&list)
+                    .and_then(|bytes| base.reopen(bytes).map_err(|_| SaveError::Damaged));
                 match result {
                     Ok(doc) => {
                         live = Some(doc);
