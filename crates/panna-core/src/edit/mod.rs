@@ -47,6 +47,8 @@ pub enum SaveError {
     NoSuchPage(usize),
     EngineCrashed,
     Io(String),
+    /// The file's permissions don't allow printing it.
+    PrintingNotAllowed,
 }
 
 impl fmt::Display for SaveError {
@@ -63,6 +65,11 @@ impl fmt::Display for SaveError {
             Self::NoSuchPage(i) => write!(f, "Page {} doesn't exist.", i + 1),
             Self::EngineCrashed => write!(f, "The PDF engine failed while preparing the changes."),
             Self::Io(e) => write!(f, "Couldn't write the file: {e}"),
+            Self::PrintingNotAllowed => write!(
+                f,
+                "This PDF's author doesn't allow it to be printed. Opening it with the owner \
+                 password allows printing."
+            ),
         }
     }
 }
@@ -181,6 +188,23 @@ pub(crate) type Input<'a> = (&'a Pdf, &'a [u8], &'a str);
 /// A whole new file with the pages in `plan`, taken from `docs` (the first is the one being
 /// changed, whose catalog, document information and password the new file keeps).
 pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u8>, SaveError> {
+    rebuild_from(docs, plan, true)
+}
+
+/// Every page of `doc` in a file without password protection, to hand to the printing
+/// system, if the file's permissions allow printing.
+pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveError> {
+    let plan: Vec<PageSource> = (0..pages)
+        .map(|index| PageSource::Page {
+            doc: 0,
+            index,
+            turns: 0,
+        })
+        .collect();
+    rebuild_from(&[doc], &plan, false)
+}
+
+fn rebuild_from(docs: &[Input<'_>], plan: &[PageSource], keep_password: bool) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
     let mut first = None;
     for (i, &(pdf, bytes, password)) in docs.iter().enumerate() {
@@ -190,8 +214,11 @@ pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u
             None => None,
         };
         if i == 0 {
+            if !keep_password && crypt.as_ref().is_some_and(|c| !c.may_print()) {
+                return Err(SaveError::PrintingNotAllowed);
+            }
             let encryption = match (&trailer.encrypt, &crypt, &trailer.id) {
-                (Some(raw), Some(crypt), Some(id)) => Some(rebuild::Encryption {
+                (Some(raw), Some(crypt), Some(id)) if keep_password => Some(rebuild::Encryption {
                     crypt: crypt.clone(),
                     dict: encrypt_dict(pdf, raw)?,
                     id: id.clone(),

@@ -26,7 +26,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Night mode / custom page colours (accessibility) | Later | Done: original, dark (hues kept, lightness inverted) and sepia, cycled from the moon button or Ctrl+Shift+D; remembered |
 | Recent files list | V1 | Done; stored locally only |
 | Toolbars dock to any edge or float; position remembered | V1 | Done; icon-only (Lucide, ISC) with hover tips |
-| Print | Later | Uses OS print dialog |
+| Print | Later | Done on Linux: the KDE or GNOME print dialog through the desktop print portal (also in Flatpak), Ctrl+P, with unsaved changes and honouring a file's "no printing" permission. Windows and macOS open the pages in the default PDF app to print for now |
 | Document properties (title, author, page size, PDF version) | V1 | Done (Ctrl+D) |
 | Password-protected (encrypted) PDFs | V1 | Done |
 | Read-aloud | Later | Uses OS speech engine only |

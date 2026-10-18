@@ -214,6 +214,13 @@ fn the_worker_changes_pages_with_undo_and_saves() {
         },
     );
     assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()));
+    // The copy to print has the unsaved comment.
+    let (tx, rx) = mpsc::channel();
+    worker.print_copy(move |r| {
+        let _ = tx.send(r);
+    });
+    let printed = open(rx.recv_timeout(wait).unwrap().unwrap(), None);
+    assert_eq!(printed.info().unwrap().comments.len(), 1);
     assert_eq!(pages(PageEdit::Plan(vec![page(0, 0), page(2, 0)])), Ok((2, 1)));
     assert_eq!(
         pages(PageEdit::InsertFile {
@@ -247,4 +254,27 @@ fn the_worker_changes_pages_with_undo_and_saves() {
     assert_eq!(saved.page_count(), 1);
     assert!(text(&saved, 0).contains("Page 3"));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn print_copies_have_no_password_and_respect_permissions() {
+    for bytes in [
+        &include_bytes!("fixtures/encrypted-rc4.pdf")[..],
+        include_bytes!("fixtures/encrypted-aes256.pdf"),
+    ] {
+        let copy = open(bytes.to_vec(), Some("secret")).print_copy().unwrap();
+        let out = open(copy, None);
+        assert!(text(&out, 0).contains("Hello secret world"));
+    }
+    let plain = open(three_pages(), None).print_copy().unwrap();
+    assert_eq!(open(plain, None).page_count(), 3);
+
+    let restricted = include_bytes!("fixtures/encrypted-noprint.pdf").to_vec();
+    assert_eq!(
+        open(restricted.clone(), Some("secret")).print_copy(),
+        Err(panna_core::SaveError::PrintingNotAllowed)
+    );
+    // The owner password lifts the restriction.
+    let copy = open(restricted, Some("owner")).print_copy().unwrap();
+    assert!(text(&open(copy, None), 0).contains("Hello secret world"));
 }

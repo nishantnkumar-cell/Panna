@@ -327,6 +327,15 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The whole document, without password protection, for the printing system. Fails when
+    /// the file's permissions don't allow printing.
+    pub fn print_copy(&self) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::print_copy((&self.pdf, &self.bytes, &self.password), self.page_count())
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The comments in the document, as listed in [`DocumentInfo::comments`].
     pub fn comments(&self) -> Vec<crate::Comment> {
         catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default()

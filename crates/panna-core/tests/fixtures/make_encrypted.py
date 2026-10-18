@@ -4,6 +4,7 @@
 - encrypted-rc4.pdf: standard security handler revision 2 (40-bit RC4)
 - encrypted-aes128.pdf: revision 4 with the AESV2 crypt filter
 - encrypted-aes256.pdf: revision 6 with the AESV3 crypt filter
+- encrypted-noprint.pdf: as encrypted-aes256.pdf, but printing isn't allowed
 
 RC4 and the key derivations use the standard library; AES uses the `cryptography` package.
 Run with: python make_encrypted.py
@@ -184,6 +185,21 @@ enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
 perms = enc.update(perms_plain) + enc.finalize()
 write(
     "encrypted-aes256.pdf",
+    5,
+    6,
+    b"/Length 256 /O " + hexstr(o) + b" /U " + hexstr(u) + b" /OE " + hexstr(oe)
+    + b" /UE " + hexstr(ue) + b" /Perms " + hexstr(perms)
+    + b" /CF << /StdCF << /CFM /AESV3 /Length 32 /AuthEvent /DocOpen >> >> /StmF /StdCF /StrF /StdCF",
+    sealer(lambda num, data: IV + aes_cbc(key, IV, data)),
+)
+
+# Revision 6, AES-256, with printing (bit 3 of /P) not allowed.
+PERMS = -4 & ~0b100
+perms_plain = struct.pack("<i", PERMS) + b"\xff\xff\xff\xffTadb" + b"0000"
+enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+perms = enc.update(perms_plain) + enc.finalize()
+write(
+    "encrypted-noprint.pdf",
     5,
     6,
     b"/Length 256 /O " + hexstr(o) + b" /U " + hexstr(u) + b" /OE " + hexstr(oe)

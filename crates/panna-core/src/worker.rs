@@ -17,6 +17,7 @@ type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 
 /// Earlier versions kept for undoing page changes.
 const MAX_PAGE_UNDO: usize = 20;
@@ -56,6 +57,7 @@ enum Reply {
     Save(PathBuf, SaveReply),
     Pages(PageEdit, PagesReply),
     Extract(Vec<PageSource>, PathBuf, ExtractReply),
+    Print(PrintReply),
 }
 
 struct Job {
@@ -179,6 +181,15 @@ impl RenderWorker {
         });
     }
 
+    /// The whole document with unsaved changes, without password protection, for printing.
+    pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Print(Box::new(reply)),
+        });
+    }
+
     fn send(&self, index: usize, kind: Kind, scale: f32, rotation: u8, reply: RenderReply) {
         let _ = self.jobs.send(Job {
             index,
@@ -288,6 +299,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         break Swap::Promote;
                     }
                 }
+                Reply::Print(reply) => reply(current.print_copy()),
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
                 Reply::Extract(pages, path, reply) => {

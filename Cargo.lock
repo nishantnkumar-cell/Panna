@@ -2615,6 +2615,7 @@ dependencies = [
  "panna-core",
  "rfd",
  "winresource",
+ "zbus",
 ]
 
 [[package]]

@@ -35,6 +35,10 @@ pub(crate) struct Crypt {
     key: Vec<u8>,
     strings: Method,
     streams: Method,
+    /// The permission flags (/P).
+    p: i32,
+    /// Opened with the owner password, which lifts the permission flags.
+    owner: bool,
 }
 
 impl Crypt {
@@ -63,6 +67,12 @@ impl Crypt {
         let r = int(b"R").ok_or(SaveError::Damaged)?;
         let o = string(b"O").ok_or(SaveError::Damaged)?;
         let u = string(b"U").ok_or(SaveError::Damaged)?;
+        let p = i32::try_from(int(b"P").ok_or(SaveError::Damaged)?).unwrap_or_else(|_| {
+            // Some writers store /P as an unsigned 32-bit number.
+            int(b"P")
+                .and_then(|p| u32::try_from(p).ok())
+                .map_or(0, |p| p as i32)
+        });
         let encrypt_metadata = raw(b"EncryptMetadata").is_none_or(|v| v.trim_ascii() != b"false");
 
         // Version 4 and 5 name a crypt filter for strings and for streams.
@@ -106,12 +116,6 @@ impl Crypt {
                         .filter(|n| (5..=16).contains(n))
                         .ok_or(SaveError::Damaged)?
                 };
-                let p = i32::try_from(int(b"P").ok_or(SaveError::Damaged)?).unwrap_or_else(|_| {
-                    // Some writers store /P as an unsigned 32-bit number.
-                    int(b"P")
-                        .and_then(|p| u32::try_from(p).ok())
-                        .map_or(0, |p| p as i32)
-                });
                 let legacy = Legacy {
                     r,
                     bytes,
@@ -121,7 +125,7 @@ impl Crypt {
                     id,
                     encrypt_metadata: encrypt_metadata || r < 4,
                 };
-                let key = legacy.key(password.as_bytes()).ok_or(SaveError::Encrypted)?;
+                let (key, owner) = legacy.key(password.as_bytes()).ok_or(SaveError::Encrypted)?;
                 let (strings, streams) = if v == 4 {
                     (filter(b"StrF")?, filter(b"StmF")?)
                 } else {
@@ -131,20 +135,31 @@ impl Crypt {
                     key,
                     strings,
                     streams,
+                    p,
+                    owner,
                 })
             }
             5 if r == 5 || r == 6 => {
                 let oe = string(b"OE").ok_or(SaveError::Damaged)?;
                 let ue = string(b"UE").ok_or(SaveError::Damaged)?;
-                let key = modern_key(r, password.as_bytes(), &o, &u, &oe, &ue).ok_or(SaveError::Encrypted)?;
+                let (key, owner) =
+                    modern_key(r, password.as_bytes(), &o, &u, &oe, &ue).ok_or(SaveError::Encrypted)?;
                 Ok(Self {
                     key,
                     strings: filter(b"StrF")?,
                     streams: filter(b"StmF")?,
+                    p,
+                    owner,
                 })
             }
             _ => Err(unsupported()),
         }
+    }
+
+    /// Whether the file's permissions allow printing (bit 3 of /P), or the owner password
+    /// was given.
+    pub(crate) fn may_print(&self) -> bool {
+        self.owner || self.p & 0b100 != 0
     }
 
     /// Encrypts every string and the stream data in a new object's body.
@@ -268,11 +283,12 @@ struct Legacy<'a> {
 }
 
 impl Legacy<'_> {
-    /// The file key for a user password, or failing that an owner password.
-    fn key(&self, password: &[u8]) -> Option<Vec<u8>> {
+    /// The file key for a user password, or failing that an owner password, and whether it
+    /// was the owner's.
+    fn key(&self, password: &[u8]) -> Option<(Vec<u8>, bool)> {
         let user = padded(password);
         if let Some(key) = self.user_key(&user) {
-            return Some(key);
+            return Some((key, false));
         }
         // Algorithm 7: the owner password decrypts /O to the user password.
         let mut digest = Md5::digest(user).to_vec();
@@ -291,7 +307,7 @@ impl Legacy<'_> {
                 recovered = rc4(&k, &recovered);
             }
         }
-        self.user_key(&padded(&recovered))
+        self.user_key(&padded(&recovered)).map(|key| (key, true))
     }
 
     /// Algorithm 2, checked against /U with algorithm 4 or 5.
@@ -342,8 +358,9 @@ fn padded(password: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Revisions 5 and 6 (algorithm 2.A): the file key, unwrapped with a user or owner password.
-fn modern_key(r: i64, password: &[u8], o: &[u8], u: &[u8], oe: &[u8], ue: &[u8]) -> Option<Vec<u8>> {
+/// Revisions 5 and 6 (algorithm 2.A): the file key, unwrapped with a user or owner password,
+/// and whether it was the owner's.
+fn modern_key(r: i64, password: &[u8], o: &[u8], u: &[u8], oe: &[u8], ue: &[u8]) -> Option<(Vec<u8>, bool)> {
     let password = password.get(..password.len().min(127))?;
     let u48 = u.get(..48)?;
     let user_wraps = if hash(r, password, u.get(32..40)?, &[]) == u.get(..32)? {
@@ -368,7 +385,7 @@ fn modern_key(r: i64, password: &[u8], o: &[u8], u: &[u8], oe: &[u8], ue: &[u8])
         key.extend(block.iter().zip(prev).map(|(a, b)| a ^ b));
         prev.copy_from_slice(chunk);
     }
-    Some(key)
+    Some((key, !user_wraps))
 }
 
 /// Algorithm 2.B (revision 6), or plain SHA-256 for revision 5.

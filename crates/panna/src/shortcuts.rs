@@ -49,6 +49,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("g") => Some(Message::Find(Event::Next)),
             Key::Character("c") => Some(Message::Copy),
             Key::Character("s") => Some(Message::Save),
+            Key::Character("p") => Some(Message::Print),
             Key::Character("z") => Some(Message::Annotate(annotate::Event::Undo)),
             Key::Character("y") => Some(Message::Annotate(annotate::Event::Redo)),
             _ => None,

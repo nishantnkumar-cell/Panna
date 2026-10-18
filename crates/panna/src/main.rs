@@ -13,6 +13,7 @@ mod icons;
 mod layout;
 mod links;
 mod pages;
+mod print;
 mod selection;
 mod settings;
 mod shortcuts;
@@ -128,6 +129,11 @@ enum Message {
         result: Result<DocumentInfo, SaveError>,
     },
     Extracted(Result<(), SaveError>),
+    /// Prints the document with its unsaved changes (Ctrl+P).
+    Print,
+    /// The copy to print is ready.
+    PrintCopy(Result<Vec<u8>, SaveError>),
+    Printed(Result<(), String>),
     RotateCcw,
     PrevPage,
     NextPage,
@@ -224,6 +230,8 @@ struct App {
     /// A web address waiting for the user's go-ahead.
     confirm_link: Option<String>,
     saving: bool,
+    /// Making the copy to print.
+    printing: bool,
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
     after_save: Option<Pending>,
@@ -470,6 +478,7 @@ impl App {
             pending_link: None,
             confirm_link: None,
             saving: false,
+            printing: false,
             confirm: None,
             after_save: None,
             notice: None,
@@ -1117,6 +1126,42 @@ impl App {
                 })
             }
             Message::InsertFileChosen(None) | Message::ExtractChosen(None) => Task::none(),
+            Message::Print => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.printing {
+                    return Task::none();
+                }
+                self.printing = true;
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.print_copy(move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::PrintCopy(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::PrintCopy(result) => {
+                self.printing = false;
+                match result {
+                    Ok(pdf) => {
+                        let title = self.title().trim_end_matches(" — Panna").to_owned();
+                        Task::perform(print::print(pdf, title), Message::Printed)
+                    }
+                    Err(e) => {
+                        self.notice = Some(e.to_string());
+                        Task::none()
+                    }
+                }
+            }
+            Message::Printed(result) => {
+                if let Err(e) = result {
+                    self.notice = Some(e);
+                }
+                Task::none()
+            }
             Message::Extracted(result) => {
                 if let Err(e) = result {
                     self.notice = Some(e.to_string());
@@ -1966,6 +2011,11 @@ impl App {
                 Icon::Save,
                 format!("Save ({m}S)"),
                 (self.dirty() && !self.saving).then_some(Message::Save),
+            ),
+            icons::button(
+                Icon::Print,
+                format!("Print… ({m}P)"),
+                (has_doc && !self.printing).then_some(Message::Print),
             ),
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
