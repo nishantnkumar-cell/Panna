@@ -5,7 +5,8 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{Column, button, column, container, row, space, text, text_editor, vertical_slider};
 use iced::{Center, Element, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
-    Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, TextBox, text_width, wrap,
+    Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, ObjRef, ReviewState,
+    TextBox, text_width, wrap,
 };
 
 use crate::Message;
@@ -152,6 +153,19 @@ pub enum Event {
     FinishShape,
     /// Drops the polygon or cloud being drawn.
     CancelShape,
+    /// Opens the editor for a reply to a saved comment.
+    Reply(Thread),
+    /// Sets a saved comment's review status.
+    SetStatus(Thread, ReviewState),
+}
+
+/// A saved comment that replies and statuses attach to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Thread {
+    pub page: usize,
+    pub comment: ObjRef,
+    /// Where the comment is, which its replies share.
+    pub at: TextBox,
 }
 
 /// A shape being drawn, in page points.
@@ -189,6 +203,8 @@ pub struct Editing {
     pub content: text_editor::Content,
     /// The comment being changed; `None` for a new one.
     target: Option<Picked>,
+    /// Set when writing a reply: the comment replied to.
+    reply: Option<Thread>,
 }
 
 #[derive(Default)]
@@ -409,6 +425,7 @@ impl Annotate {
             at: Comment::from(a).at,
             content: text_editor::Content::with_text(&a.contents),
             target: Some(picked),
+            reply: None,
         });
         true
     }
@@ -552,6 +569,19 @@ impl Annotate {
                 if !self.removed.contains(&id) {
                     self.record();
                     self.removed.push(id);
+                    // Its replies and statuses go with it.
+                    let replies: Vec<CommentId> = self
+                        .saved
+                        .iter()
+                        .filter(|(r, a)| {
+                            matches!(a.kind, Kind::Reply { to, .. } if to == id.annot)
+                                && !self.removed.contains(r)
+                        })
+                        .map(|(r, _)| *r)
+                        .collect();
+                    self.removed.extend(replies);
+                    self.items
+                        .retain(|a| !matches!(a.kind, Kind::Reply { to, .. } if to == id.annot));
                     return Outcome::Changed;
                 }
             }
@@ -571,8 +601,13 @@ impl Annotate {
             Event::EditDone => {
                 if let Some(editing) = self.editing.take() {
                     let text = editing.content.text().trim_end().to_owned();
-                    if editing.tool == Tool::TextBox && text.trim().is_empty() {
+                    if (editing.tool == Tool::TextBox || editing.reply.is_some()) && text.trim().is_empty() {
                         return Outcome::Nothing;
+                    }
+                    if let Some(thread) = editing.reply {
+                        self.record();
+                        self.push_reply(thread, None, text);
+                        return Outcome::Changed;
                     }
                     if let Some(target) = editing.target {
                         self.picked = Some(target);
@@ -600,6 +635,31 @@ impl Annotate {
             }
             Event::EditCancel => self.editing = None,
             Event::FinishShape => return self.finish_shape(),
+            Event::Reply(thread) => {
+                self.unpick();
+                self.editing = Some(Editing {
+                    page: thread.page,
+                    tool: Tool::Select,
+                    at: thread.at,
+                    content: text_editor::Content::new(),
+                    target: None,
+                    reply: Some(thread),
+                });
+            }
+            Event::SetStatus(thread, state) => {
+                if self.status(thread.comment) == state {
+                    return Outcome::Nothing;
+                }
+                // Acrobat words a status change like this in the thread.
+                let text = if self.author.is_empty() {
+                    format!("Status set to {}", state.label())
+                } else {
+                    format!("{} set by {}", state.label(), self.author)
+                };
+                self.record();
+                self.push_reply(thread, Some(state), text);
+                return Outcome::Changed;
+            }
             Event::CancelShape => {
                 if self.draft.as_ref().is_some_and(|d| d.tool.by_corners()) {
                     self.draft = None;
@@ -627,6 +687,42 @@ impl Annotate {
             contents,
             author: self.author.clone(),
         });
+    }
+
+    fn push_reply(&mut self, thread: Thread, state: Option<ReviewState>, contents: String) {
+        self.items.push(Annotation {
+            page: thread.page,
+            kind: Kind::Reply {
+                to: thread.comment,
+                at: thread.at,
+                state,
+            },
+            color: SWATCHES[0],
+            opacity: 1.0,
+            width: STROKE_WIDTH,
+            contents,
+            author: self.author.clone(),
+        });
+    }
+
+    /// A saved comment's review status: the latest one set, saved or not.
+    pub fn status(&self, comment: ObjRef) -> ReviewState {
+        let state_of = |a: &Annotation| match a.kind {
+            Kind::Reply { to, state, .. } if to == comment => state,
+            _ => None,
+        };
+        self.items
+            .iter()
+            .rev()
+            .find_map(state_of)
+            .or_else(|| {
+                self.saved
+                    .iter()
+                    .rev()
+                    .filter(|(id, _)| !self.removed.contains(id))
+                    .find_map(|(_, a)| state_of(a))
+            })
+            .unwrap_or(ReviewState::None)
     }
 
     /// Marks selected text with the current markup tool: one annotation per page.
@@ -809,6 +905,7 @@ impl Annotate {
                     at,
                     content: text_editor::Content::new(),
                     target: None,
+                    reply: None,
                 });
                 return Outcome::Nothing;
             }
@@ -915,13 +1012,18 @@ impl Annotate {
         let editing = self.editing.as_ref()?;
         let ev = Message::Annotate;
         let title = match (editing.tool, editing.target.is_some()) {
+            _ if editing.reply.is_some() => "Reply",
             (Tool::Note, false) => "Note",
             (Tool::Note, true) => "Edit note",
             (Tool::TextBox, false) => "Text box",
             (Tool::TextBox, true) => "Edit text box",
             _ => "Comment",
         };
-        let done = if editing.target.is_some() { "Save" } else { "Add" };
+        let done = match (editing.target.is_some(), editing.reply.is_some()) {
+            (true, _) => "Save",
+            (_, true) => "Reply",
+            _ => "Add",
+        };
         let card = container(
             column![
                 text(title).size(16),
@@ -1037,6 +1139,7 @@ fn set_text(a: &mut Annotation, text: String) {
 /// Whether a point (in page points) is on an annotation, with a little slack for thin lines.
 fn hits(a: &Annotation, (x, y): (f32, f32)) -> bool {
     match &a.kind {
+        Kind::Reply { .. } => false,
         Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
             boxes.iter().any(|b| grown(*b, 1.0).contains(x, y))
         }
@@ -1380,6 +1483,85 @@ mod tests {
         a.press(0, (1.0, 1.0));
         a.update(Event::CancelShape);
         assert!(a.draft.is_none() && a.items.len() == 2);
+    }
+
+    #[test]
+    fn replies_and_statuses_join_a_saved_comment() {
+        let mut a = Annotate::new();
+        a.author = "Ann".into();
+        let parent = CommentId {
+            page: 0,
+            annot: ObjRef {
+                number: 5,
+                generation: 0,
+            },
+            popup: None,
+        };
+        let at = TextBox {
+            x0: 1.0,
+            y0: 2.0,
+            x1: 21.0,
+            y1: 22.0,
+        };
+        let thread = Thread {
+            page: 0,
+            comment: parent.annot,
+            at,
+        };
+        // An earlier status saved in the file.
+        let accepted = Annotation {
+            page: 0,
+            kind: Kind::Reply {
+                to: parent.annot,
+                at,
+                state: Some(ReviewState::Accepted),
+            },
+            color: SWATCHES[0],
+            opacity: 1.0,
+            width: 1.0,
+            contents: String::new(),
+            author: String::new(),
+        };
+        let mut saved = Comment::from(&accepted);
+        let saved_id = CommentId {
+            annot: ObjRef {
+                number: 9,
+                generation: 0,
+            },
+            ..parent
+        };
+        saved.id = Some(saved_id);
+        saved.editable = Some(accepted);
+        a.saved(&[saved]);
+        assert_eq!(a.status(parent.annot), ReviewState::Accepted);
+        // Replies aren't hit on the page.
+        assert_eq!(a.hit(0, (10.0, 10.0)), None);
+
+        a.update(Event::Reply(thread));
+        a.editing.as_mut().unwrap().content = text_editor::Content::with_text("Looks good");
+        assert!(matches!(a.update(Event::EditDone), Outcome::Changed));
+        assert!(
+            matches!(&a.items[0].kind, Kind::Reply { state: None, .. })
+                && a.items[0].contents == "Looks good"
+        );
+
+        assert!(matches!(
+            a.update(Event::SetStatus(thread, ReviewState::Rejected)),
+            Outcome::Changed
+        ));
+        assert_eq!(a.items[1].contents, "Rejected set by Ann");
+        assert_eq!(a.status(parent.annot), ReviewState::Rejected);
+        assert!(matches!(
+            a.update(Event::SetStatus(thread, ReviewState::Rejected)),
+            Outcome::Nothing
+        ));
+
+        // Deleting the comment takes its whole thread with it, as one undo step.
+        a.update(Event::Remove(parent));
+        assert!(a.items.is_empty() && a.removed == [parent, saved_id]);
+        a.update(Event::Undo);
+        assert_eq!(a.items.len(), 2);
+        assert_eq!(a.status(parent.annot), ReviewState::Rejected);
     }
 
     #[test]

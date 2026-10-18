@@ -16,7 +16,7 @@ mod outline;
 mod text;
 mod worker;
 
-pub use comments::{Comment, CommentId, CommentKind, ObjRef};
+pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{Annotation, Changes, Color, Kind, LINE_HEIGHT, NOTE_SIZE, SaveError, text_width, wrap};
 pub use formats::Format;

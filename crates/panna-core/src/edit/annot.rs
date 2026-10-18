@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 
 use hayro::kurbo::{Affine, Point};
 
-use crate::TextBox;
+use crate::{ObjRef, ReviewState, TextBox};
 
 /// An RGB colour, each channel 0–1.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,6 +51,20 @@ pub enum Kind {
         points: Vec<(f32, f32)>,
         cloud: bool,
     },
+    /// A reply to a saved comment, or with `state`, a review status set on it. It has no look
+    /// of its own: viewers show it in the comment's thread. `at` is the comment's place.
+    Reply {
+        to: ObjRef,
+        at: TextBox,
+        state: Option<ReviewState>,
+    },
+}
+
+impl Kind {
+    /// Whether it is drawn on the page (everything but replies).
+    pub fn drawn(&self) -> bool {
+        !matches!(self, Kind::Reply { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,7 +90,8 @@ pub const LINE_HEIGHT: f32 = 1.2;
 /// The two objects that make up one annotation.
 pub(crate) struct Built {
     pub dict: Vec<u8>,
-    pub appearance: Vec<u8>,
+    /// The appearance stream, for kinds that are [drawn](Kind::drawn).
+    pub appearance: Option<Vec<u8>>,
 }
 
 /// Everything about the target page that an annotation needs.
@@ -117,6 +132,7 @@ impl Annotation {
                     *y += dy;
                 }
             }
+            Kind::Reply { .. } => {}
             Kind::Line { from, to, .. } => {
                 for p in [from, to] {
                     p.0 += dx;
@@ -151,7 +167,11 @@ impl Annotation {
             };
         };
         match &mut self.kind {
-            Kind::Highlight(_) | Kind::Underline(_) | Kind::StrikeOut(_) | Kind::Note { .. } => {}
+            Kind::Highlight(_)
+            | Kind::Underline(_)
+            | Kind::StrikeOut(_)
+            | Kind::Note { .. }
+            | Kind::Reply { .. } => {}
             Kind::FreeText { rect, .. } | Kind::Rect(rect) | Kind::Ellipse(rect) => map_box(rect),
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
@@ -433,6 +453,20 @@ impl Annotation {
                 bounds.grow(width);
                 "Polygon"
             }
+            Kind::Reply { to, at, state } => {
+                let [x0, y0, x1, y1] = user_box(at);
+                bounds.add(x0, y0);
+                bounds.add(x1, y1);
+                let _ = write!(
+                    extra,
+                    "/IRT {} {} R /RT /R /Name /Comment ",
+                    to.number, to.generation
+                );
+                if let Some(state) = state {
+                    let _ = write!(extra, "/State ({}) /StateModel (Review) ", state.name());
+                }
+                "Text"
+            }
         };
         if !matches!(self.kind, Kind::Ink(_) | Kind::Line { .. } | Kind::Polygon { .. }) {
             bounds.grow(1.0);
@@ -441,12 +475,17 @@ impl Annotation {
         let rect = format!("[{} {} {} {}]", n(x0), n(y0), n(x1), n(y1));
 
         let mut dict = format!(
-            "<< /Type /Annot /Subtype /{subtype} /Rect {rect} /P {} /NM {} /M ({date}) /F 4 \
-             /C [{color}] /CA {} /AP << /N {ap_ref} >> ",
+            "<< /Type /Annot /Subtype /{subtype} /Rect {rect} /P {} /NM {} /M ({date}) /C [{color}] /CA {} ",
             page.page_ref,
             text_string(name),
             num(opacity),
         );
+        if self.kind.drawn() {
+            let _ = write!(dict, "/F 4 /AP << /N {ap_ref} >> ");
+        } else {
+            // Not shown on the page by itself (NoView): it belongs to the comment's thread.
+            dict.push_str("/F 32 ");
+        }
         if matches!(
             self.kind,
             Kind::Ink(_) | Kind::Rect(_) | Kind::Ellipse(_) | Kind::Line { .. } | Kind::Polygon { .. }
@@ -471,7 +510,7 @@ impl Annotation {
         );
         Built {
             dict: dict.into_bytes(),
-            appearance: appearance.into_bytes(),
+            appearance: self.kind.drawn().then(|| appearance.into_bytes()),
         }
     }
 }

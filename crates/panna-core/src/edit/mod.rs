@@ -122,16 +122,18 @@ pub(crate) fn apply(
         let mut refs = Vec::new();
         for a in list {
             let annot_id = out.alloc();
-            let ap_id = out.alloc();
+            let ap_id = a.kind.drawn().then(|| out.alloc());
             serial += 1;
             let built = a.build(
                 &info,
-                &format!("{ap_id} 0 R"),
+                &ap_id.map_or_else(String::new, |id| format!("{id} 0 R")),
                 &format!("panna-{stamp:x}-{serial}"),
                 &date,
             );
             out.put(annot_id, 0, built.dict)?;
-            out.put(ap_id, 0, built.appearance)?;
+            if let (Some(id), Some(appearance)) = (ap_id, built.appearance) {
+                out.put(id, 0, appearance)?;
+            }
             refs.push(format!("{annot_id} 0 R"));
         }
         // The page is rewritten with every entry copied byte for byte, except /Annots, which

@@ -934,9 +934,16 @@ impl App {
                 if self.saving && !opening {
                     return Task::none();
                 }
+                let was_editing = self.annotate.editing.is_some();
                 let outcome = self.annotate.update(event);
                 if marks_now {
                     return self.mark_selection();
+                }
+                if !was_editing && self.annotate.editing.is_some() {
+                    return Task::batch([
+                        self.after_annotate(outcome),
+                        operation::focus(annotate::editor_id()),
+                    ]);
                 }
                 self.after_annotate(outcome)
             }

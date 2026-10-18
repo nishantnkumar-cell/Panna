@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
-use panna_core::{Annotation, Changes, Color, Comment, CommentKind, Document, Kind, Limits, TextBox};
+use panna_core::{
+    Annotation, Changes, Color, Comment, CommentKind, Document, Kind, Limits, ReviewState, TextBox,
+};
 
 /// Assembles numbered objects (1-based) into a PDF with a classic xref table.
 fn build(objects: &[String]) -> Vec<u8> {
@@ -352,4 +354,47 @@ fn removing_a_saved_comment_takes_its_popup_too() {
         kinds,
         [(CommentKind::Rect, "keep"), (CommentKind::Rect, "Hello (world)")]
     );
+}
+
+#[test]
+fn replies_and_statuses_join_the_comment_thread() {
+    let doc = reopen(build(&objects(true)));
+    let note = doc.info().unwrap().comments.remove(0);
+    let parent = note.id.unwrap().annot;
+    let reply = |contents: &str, state| {
+        let mut a = annotation(Kind::Reply {
+            to: parent,
+            at: note.at,
+            state,
+        });
+        a.contents = contents.into();
+        a
+    };
+    let saved = doc
+        .with_annotations(&[
+            reply("Agreed", None),
+            reply("Accepted set by Tester", Some(ReviewState::Accepted)),
+        ])
+        .unwrap();
+    let text = String::from_utf8_lossy(&saved).into_owned();
+    assert!(text.contains("/IRT 5 0 R"), "{text}");
+    assert!(text.contains("/State (Accepted) /StateModel (Review)"), "{text}");
+    let doc = reopen(saved);
+    let listed = doc.info().unwrap().comments;
+    assert_eq!(listed.len(), 3);
+    assert_eq!(
+        (
+            listed[1].kind.clone(),
+            listed[1].reply_to,
+            listed[1].state,
+            listed[1].contents.as_str()
+        ),
+        (CommentKind::Reply, Some(parent), None, "Agreed")
+    );
+    assert_eq!(
+        (listed[2].reply_to, listed[2].state),
+        (Some(parent), Some(ReviewState::Accepted))
+    );
+    // Replies have no look of their own on the page.
+    assert!(!text.contains("/F 32 /AP"));
 }

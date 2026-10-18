@@ -33,6 +33,8 @@ pub enum CommentKind {
     Line,
     Polygon,
     Cloud,
+    /// A reply in another comment's thread, or a review status set on it.
+    Reply,
     /// Any other markup, with its PDF subtype name (Stamp, Polygon, Caret, …).
     Other(String),
 }
@@ -70,8 +72,57 @@ impl CommentKind {
             Self::Line => "Line",
             Self::Polygon => "Polygon",
             Self::Cloud => "Cloud",
+            Self::Reply => "Reply",
             Self::Other(name) => name,
         }
+    }
+}
+
+/// A review status set on a comment, as in Acrobat's review workflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewState {
+    None,
+    Accepted,
+    Rejected,
+    Cancelled,
+    Completed,
+}
+
+impl ReviewState {
+    pub const ALL: [ReviewState; 5] = [
+        ReviewState::None,
+        ReviewState::Accepted,
+        ReviewState::Rejected,
+        ReviewState::Cancelled,
+        ReviewState::Completed,
+    ];
+
+    /// The value of /State in the file.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Accepted => "Accepted",
+            Self::Rejected => "Rejected",
+            Self::Cancelled => "Cancelled",
+            Self::Completed => "Completed",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "No status",
+            other => other.name(),
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|state| state.name() == s)
+    }
+}
+
+impl std::fmt::Display for ReviewState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
@@ -113,6 +164,10 @@ pub struct Comment {
     pub at: TextBox,
     /// For highlights, underlines and strikethroughs: the areas of text they mark.
     pub marked: Vec<TextBox>,
+    /// For replies: the comment replied to.
+    pub reply_to: Option<ObjRef>,
+    /// For review statuses (replies that set one): the status.
+    pub state: Option<ReviewState>,
     /// The comment as an annotation Panna can redraw, for the kinds it can make itself. Moving
     /// or restyling a saved comment replaces it with this, changed.
     pub editable: Option<Annotation>,
@@ -188,6 +243,15 @@ impl From<&Annotation> for Comment {
                     CommentKind::Polygon
                 }
             }
+            Kind::Reply { at, .. } => {
+                add(at.x0, at.y0);
+                add(at.x1, at.y1);
+                CommentKind::Reply
+            }
+        };
+        let (reply_to, state) = match &a.kind {
+            Kind::Reply { to, state, .. } => (Some(*to), *state),
+            _ => (None, None),
         };
         let marked = match &a.kind {
             Kind::Highlight(b) | Kind::Underline(b) | Kind::StrikeOut(b) => b.clone(),
@@ -200,6 +264,8 @@ impl From<&Annotation> for Comment {
             contents: a.contents.clone(),
             author: a.author.clone(),
             marked,
+            reply_to,
+            state,
             editable: None,
             at: at.unwrap_or(TextBox {
                 x0: 0.0,
@@ -241,10 +307,31 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
         if kind == CommentKind::Polygon && is_cloudy(&annot) {
             kind = CommentKind::Cloud;
         }
-        // Hidden annotations (flag bit 2) aren't shown, so they aren't listed either.
-        if annot.get::<i64>(b"F").is_some_and(|f| f & 2 != 0) {
+        let reply_to = annot
+            .get_ref(b"IRT")
+            .and_then(|r| ObjRef::new(r.obj_number, r.gen_number));
+        if reply_to.is_some() {
+            // Grouped annotations act as one with their parent; they aren't replies.
+            if annot
+                .get::<Name<'_>>(b"RT")
+                .is_some_and(|rt| rt.as_str() == "Group")
+            {
+                continue;
+            }
+            kind = CommentKind::Reply;
+        } else if annot.get::<i64>(b"F").is_some_and(|f| f & 2 != 0) {
+            // Hidden annotations (flag bit 2) aren't shown, so they aren't listed either.
+            // Replies are often hidden on the page but still belong in the thread.
             continue;
         }
+        let state = reply_to
+            .and_then(|_| annot.get::<hayro::hayro_syntax::object::String<'_>>(b"State"))
+            .filter(|_| {
+                annot
+                    .get::<hayro::hayro_syntax::object::String<'_>>(b"StateModel")
+                    .is_none_or(|m| decode_text_string(m.as_bytes()) == "Review")
+            })
+            .and_then(|s| ReviewState::parse(&decode_text_string(s.as_bytes())));
         let text = |key: &[u8]| {
             annot
                 .get::<hayro::hayro_syntax::object::String<'_>>(key)
@@ -312,7 +399,11 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             });
         let contents = text(b"Contents");
         let author = text(b"T");
-        let editable = editable(&annot, subtype, at, &marked, &view_box).map(|kind| Annotation {
+        let redrawn = match reply_to {
+            Some(to) => Some(Kind::Reply { to, at, state }),
+            None => editable(&annot, subtype, at, &marked, &view_box),
+        };
+        let editable = redrawn.map(|kind| Annotation {
             page: index,
             kind,
             color: color(&annot),
@@ -329,6 +420,8 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             author,
             at,
             marked,
+            reply_to,
+            state,
             editable,
         });
     }
