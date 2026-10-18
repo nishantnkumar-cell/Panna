@@ -28,6 +28,9 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("s" | "S") => Some(Message::SaveAs),
             Key::Character("=" | "+") => Some(Message::RotateCw),
             Key::Character("-" | "_") => Some(Message::RotateCcw),
+            Key::Character("n" | "N") => Some(Message::FocusPageBox),
+            Key::Character("c" | "C") => Some(Message::Annotate(annotate::Event::Toggle)),
+            Key::Character("t" | "T") => Some(Message::NextSpread),
             _ => None,
         };
     }
@@ -52,6 +55,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     match key.as_ref() {
         Key::Named(Named::PageDown) => Some(Message::NextPage),
         Key::Named(Named::PageUp) => Some(Message::PrevPage),
+        Key::Named(Named::Home) => Some(Message::GoToPage(0)),
+        Key::Named(Named::End) => Some(Message::GoToPage(usize::MAX)),
         Key::Named(Named::Escape) => Some(Message::CloseOverlays),
         Key::Named(Named::Enter) => Some(Message::Annotate(annotate::Event::FinishShape)),
         // F4 shows or hides the navigation pane, as in Acrobat.
@@ -60,6 +65,62 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         Key::Named(Named::Delete | Named::Backspace) => {
             Some(Message::Annotate(annotate::Event::DeletePicked))
         }
+        // Single letters pick comment tools, as Acrobat's single-key accelerators do.
+        Key::Character(c) if !modifiers.alt() && !modifiers.shift() => {
+            annotate::Tool::from_key(c).map(Message::ToolKey)
+        }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::keyboard::{Location, Modifiers, key};
+
+    fn press(key: Key, modifiers: Modifiers) -> Option<Message> {
+        map(keyboard::Event::KeyPressed {
+            modified_key: key.clone(),
+            key,
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    }
+
+    fn letter(c: &str, modifiers: Modifiers) -> Option<Message> {
+        press(Key::Character(c.into()), modifiers)
+    }
+
+    #[test]
+    fn letters_pick_tools_only_without_modifiers() {
+        assert!(matches!(
+            letter("r", Modifiers::empty()),
+            Some(Message::ToolKey(annotate::Tool::Rect))
+        ));
+        assert!(matches!(
+            letter("c", Modifiers::empty()),
+            Some(Message::ToolKey(annotate::Tool::Cloud))
+        ));
+        assert!(letter("r", Modifiers::ALT).is_none());
+        assert!(letter("q", Modifiers::empty()).is_none());
+        assert!(matches!(
+            letter("C", Modifiers::COMMAND | Modifiers::SHIFT),
+            Some(Message::Annotate(annotate::Event::Toggle))
+        ));
+    }
+
+    #[test]
+    fn home_and_end_go_to_the_ends() {
+        assert!(matches!(
+            press(Key::Named(Named::Home), Modifiers::empty()),
+            Some(Message::GoToPage(0))
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::End), Modifiers::empty()),
+            Some(Message::GoToPage(usize::MAX))
+        ));
     }
 }

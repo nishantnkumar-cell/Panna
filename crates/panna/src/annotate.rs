@@ -66,9 +66,9 @@ impl Tool {
         }
     }
 
-    fn tip(self) -> &'static str {
-        match self {
-            Tool::Select => "Select text (V)",
+    fn tip(self) -> String {
+        let what = match self {
+            Tool::Select => "Select text",
             Tool::Highlight => "Highlight text",
             Tool::Underline => "Underline text",
             Tool::StrikeOut => "Strike through text",
@@ -81,7 +81,33 @@ impl Tool {
             Tool::Line => "Draw a line",
             Tool::Polygon => "Draw a polygon: click each corner, double-click or Enter to finish",
             Tool::Cloud => "Draw a cloud: click each corner, double-click or Enter to finish",
+        };
+        format!("{what} ({})", self.key().to_ascii_uppercase())
+    }
+
+    /// The single key that picks this tool while the comment tools are open.
+    pub fn key(self) -> char {
+        match self {
+            Tool::Select => 'v',
+            Tool::Highlight => 'h',
+            Tool::Underline => 'u',
+            Tool::StrikeOut => 'k',
+            Tool::Note => 'n',
+            Tool::TextBox => 't',
+            Tool::Pen => 'p',
+            Tool::Rect => 'r',
+            Tool::Ellipse => 'e',
+            Tool::Arrow => 'a',
+            Tool::Line => 'l',
+            Tool::Polygon => 'g',
+            Tool::Cloud => 'c',
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<Tool> {
+        Tool::ALL
+            .into_iter()
+            .find(|t| key.len() == 1 && key.starts_with(t.key()))
     }
 
     /// Tools that place one corner per click instead of drawing with a drag.
@@ -1267,6 +1293,16 @@ mod tests {
         assert!(a.items.is_empty() && a.can_redo());
         a.update(Event::Redo);
         assert_eq!(a.items.len(), 1);
+    }
+
+    #[test]
+    fn every_tool_has_its_own_key() {
+        let mut keys: Vec<char> = Tool::ALL.iter().map(|t| t.key()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), Tool::ALL.len());
+        assert_eq!(Tool::from_key("r"), Some(Tool::Rect));
+        assert_eq!(Tool::from_key("rr"), None);
     }
 
     #[test]

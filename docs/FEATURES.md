@@ -45,7 +45,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Freehand drawing (ink) | V1 | Done |
 | Shapes: rectangle, ellipse, line, arrow, polygon, cloud | V1 | Done: click each corner of a polygon or cloud, then double-click, press Enter or click the first corner to finish; Escape drops it |
 | Stamps (Approved, Draft, custom image stamps) | Later | |
-| Comment list panel, replies, status (accepted/rejected) | V1 | Done: Comments tab in the navigation pane, quotes highlighted text, click to jump. Saved comments can be replied to and given a review status (accepted, rejected, cancelled, completed); replies show in the comment's thread and are saved as standard /IRT replies, so Acrobat shows them too |
+| Comment list panel, replies, status (accepted/rejected) | V1 | Done: Comments tab in the navigation pane, quotes highlighted text, click to jump. Saved comments can be replied to and given a review status (accepted, rejected, cancelled, completed); replies show in the comment's thread and are saved as standard /IRT reply annotations, which other PDF viewers read as threads |
 | Edit / move / delete annotations, colour and opacity | V1 | Six-colour palette per tool done; any comment, saved or new, can be deleted from the list (undoable; removed from the file on save, with its pop-up). Drag any comment to move it; recolour it or set its opacity (slider) while selected; Delete key removes it. Saved comments of kinds Panna draws are redrawn on change. Drag a selected shape, drawing or text box by a corner handle to resize it; double-click a comment to edit its text |
 | Undo / redo | V1 | Done (Ctrl+Z, Ctrl+Y) |
 | Save annotations back into the PDF (standard annotations) | V1 | Done (Ctrl+S, Ctrl+Shift+S) as an incremental update with appearance streams, so other viewers show them; asks before closing with unsaved changes. Also saves into password-protected PDFs (RC4, AES-128, AES-256), keeping their encryption |
@@ -110,7 +110,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Open encrypted PDFs | V1 | |
+| Open encrypted PDFs | V1 | Done (see above); changes save back into them encrypted |
 | Encrypt with password, set permissions | Later | AES-256 only |
 | Digitally sign with a local certificate (PKCS#12 / OS store) | Later | |
 | Validate signatures | Later | Revocation checks (OCSP/CRL) are online, so they stay optional and off by default |
@@ -121,7 +121,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Keyboard navigation for all actions | V1 | |
+| Keyboard navigation for all actions | V1 | Done: every toolbar action has a shortcut shown in its tooltip (Ctrl+Shift+N goes to a page, Ctrl+Shift+C shows the comment tools, Ctrl+Shift+T changes the page layout, Home and End jump to the first and last page), and with the comment tools open a single letter picks each tool (V, H, U, K, N, T, P, R, E, A, L, G, C). Tab moves between form fields |
 | Screen reader support for the app UI | Later | Depends on iced accessibility support |
 | Tag PDF, reading order, accessibility checker | Later | |
 

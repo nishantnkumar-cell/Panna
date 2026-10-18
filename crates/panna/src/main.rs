@@ -109,6 +109,10 @@ enum Message {
     PrevPage,
     NextPage,
     PageInput(String),
+    /// Puts the cursor in the page number box.
+    FocusPageBox,
+    /// A comment tool's key was pressed.
+    ToolKey(annotate::Tool),
     PageSubmit,
     Toolbar(toolbar::Event),
     WindowResized(Size),
@@ -270,6 +274,10 @@ struct ViewportState {
 
 fn scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("pages")
+}
+
+fn page_box_id() -> iced::widget::Id {
+    iced::widget::Id::new("page-number")
 }
 
 /// A card listing document properties, centred over the page view. Clicking outside closes it.
@@ -638,6 +646,15 @@ impl App {
             Message::RotateCcw => self.rotate(3),
             Message::PrevPage => self.step_page(false),
             Message::NextPage => self.step_page(true),
+            Message::FocusPageBox => {
+                operation::focus(page_box_id()).chain(operation::select_all(page_box_id()))
+            }
+            Message::ToolKey(tool) => {
+                if self.annotate.open {
+                    return self.update(Message::Annotate(annotate::Event::Tool(tool)));
+                }
+                Task::none()
+            }
             Message::PageInput(value) => {
                 self.page_input = value.chars().filter(char::is_ascii_digit).take(6).collect();
                 Task::none()
@@ -649,9 +666,12 @@ impl App {
                     .ok()
                     .and_then(|n| n.checked_sub(1));
                 self.page_input.clear();
+                // Hand the keyboard back to the page, so Home, End and the tool keys work again.
+                // Focusing the (unfocusable) page view takes focus off the box.
+                let release = operation::focus(scroll_id());
                 match target {
-                    Some(index) => self.go_to_page(index),
-                    None => Task::none(),
+                    Some(index) => Task::batch([self.go_to_page(index), release]),
+                    None => release,
                 }
             }
             Message::Toolbar(event) => {
@@ -1641,6 +1661,7 @@ impl App {
         let current = self.current_page() + 1;
 
         let page_box = text_input(&current.to_string(), &self.page_input)
+            .id(page_box_id())
             .on_input(Message::PageInput)
             .on_submit(Message::PageSubmit)
             .width(56);
@@ -1666,7 +1687,7 @@ impl App {
             ),
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
-            icons::with_tip(page_box, "Go to page"),
+            icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
             text(format!("of {page_count}")).into(),
             icons::button(Icon::NextPage, "Next page (Page Down)", on(Message::NextPage)),
             gap(),
@@ -1694,9 +1715,9 @@ impl App {
                     Spread::TwoCover => Icon::CoverPage,
                 },
                 match self.settings.spread {
-                    Spread::Single => "Single page: click for two pages side by side",
-                    Spread::Two => "Two pages: click to show the cover page alone",
-                    Spread::TwoCover => "Two pages with cover: click for single page",
+                    Spread::Single => format!("Single page: click for two pages side by side ({m}Shift+T)"),
+                    Spread::Two => format!("Two pages: click to show the cover page alone ({m}Shift+T)"),
+                    Spread::TwoCover => format!("Two pages with cover: click for single page ({m}Shift+T)"),
                 },
                 on(Message::NextSpread),
             ),
@@ -1709,9 +1730,9 @@ impl App {
             icons::toggle(
                 Icon::Annotate,
                 if self.annotate.open {
-                    "Hide comment tools"
+                    format!("Hide comment tools ({m}Shift+C)")
                 } else {
-                    "Comment and draw"
+                    format!("Comment and draw ({m}Shift+C)")
                 },
                 self.annotate.open,
                 Message::Annotate(annotate::Event::Toggle),
