@@ -148,6 +148,8 @@ pub struct Document {
     limits: Limits,
     settings: InterpreterSettings,
     file_len: u64,
+    /// The password the file was opened with, needed again to save into an encrypted file.
+    password: String,
 }
 
 impl Document {
@@ -208,6 +210,7 @@ impl Document {
             limits,
             settings: InterpreterSettings::default(),
             file_len,
+            password: password.to_owned(),
         })
     }
 
@@ -298,7 +301,7 @@ impl Document {
     /// The file's bytes with `changes` (comments added and removed) as an incremental update.
     pub fn with_changes(&self, changes: &crate::Changes) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::apply(&self.pdf, &self.bytes, changes)
+            crate::edit::apply(&self.pdf, &self.bytes, changes, &self.password)
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }

@@ -48,7 +48,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Comment list panel, replies, status (accepted/rejected) | V1 | List done: Comments tab in the navigation pane, quotes highlighted text, click to jump. Replies and status later |
 | Edit / move / delete annotations, colour and opacity | V1 | Six-colour palette per tool done; any comment, saved or new, can be deleted from the list (undoable; removed from the file on save, with its pop-up). Drag any comment to move it; recolour it or set its opacity (slider) while selected; Delete key removes it. Saved comments of kinds Panna draws are redrawn on change. Resizing and editing text next |
 | Undo / redo | V1 | Done (Ctrl+Z, Ctrl+Y) |
-| Save annotations back into the PDF (standard annotations) | V1 | Done (Ctrl+S, Ctrl+Shift+S) as an incremental update with appearance streams, so other viewers show them; asks before closing with unsaved changes. Saving into encrypted PDFs not yet supported |
+| Save annotations back into the PDF (standard annotations) | V1 | Done (Ctrl+S, Ctrl+Shift+S) as an incremental update with appearance streams, so other viewers show them; asks before closing with unsaved changes. Also saves into password-protected PDFs (RC4, AES-128, AES-256), keeping their encryption |
 | Import / export comments (FDF, XFDF) | Later | |
 | Flatten annotations | Later | |
 | Shared review / cloud commenting | Skip | Online |

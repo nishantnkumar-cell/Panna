@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 
 use super::SaveError;
+use super::crypt::Crypt;
 use super::lex::{Lexer, dict_entries};
 
 /// How far from the end of the file `startxref` is searched for.
@@ -22,7 +23,8 @@ pub(crate) struct Trailer {
     pub root: Vec<u8>,
     pub info: Option<Vec<u8>>,
     pub id: Option<Vec<u8>>,
-    pub encrypted: bool,
+    /// Raw `/Encrypt` value: the update keeps the file encrypted the same way.
+    pub encrypt: Option<Vec<u8>>,
     /// The last section is a cross-reference stream, so the update writes one too.
     pub xref_stream: bool,
 }
@@ -69,7 +71,7 @@ pub(crate) fn read_trailer(data: &[u8]) -> Result<Trailer, SaveError> {
         root: raw(b"Root").ok_or(SaveError::Damaged)?,
         info: raw(b"Info"),
         id: raw(b"ID"),
-        encrypted: raw(b"Encrypt").is_some(),
+        encrypt: raw(b"Encrypt"),
         xref_stream,
     })
 }
@@ -87,6 +89,8 @@ pub(crate) struct Update {
     trailer: Trailer,
     next: u32,
     objects: Vec<(u32, u16, Vec<u8>)>,
+    /// Set for encrypted files: new strings and streams are encrypted with it.
+    crypt: Option<Crypt>,
 }
 
 impl Update {
@@ -95,7 +99,12 @@ impl Update {
             next: trailer.size,
             trailer,
             objects: Vec::new(),
+            crypt: None,
         }
+    }
+
+    pub(crate) fn encrypt_with(&mut self, crypt: Crypt) {
+        self.crypt = Some(crypt);
     }
 
     /// Reserves an object number for a new object.
@@ -105,10 +114,31 @@ impl Update {
         id
     }
 
-    /// Adds or replaces object `id`. `body` is what goes between `obj` and `endobj`.
-    pub(crate) fn put(&mut self, id: u32, generation: u16, body: Vec<u8>) {
+    /// Adds a new object (or replaces one with all-new content). `body` is what goes between
+    /// `obj` and `endobj`, unencrypted.
+    pub(crate) fn put(&mut self, id: u32, generation: u16, body: Vec<u8>) -> Result<(), SaveError> {
+        let body = match &self.crypt {
+            Some(crypt) => crypt.seal(id, generation, &body)?,
+            None => body,
+        };
+        self.put_copied(id, generation, body);
+        Ok(())
+    }
+
+    /// Replaces an object with a body built from its own (already encrypted) values plus new
+    /// values passed through [`Update::seal_value`].
+    pub(crate) fn put_copied(&mut self, id: u32, generation: u16, body: Vec<u8>) {
         self.objects.retain(|(i, _, _)| *i != id);
         self.objects.push((id, generation, body));
+    }
+
+    /// A new value for an entry of object `id`, with any strings in it encrypted.
+    pub(crate) fn seal_value(&self, id: u32, generation: u16, value: String) -> Result<String, SaveError> {
+        match &self.crypt {
+            Some(crypt) => String::from_utf8(crypt.strings_in(id, generation, value.as_bytes())?)
+                .map_err(|_| SaveError::Damaged),
+            None => Ok(value),
+        }
     }
 
     /// The original bytes followed by the update.
@@ -188,6 +218,9 @@ impl Update {
         if let Some(id) = &t.id {
             let _ = write!(out, "/ID {} ", String::from_utf8_lossy(id));
         }
+        if let Some(encrypt) = &t.encrypt {
+            let _ = write!(out, "/Encrypt {} ", String::from_utf8_lossy(encrypt));
+        }
         let _ = write!(out, "/Prev {} ", t.prev);
     }
 }
@@ -207,7 +240,7 @@ mod tests {
         assert_eq!(t.size, 2);
         assert_eq!(t.root, b"1 0 R");
         assert_eq!(t.id.as_deref(), Some(&b"[<AB> <CD>]"[..]));
-        assert!(!t.xref_stream && !t.encrypted && t.info.is_none());
+        assert!(!t.xref_stream && t.encrypt.is_none() && t.info.is_none());
     }
 
     #[test]
@@ -216,8 +249,8 @@ mod tests {
         // Object 2 is reserved but never written, so the table needs two subsections.
         let _unused = u.alloc();
         let b = u.alloc();
-        u.put(b, 0, b"(b)".to_vec());
-        u.put(1, 0, b"<< /Type /Catalog /New true >>".to_vec());
+        u.put(b, 0, b"(b)".to_vec()).unwrap();
+        u.put(1, 0, b"<< /Type /Catalog /New true >>".to_vec()).unwrap();
         let out = u.finish(CLASSIC);
         let text = String::from_utf8_lossy(&out);
         let tail = text.get(CLASSIC.len()..).unwrap_or_default();

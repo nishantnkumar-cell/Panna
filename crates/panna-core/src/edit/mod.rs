@@ -1,6 +1,7 @@
 //! Writing changes back into a PDF as an incremental update.
 
 mod annot;
+mod crypt;
 mod field;
 pub(crate) mod lex;
 mod update;
@@ -38,7 +39,7 @@ impl Changes {
 pub enum SaveError {
     /// The file's structure is too damaged to append to safely.
     Damaged,
-    /// Saving changes into encrypted files isn't supported yet.
+    /// The file is encrypted in a way changes can't be saved into.
     Encrypted,
     NoSuchPage(usize),
     EngineCrashed,
@@ -54,7 +55,7 @@ impl fmt::Display for SaveError {
             ),
             Self::Encrypted => write!(
                 f,
-                "Saving changes to password-protected PDFs isn't supported yet."
+                "This PDF's password protection uses a method Panna can't save changes into."
             ),
             Self::NoSuchPage(i) => write!(f, "Page {} doesn't exist.", i + 1),
             Self::EngineCrashed => write!(f, "The PDF engine failed while preparing the changes."),
@@ -67,15 +68,27 @@ impl std::error::Error for SaveError {}
 
 /// Returns `original` with `changes` appended as an incremental update. With no changes the
 /// bytes are returned unchanged.
-pub(crate) fn apply(pdf: &Pdf, original: &[u8], changes: &Changes) -> Result<Vec<u8>, SaveError> {
+///
+/// `password` is the one the file was opened with; for encrypted files it is needed again to
+/// encrypt what is added.
+pub(crate) fn apply(
+    pdf: &Pdf,
+    original: &[u8],
+    changes: &Changes,
+    password: &str,
+) -> Result<Vec<u8>, SaveError> {
     if changes.is_empty() {
         return Ok(original.to_vec());
     }
     let trailer = update::read_trailer(original)?;
-    if trailer.encrypted {
-        return Err(SaveError::Encrypted);
-    }
+    let crypt = match &trailer.encrypt {
+        Some(raw) => Some(encryption(pdf, raw, trailer.id.as_deref(), password)?),
+        None => None,
+    };
     let mut out = update::Update::new(trailer);
+    if let Some(crypt) = crypt {
+        out.encrypt_with(crypt);
+    }
     let date = pdf_date(SystemTime::now());
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -117,8 +130,8 @@ pub(crate) fn apply(pdf: &Pdf, original: &[u8], changes: &Changes) -> Result<Vec
                 &format!("panna-{stamp:x}-{serial}"),
                 &date,
             );
-            out.put(annot_id, 0, built.dict);
-            out.put(ap_id, 0, built.appearance);
+            out.put(annot_id, 0, built.dict)?;
+            out.put(ap_id, 0, built.appearance)?;
             refs.push(format!("{annot_id} 0 R"));
         }
         // The page is rewritten with every entry copied byte for byte, except /Annots, which
@@ -151,7 +164,7 @@ pub(crate) fn apply(pdf: &Pdf, original: &[u8], changes: &Changes) -> Result<Vec
         }
         dict.extend_from_slice(refs.join(" ").as_bytes());
         dict.extend_from_slice(b"]\n>>");
-        out.put(num, generation, dict);
+        out.put_copied(num, generation, dict);
     }
     fill_fields(pdf, &mut out, &changes.fields)?;
     Ok(out.finish(original))
@@ -202,7 +215,7 @@ fn fill_fields(
                         continue;
                     };
                     let ap = out.alloc();
-                    out.put(ap, 0, stream);
+                    out.put(ap, 0, stream)?;
                     ("AP", format!("<< /N {ap} 0 R >>"))
                 }
             };
@@ -214,9 +227,38 @@ fn fill_fields(
     }
     for ((number, generation), set) in edits {
         let dict = get(ObjRef { number, generation }).ok_or(SaveError::Damaged)?;
-        out.put(number, generation, rewrite(dict.data(), &set)?);
+        let set = set
+            .into_iter()
+            .map(|(key, value)| Ok((key, out.seal_value(number, generation, value)?)))
+            .collect::<Result<field::Entries, SaveError>>()?;
+        out.put_copied(number, generation, rewrite(dict.data(), &set)?);
     }
     Ok(())
+}
+
+/// The file key for an encrypted file, from its /Encrypt dictionary (inline or referenced),
+/// the first part of its /ID, and the password it was opened with.
+fn encryption(pdf: &Pdf, raw: &[u8], id: Option<&[u8]>, password: &str) -> Result<crypt::Crypt, SaveError> {
+    let first_id = id
+        .and_then(|id| {
+            let inner = id.trim_ascii().strip_prefix(b"[")?.strip_suffix(b"]")?;
+            let items = lex::array_items(inner)?;
+            crypt::parse_string(inner.get(items.first()?.clone())?)
+        })
+        .unwrap_or_default();
+    let raw = raw.trim_ascii();
+    if raw.starts_with(b"<<") {
+        return crypt::Crypt::new(raw, &first_id, password);
+    }
+    let r = lex::reference(raw).ok_or(SaveError::Damaged)?;
+    let dict = pdf
+        .xref()
+        .get::<Dict<'_>>(ObjectIdentifier::new(
+            i32::try_from(r.number).map_err(|_| SaveError::Damaged)?,
+            i32::from(r.generation),
+        ))
+        .ok_or(SaveError::Damaged)?;
+    crypt::Crypt::new(dict.data(), &first_id, password)
 }
 
 /// A dictionary with `set` replacing (or adding) those keys, everything else copied byte for
