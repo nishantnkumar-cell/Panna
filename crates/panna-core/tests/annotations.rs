@@ -113,6 +113,84 @@ fn added_annotations_render_after_reopening() {
 }
 
 #[test]
+fn image_stamps_draw_their_picture_upright() {
+    // Left half red and opaque, right half see-through.
+    let (w, h) = (4u32, 2u32);
+    let mut rgba = Vec::new();
+    for _ in 0..h {
+        for x in 0..w {
+            rgba.extend_from_slice(if x < w / 2 {
+                &[255, 0, 0, 255]
+            } else {
+                &[0, 0, 255, 0]
+            });
+        }
+    }
+    let mut png = Vec::new();
+    image::RgbaImage::from_raw(w, h, rgba)
+        .unwrap()
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let picture = panna_core::StampImage::decode(&png).unwrap();
+    let rect = TextBox {
+        x0: 20.0,
+        y0: 20.0,
+        x1: 180.0,
+        y1: 80.0,
+    };
+    for turned in [false, true] {
+        let page = if turned {
+            objects(false)[2].replace("/MediaBox", "/Rotate 90 /MediaBox")
+        } else {
+            objects(false)[2].clone()
+        };
+        let mut objs = objects(false);
+        objs[2] = page;
+        let doc = reopen(build(&objs));
+        // On the turned page, the box as shown is 100 wide and 200 tall.
+        let rect = if turned {
+            TextBox {
+                x0: 10.0,
+                y0: 20.0,
+                x1: 90.0,
+                y1: 180.0,
+            }
+        } else {
+            rect
+        };
+        let saved = doc
+            .with_annotations(&[annotation(Kind::Stamp {
+                rect,
+                name: "Signature".into(),
+                image: Some(picture.clone()),
+            })])
+            .unwrap();
+        let doc = reopen(saved);
+        let left = (
+            (rect.x0 + rect.width() * 0.2) as usize,
+            (rect.y0 + rect.height() / 2.0) as usize,
+        );
+        let right = (
+            (rect.x0 + rect.width() * 0.8) as usize,
+            (rect.y0 + rect.height() / 2.0) as usize,
+        );
+        let red = pixel(&doc, left.0, left.1);
+        assert!(red[0] > 200 && red[2] < 60, "turned {turned}: {red:?}");
+        // The see-through half shows the white page.
+        assert_eq!(
+            pixel(&doc, right.0, right.1),
+            [255, 255, 255, 255],
+            "turned {turned}"
+        );
+        // It lists as a stamp but can't be redrawn as words.
+        let comments = doc.info().unwrap().comments;
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].kind, CommentKind::Stamp);
+        assert!(comments[0].editable.is_none());
+    }
+}
+
+#[test]
 fn every_kind_saves_and_reopens() {
     let b = TextBox {
         x0: 20.0,
@@ -144,6 +222,7 @@ fn every_kind_saves_and_reopens() {
                 y1: 80.0,
             },
             name: "Approved".into(),
+            image: None,
         },
     ];
     let doc = reopen(build(&objects(true)));
@@ -265,10 +344,12 @@ fn saved_comments_come_back_editable() {
         annotation(Kind::Stamp {
             rect,
             name: "NotApproved".into(),
+            image: None,
         }),
         annotation(Kind::Stamp {
             rect,
             name: "Seen (Jo) é".into(),
+            image: None,
         }),
     ];
     let saved = doc.with_annotations(&shapes).unwrap();
@@ -306,7 +387,7 @@ fn saved_comments_come_back_editable() {
                 let label = if *cloud { "Cloud" } else { "Polygon" };
                 assert_eq!(comment.kind.label(), label);
             }
-            (Kind::Stamp { rect: a, name }, Kind::Stamp { rect: b, name: n }) => {
+            (Kind::Stamp { rect: a, name, .. }, Kind::Stamp { rect: b, name: n, .. }) => {
                 assert_eq!(name, n);
                 assert!((a.x0 - b.x0).abs() < 0.01 && (a.y1 - b.y1).abs() < 0.01, "{b:?}");
                 assert_eq!(comment.kind.label(), "Stamp");

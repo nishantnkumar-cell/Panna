@@ -2636,10 +2636,14 @@ name = "panna-core"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "flate2",
  "getrandom 0.3.4",
  "hayro",
+ "image",
  "md-5",
  "sha2",
+ "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]

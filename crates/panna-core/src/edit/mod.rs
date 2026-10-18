@@ -4,6 +4,7 @@ mod annot;
 mod crypt;
 mod field;
 pub(crate) mod lex;
+mod picture;
 mod rebuild;
 mod update;
 
@@ -16,6 +17,7 @@ use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
+pub use picture::StampImage;
 
 pub use rebuild::PageSource;
 
@@ -134,10 +136,31 @@ pub(crate) fn apply(
             let annot_id = out.alloc();
             let ap_id = a.kind.drawn().then(|| out.alloc());
             serial += 1;
+            // An image stamp's picture, and its transparency, are objects of their own.
+            let image_ref = match &a.kind {
+                Kind::Stamp {
+                    image: Some(image), ..
+                } => {
+                    let image_id = out.alloc();
+                    let mask_id = image.has_mask().then(|| out.alloc());
+                    let mask_ref = mask_id.map(|id| format!("{id} 0 R"));
+                    let (body, mask) = image.objects(mask_ref.as_deref());
+                    out.put(image_id, 0, body)?;
+                    if let (Some(id), Some(mask)) = (mask_id, mask) {
+                        out.put(id, 0, mask)?;
+                    }
+                    Some(format!("{image_id} 0 R"))
+                }
+                _ => None,
+            };
+            // Image stamps are named apart, so that reading the file back doesn't take them
+            // for word stamps to redraw.
+            let image_tag = if image_ref.is_some() { "image-" } else { "" };
             let built = a.build(
                 &info,
                 &ap_id.map_or_else(String::new, |id| format!("{id} 0 R")),
-                &format!("panna-{stamp:x}-{serial}"),
+                image_ref.as_deref(),
+                &format!("panna-{image_tag}{stamp:x}-{serial}"),
                 &date,
             );
             out.put(annot_id, 0, built.dict)?;

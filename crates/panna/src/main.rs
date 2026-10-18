@@ -133,6 +133,10 @@ enum Message {
         result: Result<DocumentInfo, SaveError>,
     },
     Extracted(Result<(), SaveError>),
+    /// Asks for a picture to stamp.
+    StampPicture,
+    StampPictureChosen(Option<PathBuf>),
+    StampPictureLoaded(Result<(panna_core::StampImage, String), String>),
     /// Prints the document with its unsaved changes (Ctrl+P).
     Print,
     /// The copy to print is ready.
@@ -1159,6 +1163,45 @@ impl App {
             }
             Message::InsertFileChosen(None) | Message::ExtractChosen(None) | Message::ExtractFolder(None) => {
                 Task::none()
+            }
+            Message::StampPicture => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Stamp a picture")
+                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::StampPictureChosen,
+            ),
+            Message::StampPictureChosen(None) => Task::none(),
+            Message::StampPictureChosen(Some(path)) => {
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let result = std::fs::read(&path)
+                        .map_err(|e| format!("Couldn't open the picture: {e}"))
+                        .and_then(|bytes| panna_core::StampImage::decode(&bytes))
+                        .map(|image| {
+                            let name = path
+                                .file_stem()
+                                .map_or_else(|| "Image".into(), |s| s.to_string_lossy().into_owned());
+                            (image, name)
+                        });
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::StampPictureLoaded(
+                        result.unwrap_or_else(|_| Err("The picture couldn't be read.".into())),
+                    )
+                })
+            }
+            Message::StampPictureLoaded(Err(e)) => {
+                self.notice = Some(e);
+                Task::none()
+            }
+            Message::StampPictureLoaded(Ok((image, name))) => {
+                self.update(Message::Annotate(annotate::Event::StampPicture(image, name)))
             }
             Message::Print => {
                 let Some(doc) = &self.doc else { return Task::none() };

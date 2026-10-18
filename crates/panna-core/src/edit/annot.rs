@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 
 use hayro::kurbo::{Affine, Point};
 
+use super::picture::StampImage;
 use crate::{ObjRef, ReviewState, TextBox};
 
 /// An RGB colour, each channel 0–1.
@@ -51,11 +52,13 @@ pub enum Kind {
         points: Vec<(f32, f32)>,
         cloud: bool,
     },
-    /// A rubber stamp: a word such as APPROVED in a rounded frame. `name` is its PDF name,
-    /// one of [`STAMPS`] or the stamp's own text.
+    /// A rubber stamp: a word such as APPROVED in a rounded frame, or with `image`, a
+    /// picture such as a signature or logo filling the box. `name` is its PDF name, one of
+    /// [`STAMPS`], the stamp's own text, or the picture's name.
     Stamp {
         rect: TextBox,
         name: String,
+        image: Option<StampImage>,
     },
     /// A reply to a saved comment, or with `state`, a review status set on it. It has no look
     /// of its own: viewers show it in the comment's thread. `at` is the comment's place.
@@ -203,7 +206,16 @@ impl Annotation {
         }
     }
 
-    pub(crate) fn build(&self, page: &PageInfo, ap_ref: &str, name: &str, date: &str) -> Built {
+    /// The annotation's dictionary and appearance. `image_ref` refers to an image stamp's
+    /// picture, written separately.
+    pub(crate) fn build(
+        &self,
+        page: &PageInfo,
+        ap_ref: &str,
+        image_ref: Option<&str>,
+        name: &str,
+        date: &str,
+    ) -> Built {
         let map = |x: f32, y: f32| page.to_user * Point::new(f64::from(x), f64::from(y));
         let user_box = |b: &TextBox| {
             let a = map(b.x0, b.y0);
@@ -465,7 +477,37 @@ impl Annotation {
                 bounds.grow(width);
                 "Polygon"
             }
-            Kind::Stamp { rect, name } => {
+            Kind::Stamp {
+                rect,
+                name,
+                image: Some(_),
+            } => {
+                let [x0, y0, x1, y1] = user_box(rect);
+                bounds.add(x0, y0);
+                bounds.add(x1, y1);
+                // The picture's unit square onto the box as shown, so it stays upright on a
+                // turned page: its bottom-left corner, then its x and y directions.
+                let origin = map(rect.x0, rect.y1);
+                let across = map(rect.x1, rect.y1) - origin;
+                let up = map(rect.x0, rect.y0) - origin;
+                if let Some(image) = image_ref {
+                    let _ = write!(resources, "/XObject << /Im0 {image} >> ");
+                    let _ = write!(
+                        content,
+                        "q {} {} {} {} {} {} cm /Im0 Do Q ",
+                        n(across.x),
+                        n(across.y),
+                        n(up.x),
+                        n(up.y),
+                        n(origin.x),
+                        n(origin.y)
+                    );
+                }
+                let name = if name.is_empty() { "Image" } else { name };
+                let _ = write!(extra, "/Name {} ", super::field::name(name));
+                "Stamp"
+            }
+            Kind::Stamp { rect, name, .. } => {
                 let [x0, y0, x1, y1] = user_box(rect);
                 bounds.add(x0, y0);
                 bounds.add(x1, y1);

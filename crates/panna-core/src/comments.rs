@@ -514,17 +514,20 @@ fn editable(
                 cloud: is_cloudy(annot),
             }
         }
-        // Only Panna's own stamps: redrawing another program's would lose its artwork.
+        // Only Panna's own word stamps: redrawing another program's, or a picture, would lose
+        // its artwork.
         "Stamp"
             if annot
                 .get::<hayro::hayro_syntax::object::String<'_>>(b"NM")
-                .is_some_and(|nm| decode_text_string(nm.as_bytes()).starts_with("panna-")) =>
+                .map(|nm| decode_text_string(nm.as_bytes()))
+                .is_some_and(|nm| nm.starts_with("panna-") && !nm.starts_with("panna-image-")) =>
         {
             Kind::Stamp {
                 rect: inner(1.0),
                 name: annot
                     .get::<Name<'_>>(b"Name")
                     .map_or_else(|| "Draft".to_owned(), |n| n.as_str().to_owned()),
+                image: None,
             }
         }
         "Ink" => {

@@ -8,7 +8,7 @@ use iced::widget::{
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
     Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, ObjRef, ReviewState,
-    STAMPS, TextBox, stamp_label, text_width, wrap,
+    STAMPS, StampImage, TextBox, stamp_label, text_width, wrap,
 };
 
 use crate::Message;
@@ -159,6 +159,9 @@ const TEXT_SIZE: f32 = 12.0;
 const TEXT_BOX_WIDTH: f32 = 200.0;
 /// Height of a stamp placed with a click, in points.
 const STAMP_HEIGHT: f32 = 34.0;
+/// A picture stamp's height for a click, and its widest, in points.
+const PICTURE_HEIGHT: f32 = 60.0;
+const PICTURE_MAX_WIDTH: f32 = 220.0;
 /// Drags shorter than this (in points) count as clicks.
 const CLICK_SLOP: f32 = 3.0;
 /// Most corners one polygon or cloud can have.
@@ -198,6 +201,8 @@ pub enum Event {
     StampText(String),
     /// Places a stamp with the typed text.
     StampCustom,
+    /// Places a picture, such as a signature or logo, named for its file.
+    StampPicture(StampImage, String),
 }
 
 /// Where a stamp goes, while its kind is being chosen.
@@ -690,7 +695,7 @@ impl Annotate {
             }
             Event::Stamp(i) => {
                 if let Some(name) = STAMPS.get(i) {
-                    return self.place_stamp((*name).to_owned());
+                    return self.place_stamp((*name).to_owned(), None);
                 }
             }
             Event::StampText(value) => {
@@ -701,9 +706,10 @@ impl Annotate {
             Event::StampCustom => {
                 let text = self.stamping.as_ref().map(|s| s.custom.trim().to_owned());
                 if let Some(text) = text.filter(|t| !t.is_empty()) {
-                    return self.place_stamp(text);
+                    return self.place_stamp(text, None);
                 }
             }
+            Event::StampPicture(image, name) => return self.place_stamp(name, Some(image)),
             Event::FinishShape => return self.finish_shape(),
             Event::Reply(thread) => {
                 self.unpick();
@@ -739,13 +745,35 @@ impl Annotate {
         Outcome::Nothing
     }
 
-    /// Adds the stamp being placed. A click centres a stamp sized to its words on the point.
-    fn place_stamp(&mut self, name: String) -> Outcome {
+    /// Adds the stamp being placed. A click centres a stamp sized to its words on the point; a
+    /// picture keeps its shape, fitted inside a dragged box or at a usual size for a click.
+    fn place_stamp(&mut self, name: String, image: Option<StampImage>) -> Outcome {
         let Some(stamping) = self.stamping.take() else {
             return Outcome::Nothing;
         };
         let at = stamping.at;
-        let rect = if at.width() >= CLICK_SLOP && at.height() >= CLICK_SLOP {
+        let dragged = at.width() >= CLICK_SLOP && at.height() >= CLICK_SLOP;
+        let rect = if let Some(image) = &image {
+            let aspect = image.width as f32 / image.height.max(1) as f32;
+            let (w, h) = if dragged {
+                let w = at.width().min(at.height() * aspect);
+                (w, w / aspect)
+            } else {
+                let w = (PICTURE_HEIGHT * aspect).min(PICTURE_MAX_WIDTH);
+                (w, w / aspect)
+            };
+            let (cx, cy) = if dragged {
+                ((at.x0 + at.x1) / 2.0, (at.y0 + at.y1) / 2.0)
+            } else {
+                (at.x0, at.y0)
+            };
+            TextBox {
+                x0: cx - w / 2.0,
+                y0: cy - h / 2.0,
+                x1: cx + w / 2.0,
+                y1: cy + h / 2.0,
+            }
+        } else if dragged {
             at
         } else {
             let h = STAMP_HEIGHT;
@@ -764,6 +792,7 @@ impl Annotate {
             Kind::Stamp {
                 rect,
                 name: name.clone(),
+                image,
             },
             Tool::Stamp,
             String::new(),
@@ -1204,11 +1233,16 @@ fn stamp_card(stamping: &Stamping) -> Element<'_, Message> {
         button("Add").on_press_maybe((!stamping.custom.trim().is_empty()).then(|| ev(Event::StampCustom))),
     ]
     .spacing(6);
+    let picture = button(text("A picture, such as a signature or logo…").size(13))
+        .style(button::secondary)
+        .width(Fill)
+        .on_press(Message::StampPicture);
     container(
         column![
             text("Stamp").size(16),
             grid,
             custom,
+            picture,
             row![
                 space::horizontal(),
                 button("Cancel")
@@ -1503,7 +1537,7 @@ mod tests {
         assert!(matches!(a.update(Event::Stamp(0)), Outcome::Changed));
         let Some(Annotation {
             page: 1,
-            kind: Kind::Stamp { rect, name },
+            kind: Kind::Stamp { rect, name, .. },
             color,
             ..
         }) = a.items.first()
@@ -1524,7 +1558,7 @@ mod tests {
         assert!(matches!(a.update(Event::StampCustom), Outcome::Changed));
         assert!(matches!(
             a.items.get(1),
-            Some(Annotation { kind: Kind::Stamp { rect, name }, color, .. })
+            Some(Annotation { kind: Kind::Stamp { rect, name, .. }, color, .. })
                 if name == "Checked by Jo" && rect.x1 == 110.0 && *color == SWATCHES[4]
         ));
     }
