@@ -71,6 +71,8 @@ pub enum Icon {
     Crop,
     PageNumbers,
     Watermark,
+    Export,
+    FromPictures,
 }
 
 impl Icon {
@@ -139,6 +141,8 @@ impl Icon {
             Icon::Crop => include_bytes!("../icons/crop.svg"),
             Icon::PageNumbers => include_bytes!("../icons/file-digit.svg"),
             Icon::Watermark => include_bytes!("../icons/file-type.svg"),
+            Icon::Export => include_bytes!("../icons/file-output.svg"),
+            Icon::FromPictures => include_bytes!("../icons/file-image.svg"),
         }
     }
 }
@@ -233,7 +237,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 63] = [
+    const ALL: [Icon; 65] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -297,6 +301,8 @@ mod tests {
         Icon::Crop,
         Icon::PageNumbers,
         Icon::Watermark,
+        Icon::Export,
+        Icon::FromPictures,
     ];
 
     #[test]

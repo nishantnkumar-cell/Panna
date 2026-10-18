@@ -1,6 +1,7 @@
 //! Writing changes back into a PDF as an incremental update.
 
 mod annot;
+mod convert;
 mod crypt;
 mod field;
 pub(crate) mod lex;
@@ -20,6 +21,7 @@ use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
 pub use picture::StampImage;
 
+pub use convert::{MAX_PICTURES, pictures_to_pdf};
 pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer};
 pub use rebuild::{Margins, PageSource};
 

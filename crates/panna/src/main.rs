@@ -7,6 +7,7 @@
 mod annotate;
 mod colors;
 mod comments;
+mod export;
 mod find;
 mod form;
 mod icons;
@@ -127,6 +128,17 @@ enum Message {
     Mark(pages::MarkEvent),
     /// The Watermark card.
     Watermark(pages::WatermarkEvent),
+    /// The Export card.
+    Export(export::Event),
+    /// Where to export pages to: a text file, or a folder for pictures.
+    ExportChosen(Option<PathBuf>),
+    /// Asks for pictures to make a new PDF of.
+    FromPictures,
+    PicturesChosen(Option<Vec<PathBuf>>),
+    /// Where to save the PDF made of the pictures.
+    PicturesSaveTo(Option<PathBuf>),
+    /// The PDF made of pictures was saved here, or why not.
+    PicturesMade(Result<PathBuf, String>),
     /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
     /// The folder to save extracted pages to, a file each, once chosen.
@@ -254,6 +266,10 @@ struct App {
     marking: Option<pages::Marking>,
     /// Choosing a watermark or page colour.
     watermarking: Option<pages::Watermarking>,
+    /// Choosing pages to export, then where.
+    exporting: Option<export::Exporting>,
+    /// Pictures chosen for a new PDF, while asking where to save it.
+    pictures: Vec<PathBuf>,
     /// The pages being extracted, while their file or folder is chosen.
     extract_pages: Vec<usize>,
     /// What to do once unsaved changes are saved or discarded.
@@ -286,6 +302,46 @@ enum Pending {
     Close,
     Open(PathBuf),
     OpenDialog,
+}
+
+/// Reads `files`, makes a PDF of them and writes it to `target`, on a thread of its own.
+async fn make_pdf_from_pictures(files: Vec<PathBuf>, target: PathBuf) -> Result<PathBuf, String> {
+    let (tx, rx) = futures_channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let mut pictures = Vec::with_capacity(files.len());
+            for file in &files {
+                let name = file.file_name().unwrap_or_default().to_string_lossy();
+                if std::fs::metadata(file)
+                    .map_err(|e| format!("Couldn't read “{name}”: {e}"))?
+                    .len()
+                    > 200 * 1024 * 1024
+                {
+                    return Err(format!("“{name}” is too large."));
+                }
+                pictures.push(std::fs::read(file).map_err(|e| format!("Couldn't read “{name}”: {e}"))?);
+            }
+            let pdf = panna_core::pictures_to_pdf(pictures).map_err(|e| {
+                // Name the picture rather than its place in the list.
+                match e
+                    .strip_prefix("Picture ")
+                    .and_then(|r| r.split_once(':'))
+                    .and_then(|(i, rest)| Some((files.get(i.parse::<usize>().ok()?.checked_sub(1)?)?, rest)))
+                {
+                    Some((file, rest)) => format!(
+                        "“{}”:{rest}",
+                        file.file_name().unwrap_or_default().to_string_lossy()
+                    ),
+                    None => e,
+                }
+            })?;
+            std::fs::write(&target, pdf).map_err(|e| format!("Couldn't write the PDF: {e}"))?;
+            Ok(target)
+        })();
+        let _ = tx.send(result);
+    });
+    rx.await
+        .unwrap_or_else(|_| Err("Making the PDF stopped unexpectedly.".into()))
 }
 
 /// The answer to "Save changes?".
@@ -507,6 +563,8 @@ impl App {
             cropping: None,
             marking: None,
             watermarking: None,
+            exporting: None,
+            pictures: Vec::new(),
             extract_pages: Vec::new(),
             confirm: None,
             after_save: None,
@@ -847,6 +905,8 @@ impl App {
                     self.marking = None;
                 } else if self.watermarking.is_some() {
                     self.watermarking = None;
+                } else if self.exporting.is_some() {
+                    self.exporting = None;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1145,6 +1205,117 @@ impl App {
                 self.edit_pages(PageEdit::InsertFile { at, path }, at, false)
             }
             Message::Extract(event) => self.extract(event),
+            Message::Export(event) => self.export(event),
+            Message::FromPictures => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Make a PDF from pictures")
+                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .pick_files()
+                        .await
+                        .map(|files| files.iter().map(|f| f.path().to_path_buf()).collect())
+                },
+                Message::PicturesChosen,
+            ),
+            Message::PicturesChosen(Some(mut files)) if !files.is_empty() => {
+                // In name order, as scans and photos are usually numbered.
+                files.sort();
+                let name = files
+                    .first()
+                    .and_then(|f| f.file_stem())
+                    .map_or_else(|| "pictures".to_owned(), |s| s.to_string_lossy().into_owned());
+                let dir = files
+                    .first()
+                    .and_then(|f| f.parent())
+                    .map(std::path::Path::to_path_buf);
+                self.pictures = files;
+                Task::perform(
+                    async move {
+                        let mut dialog = rfd::AsyncFileDialog::new()
+                            .set_title("Save the new PDF as")
+                            .add_filter("PDF documents", &["pdf"])
+                            .set_file_name(format!("{name}.pdf"));
+                        if let Some(dir) = dir {
+                            dialog = dialog.set_directory(dir);
+                        }
+                        dialog.save_file().await.map(|f| f.path().to_path_buf())
+                    },
+                    Message::PicturesSaveTo,
+                )
+            }
+            Message::PicturesChosen(_) | Message::PicturesSaveTo(None) => {
+                self.pictures.clear();
+                Task::none()
+            }
+            Message::PicturesSaveTo(Some(target)) => {
+                let files = std::mem::take(&mut self.pictures);
+                self.notice = Some(format!(
+                    "Making a PDF of {}…",
+                    if files.len() == 1 {
+                        "1 picture".into()
+                    } else {
+                        format!("{} pictures", files.len())
+                    }
+                ));
+                Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
+            }
+            Message::PicturesMade(Ok(path)) => {
+                self.notice = None;
+                self.update(Message::FileChosen(Some(path)))
+            }
+            Message::PicturesMade(Err(e)) => {
+                self.notice = Some(e);
+                Task::none()
+            }
+            Message::ExportChosen(None) => {
+                self.exporting = None;
+                Task::none()
+            }
+            Message::ExportChosen(Some(target)) => {
+                let Some(state) = self.exporting.take() else {
+                    return Task::none();
+                };
+                let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                let Ok((pages, dpi)) = export::settings(&state, count) else {
+                    return Task::none();
+                };
+                let pages: Vec<(usize, PathBuf)> = if state.format == panna_core::ExportFormat::Text {
+                    pages.into_iter().map(|i| (i, target.clone())).collect()
+                } else {
+                    let stem = self.file_stem();
+                    let ext = export::extension(state.format);
+                    let files: Vec<_> = pages
+                        .into_iter()
+                        .map(|i| (i, target.join(format!("{stem} page {}.{ext}", i + 1))))
+                        .collect();
+                    if let Some((_, taken)) = files.iter().find(|(_, p)| p.exists()) {
+                        self.notice = Some(format!(
+                            "“{}” is already in that folder. Choose another folder, or move it first.",
+                            taken.file_name().unwrap_or_default().to_string_lossy()
+                        ));
+                        return Task::none();
+                    }
+                    files
+                };
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.export(
+                    panna_core::Export {
+                        format: state.format,
+                        dpi,
+                        pages,
+                    },
+                    move |result| {
+                        let _ = tx.send(result);
+                    },
+                );
+                Task::perform(rx, |result| {
+                    Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
             Message::Watermark(event) => {
                 let Some(state) = &mut self.watermarking else {
                     return Task::none();
@@ -1640,6 +1811,61 @@ impl App {
         Task::perform(rx, |result| {
             Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
         })
+    }
+
+    /// The Export card's events.
+    fn export(&mut self, event: export::Event) -> Task<Message> {
+        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+        if let export::Event::Open = event {
+            if count > 0 {
+                self.exporting = Some(export::Exporting::new(count));
+            }
+            return iced::widget::operation::focus(export::input_id());
+        }
+        let Some(state) = &mut self.exporting else {
+            return Task::none();
+        };
+        let clean = |v: String, max: usize| v.chars().filter(|c| !c.is_control()).take(max).collect();
+        match event {
+            export::Event::Open => {}
+            export::Event::Format(f) => state.format = f,
+            export::Event::Dpi(v) => state.dpi = clean(v, 6),
+            export::Event::Range(v) => state.range = clean(v, 200),
+            export::Event::Cancel => self.exporting = None,
+            export::Event::Go => {
+                if export::settings(state, count).is_err() {
+                    return Task::none();
+                }
+                let text = state.format == panna_core::ExportFormat::Text;
+                let stem = self.file_stem();
+                return if text {
+                    Task::perform(
+                        async move {
+                            rfd::AsyncFileDialog::new()
+                                .set_title("Export text as")
+                                .add_filter("Text files", &["txt"])
+                                .set_file_name(format!("{stem}.txt"))
+                                .save_file()
+                                .await
+                                .map(|f| f.path().to_path_buf())
+                        },
+                        Message::ExportChosen,
+                    )
+                } else {
+                    Task::perform(
+                        async {
+                            rfd::AsyncFileDialog::new()
+                                .set_title("Save the pictures in")
+                                .pick_folder()
+                                .await
+                                .map(|f| f.path().to_path_buf())
+                        },
+                        Message::ExportChosen,
+                    )
+                };
+            }
+        }
+        Task::none()
     }
 
     /// Sends a page change to the worker, with unsaved comments and form entries first so
@@ -2284,6 +2510,11 @@ impl App {
             ),
             icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
             icons::button(
+                Icon::FromPictures,
+                "Make a PDF from pictures…",
+                Some(Message::FromPictures),
+            ),
+            icons::button(
                 Icon::Save,
                 format!("Save ({m}S)"),
                 (self.dirty() && !self.saving).then_some(Message::Save),
@@ -2292,6 +2523,11 @@ impl App {
                 Icon::Print,
                 format!("Print… ({m}P)"),
                 (has_doc && !self.printing).then_some(Message::Print),
+            ),
+            icons::button(
+                Icon::Export,
+                "Export as text or pictures…",
+                on(Message::Export(export::Event::Open)),
             ),
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
@@ -2455,6 +2691,12 @@ impl App {
             layers.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
+            ));
+        }
+        if let (Some(state), Some(doc)) = (&self.exporting, &self.doc) {
+            layers.push(modal(
+                export::card(state, doc.pages.len()),
+                Message::Export(export::Event::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.watermarking, &self.doc) {

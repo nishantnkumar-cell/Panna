@@ -95,9 +95,9 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Images (PNG, JPEG, TIFF) → PDF | Later | |
-| PDF → images | Later | |
-| PDF → plain text | Later | |
+| Images (PNG, JPEG, TIFF) → PDF | Later | Done for PNG and JPEG (JPEGs go in unchanged), a picture a page fitted to A4; TIFF not yet |
+| PDF → images | Later | Done: PNG or JPEG per page at a chosen resolution |
+| PDF → plain text | Later | Done: chosen pages into one text file |
 | PDF → Word / Excel / PowerPoint | Later | Acrobat does this offline; quality is a large project |
 | Word / Office → PDF | Skip | Needs Office or LibreOffice installed; could shell out later |
 | Web page → PDF | Skip | Needs network |

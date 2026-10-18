@@ -72,6 +72,7 @@ enum Reply {
     Save(PathBuf, SaveReply),
     Pages(PageEdit, PagesReply),
     Extract(Vec<(Vec<PageSource>, PathBuf)>, ExtractReply),
+    Export(crate::Export, ExtractReply),
     Print(PrintReply),
 }
 
@@ -195,6 +196,16 @@ impl RenderWorker {
         });
     }
 
+    /// Saves pages (with unsaved changes) as text or pictures. Stops at the first file that
+    /// can't be written.
+    pub fn export(&self, export: crate::Export, reply: impl FnOnce(Result<(), SaveError>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Export(export, Box::new(reply)),
+        });
+    }
+
     /// The whole document with unsaved changes, without password protection, for printing.
     pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -226,6 +237,30 @@ enum Swap {
 
 /// Writes to a temporary file next to `path`, then renames it over `path`, so a failed write
 /// never leaves a half-written PDF behind.
+/// Writes the pages `export` asks for.
+fn export_pages<'a>(
+    doc: &'a Document,
+    cache: &hayro::RenderCache<'a>,
+    export: &crate::Export,
+) -> Result<(), SaveError> {
+    use crate::ExportFormat;
+    match export.format {
+        ExportFormat::Text => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(());
+            };
+            let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
+            write_atomically(path, crate::export::text(doc, &pages)?.as_bytes())
+        }
+        format => export.pages.iter().try_for_each(|(index, path)| {
+            let page = doc
+                .render_page(cache, *index, export.dpi / 72.0)
+                .map_err(|_| SaveError::NoSuchPage(*index))?;
+            write_atomically(path, &crate::export::picture(&page, format)?)
+        }),
+    }
+}
+
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
     let io = |e: std::io::Error| SaveError::Io(e.to_string());
     let dir = path
@@ -316,6 +351,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 Reply::Print(reply) => reply(current.print_copy()),
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
+                Reply::Export(export, reply) => reply(export_pages(current, &cache, &export)),
                 Reply::Extract(files, reply) => {
                     reply(files.iter().try_for_each(|(pages, path)| {
                         current

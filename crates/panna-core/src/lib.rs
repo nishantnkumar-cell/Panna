@@ -8,6 +8,7 @@
 mod comments;
 mod document;
 mod edit;
+mod export;
 mod formats;
 mod forms;
 mod limits;
@@ -19,9 +20,11 @@ mod worker;
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{
-    Annotation, Changes, Color, HeaderFooter, Kind, LINE_HEIGHT, Margins, NOTE_SIZE, PageSource, STAMPS,
-    SaveError, StampImage, Watermark, fill_header_footer, stamp_label, text_width, wrap,
+    Annotation, Changes, Color, HeaderFooter, Kind, LINE_HEIGHT, MAX_PICTURES, Margins, NOTE_SIZE,
+    PageSource, STAMPS, SaveError, StampImage, Watermark, fill_header_footer, pictures_to_pdf, stamp_label,
+    text_width, wrap,
 };
+pub use export::{Export, ExportFormat};
 pub use formats::Format;
 pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
 pub use limits::Limits;

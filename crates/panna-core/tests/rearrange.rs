@@ -384,3 +384,54 @@ fn watermarks_and_backgrounds_are_drawn() {
     let untouched = out.render_page(&cache, 1, 1.0).unwrap();
     assert_eq!(untouched.rgba[..3], [255, 255, 255]);
 }
+
+#[test]
+fn pages_are_exported_as_text_and_pictures() {
+    use panna_core::{Export, ExportFormat, RenderWorker};
+    let dir = std::env::temp_dir().join(format!("panna-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = dir.join("three.pdf");
+    std::fs::write(&pdf, three_pages()).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = RenderWorker::open(pdf, None, Limits::default(), move |r| {
+        tx.send(r.is_ok()).unwrap();
+    })
+    .unwrap();
+    assert!(rx.recv().unwrap());
+    let run = |export: Export| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        worker.export(export, move |r| tx.send(r).unwrap());
+        rx.recv().unwrap()
+    };
+    let txt = dir.join("out.txt");
+    run(Export {
+        format: ExportFormat::Text,
+        dpi: 0.0,
+        pages: vec![(2, txt.clone()), (0, txt.clone())],
+    })
+    .unwrap();
+    let text = std::fs::read_to_string(&txt).unwrap();
+    assert!(
+        text.find("Page 3").unwrap() < text.find("Page 1").unwrap(),
+        "{text}"
+    );
+    let (png, jpg) = (dir.join("p.png"), dir.join("p.jpg"));
+    run(Export {
+        format: ExportFormat::Png,
+        dpi: 144.0,
+        pages: vec![(2, png.clone())],
+    })
+    .unwrap();
+    run(Export {
+        format: ExportFormat::Jpeg,
+        dpi: 72.0,
+        pages: vec![(2, jpg.clone())],
+    })
+    .unwrap();
+    let png = std::fs::read(&png).unwrap();
+    assert_eq!(&png[1..4], b"PNG");
+    // 300 × 400 points at twice the resolution.
+    assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 600);
+    assert_eq!(&std::fs::read(&jpg).unwrap()[..2], [0xFF, 0xD8]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
