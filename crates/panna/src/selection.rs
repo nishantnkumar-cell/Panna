@@ -142,6 +142,11 @@ impl PageMap {
         }
     }
 
+    /// The page's size in page points, unrotated by the view.
+    pub fn page_size(self) -> (f32, f32) {
+        (self.size.width, self.size.height)
+    }
+
     /// A text box as an on-screen rectangle: (x, y, width, height).
     pub fn rect(self, b: &TextBox) -> (f32, f32, f32, f32) {
         let a = self.to_view(b.x0, b.y0);

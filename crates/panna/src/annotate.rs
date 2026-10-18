@@ -2,10 +2,10 @@
 //! with undo and redo.
 
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
-use iced::widget::{Column, button, column, container, row, space, text, text_editor};
+use iced::widget::{Column, button, column, container, row, space, text, text_editor, vertical_slider};
 use iced::{Center, Element, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
-    Annotation, Changes, Color, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, TextBox, text_width, wrap,
+    Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, TextBox, text_width, wrap,
 };
 
 use crate::Message;
@@ -118,6 +118,12 @@ pub enum Event {
     Toggle,
     Tool(Tool),
     Color(usize),
+    /// The opacity slider moved (0–1).
+    Opacity(f32),
+    /// The opacity slider was let go.
+    OpacityDone,
+    /// Deletes the selected comment.
+    DeletePicked,
     Undo,
     Redo,
     /// Removes the unsaved annotation at this index.
@@ -137,6 +143,23 @@ pub struct Draft {
     points: Vec<(f32, f32)>,
 }
 
+/// The comment selected for moving or restyling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picked {
+    /// An unsaved annotation, by index.
+    New(usize),
+    /// A comment saved in the file.
+    Saved(CommentId),
+}
+
+/// The selected comment being dragged, in page points.
+struct Moving {
+    from: (f32, f32),
+    to: (f32, f32),
+    /// The page's size, which the comment stays within.
+    page: (f32, f32),
+}
+
 /// A note or text box waiting for its text.
 pub struct Editing {
     page: usize,
@@ -150,6 +173,7 @@ pub struct Annotate {
     pub open: bool,
     pub tool: Tool,
     colors: [Option<Color>; Tool::ALL.len()],
+    opacities: [Option<f32>; Tool::ALL.len()],
     /// Unsaved annotations, oldest first.
     pub items: Vec<Annotation>,
     /// Saved comments taken out, not yet saved.
@@ -160,6 +184,12 @@ pub struct Annotate {
     pub draft: Option<Draft>,
     pub editing: Option<Editing>,
     author: String,
+    /// Saved comments Panna can redraw, so they can be moved and restyled.
+    saved: Vec<(CommentId, Annotation)>,
+    pub picked: Option<Picked>,
+    moving: Option<Moving>,
+    /// The opacity slider is being dragged; its undo step is already recorded.
+    sliding: bool,
 }
 
 type Snapshot = (Vec<Annotation>, Vec<CommentId>);
@@ -190,14 +220,145 @@ impl Annotate {
             .unwrap_or_else(|| self.tool.default_color())
     }
 
-    /// Forgets unsaved annotations once they are saved (or discarded, or a new file opens).
-    pub fn saved(&mut self) {
+    /// The current opacity: the selected comment's, or the tool's.
+    pub fn opacity(&self) -> f32 {
+        if let Some(a) = self.picked_annotation() {
+            return a.opacity;
+        }
+        self.opacities
+            .get(self.tool.index())
+            .copied()
+            .flatten()
+            .unwrap_or(1.0)
+    }
+
+    /// Forgets unsaved annotations once they are saved (or discarded, or a new file opens),
+    /// and takes the file's comments.
+    pub fn saved(&mut self, comments: &[Comment]) {
         self.items.clear();
         self.removed.clear();
         self.undo.clear();
         self.redo.clear();
         self.draft = None;
         self.editing = None;
+        self.unpick();
+        self.saved = comments
+            .iter()
+            .filter_map(|c| Some((c.id?, c.editable.clone()?)))
+            .collect();
+    }
+
+    pub fn unpick(&mut self) {
+        self.picked = None;
+        self.moving = None;
+        self.sliding = false;
+    }
+
+    /// Whether a drag (drawing or moving) is in progress.
+    pub fn busy(&self) -> bool {
+        self.draft.is_some() || self.moving.is_some()
+    }
+
+    pub fn is_moving(&self) -> bool {
+        self.moving.is_some()
+    }
+
+    fn picked_annotation(&self) -> Option<&Annotation> {
+        match self.picked? {
+            Picked::New(i) => self.items.get(i),
+            Picked::Saved(id) => self.saved.iter().find(|(s, _)| *s == id).map(|(_, a)| a),
+        }
+    }
+
+    /// The selected comment's outline on `page`, moved along while it is being dragged.
+    pub fn picked_outline(&self, page: usize) -> Option<TextBox> {
+        let a = self.picked_annotation().filter(|a| a.page == page)?;
+        let mut b = Comment::from(a).at;
+        if let Some(m) = &self.moving {
+            let (dx, dy) = clamp_shift(b, m);
+            b = TextBox {
+                x0: b.x0 + dx,
+                y0: b.y0 + dy,
+                x1: b.x1 + dx,
+                y1: b.y1 + dy,
+            };
+        }
+        Some(grown(b, 2.0))
+    }
+
+    /// The comment Panna can move under a point, newest first.
+    pub fn hit(&self, page: usize, at: (f32, f32)) -> Option<Picked> {
+        let new = self
+            .items
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, a)| a.page == page && hits(a, at))
+            .map(|(i, _)| Picked::New(i));
+        new.or_else(|| {
+            self.saved
+                .iter()
+                .rev()
+                .find(|(id, a)| a.page == page && !self.removed.contains(id) && hits(a, at))
+                .map(|(id, _)| Picked::Saved(*id))
+        })
+    }
+
+    /// Selects `picked`, if it is one Panna can change.
+    pub fn pick(&mut self, picked: Picked) {
+        self.moving = None;
+        self.picked = match picked {
+            Picked::New(i) => (i < self.items.len()).then_some(picked),
+            Picked::Saved(id) => self.saved.iter().any(|(s, _)| *s == id).then_some(picked),
+        };
+    }
+
+    /// Selects the comment under the pointer and starts moving it. Returns false when there
+    /// is none, so the press selects text instead.
+    pub fn grab(&mut self, page: usize, at: (f32, f32), size: (f32, f32)) -> bool {
+        let Some(picked) = self.hit(page, at) else {
+            self.unpick();
+            return false;
+        };
+        self.pick(picked);
+        self.moving = Some(Moving {
+            from: at,
+            to: at,
+            page: size,
+        });
+        true
+    }
+
+    /// Changes the selected comment as one undo step. A saved comment is taken out and redrawn
+    /// as a new one, as Acrobat does.
+    fn edit(&mut self, record: bool, change: impl FnOnce(&mut Annotation)) -> bool {
+        let Some(picked) = self.picked else {
+            return false;
+        };
+        let index = match picked {
+            Picked::New(i) if i < self.items.len() => {
+                if record {
+                    self.record();
+                }
+                i
+            }
+            Picked::New(_) => return false,
+            Picked::Saved(id) => {
+                let Some(a) = self.saved.iter().find(|(s, _)| *s == id).map(|(_, a)| a.clone()) else {
+                    return false;
+                };
+                // Taking a saved comment out is always its own step, even mid-slide.
+                self.record();
+                self.removed.push(id);
+                self.items.push(a);
+                self.items.len() - 1
+            }
+        };
+        self.picked = Some(Picked::New(index));
+        if let Some(a) = self.items.get_mut(index) {
+            change(a);
+        }
+        true
     }
 
     /// Everything not yet saved, for the renderer and for saving.
@@ -247,13 +408,46 @@ impl Annotate {
             Event::Tool(tool) => {
                 self.tool = tool;
                 self.draft = None;
-            }
-            Event::Color(i) => {
-                if let (Some(slot), Some(color)) = (self.colors.get_mut(self.tool.index()), SWATCHES.get(i)) {
-                    *slot = Some(*color);
+                if tool != Tool::Select {
+                    self.unpick();
                 }
             }
+            Event::Color(i) => {
+                let Some(color) = SWATCHES.get(i).copied() else {
+                    return Outcome::Nothing;
+                };
+                if self.picked.is_some() {
+                    if self.picked_annotation().is_some_and(|a| a.color != color)
+                        && self.edit(true, |a| a.color = color)
+                    {
+                        return Outcome::Changed;
+                    }
+                } else if let Some(slot) = self.colors.get_mut(self.tool.index()) {
+                    *slot = Some(color);
+                }
+            }
+            Event::Opacity(value) => {
+                let value = value.clamp(0.1, 1.0);
+                if self.picked.is_some() {
+                    let first = !self.sliding;
+                    self.sliding = true;
+                    self.edit(first, |a| a.opacity = value);
+                } else if let Some(slot) = self.opacities.get_mut(self.tool.index()) {
+                    *slot = Some(value);
+                }
+            }
+            Event::OpacityDone => {
+                if std::mem::take(&mut self.sliding) {
+                    return Outcome::Changed;
+                }
+            }
+            Event::DeletePicked => match self.picked.take() {
+                Some(Picked::New(i)) => return self.update(Event::Delete(i)),
+                Some(Picked::Saved(id)) => return self.update(Event::Remove(id)),
+                None => {}
+            },
             Event::Undo => {
+                self.unpick();
                 if let Some(before) = self.undo.pop() {
                     let now = self.restore(before);
                     self.redo.push(now);
@@ -261,6 +455,7 @@ impl Annotate {
                 }
             }
             Event::Redo => {
+                self.unpick();
                 if let Some(after) = self.redo.pop() {
                     let now = self.restore(after);
                     self.undo.push(now);
@@ -268,6 +463,7 @@ impl Annotate {
                 }
             }
             Event::Remove(id) => {
+                self.unpick();
                 if !self.removed.contains(&id) {
                     self.record();
                     self.removed.push(id);
@@ -275,6 +471,7 @@ impl Annotate {
                 }
             }
             Event::Delete(index) => {
+                self.unpick();
                 if index < self.items.len() {
                     self.record();
                     self.items.remove(index);
@@ -321,11 +518,12 @@ impl Annotate {
             .copied()
             .flatten()
             .unwrap_or_else(|| tool.default_color());
+        let opacity = self.opacities.get(tool.index()).copied().flatten().unwrap_or(1.0);
         self.items.push(Annotation {
             page,
             kind,
             color,
-            opacity: 1.0,
+            opacity,
             width: STROKE_WIDTH,
             contents,
             author: self.author.clone(),
@@ -367,6 +565,13 @@ impl Annotate {
     }
 
     pub fn drag(&mut self, page: usize, at: (f32, f32)) {
+        if self.moving.is_some() {
+            let on_page = self.picked_annotation().is_some_and(|a| a.page == page);
+            if let Some(m) = self.moving.as_mut().filter(|_| on_page) {
+                m.to = at;
+            }
+            return;
+        }
         let Some(draft) = self.draft.as_mut().filter(|d| d.page == page) else {
             return;
         };
@@ -385,6 +590,16 @@ impl Annotate {
     }
 
     pub fn release(&mut self) -> Outcome {
+        if let Some(m) = self.moving.take() {
+            let Some(b) = self.picked_annotation().map(|a| Comment::from(a).at) else {
+                return Outcome::Nothing;
+            };
+            let (dx, dy) = clamp_shift(b, &m);
+            if dx.hypot(dy) < 1.0 || !self.edit(true, |a| a.translate(dx, dy)) {
+                return Outcome::Nothing;
+            }
+            return Outcome::Changed;
+        }
         let Some(draft) = self.draft.take() else {
             return Outcome::Nothing;
         };
@@ -445,7 +660,7 @@ impl Annotate {
                 ev(Event::Tool(tool)),
             ));
         }
-        let current = self.color();
+        let current = self.picked_annotation().map_or_else(|| self.color(), |a| a.color);
         let mut swatches = Column::new().spacing(4).align_x(Center);
         for (i, color) in SWATCHES.iter().enumerate() {
             let c = to_iced(*color, 1.0);
@@ -468,6 +683,13 @@ impl Annotate {
                 .on_press(ev(Event::Color(i)));
             swatches = swatches.push(icons::with_tip(swatch, COLOR_NAMES.get(i).copied().unwrap_or("")));
         }
+        let opacity = icons::with_tip(
+            vertical_slider(0.1..=1.0, self.opacity(), move |v| ev(Event::Opacity(v)))
+                .step(0.05)
+                .on_release(ev(Event::OpacityDone))
+                .height(72),
+            format!("Opacity {}%", (self.opacity() * 100.0).round()),
+        );
         let m = icons::MOD;
         let history = column![
             icons::button(
@@ -483,7 +705,7 @@ impl Annotate {
         ]
         .spacing(2);
         container(
-            column![tools, divider(), swatches, divider(), history]
+            column![tools, divider(), swatches, opacity, divider(), history]
                 .spacing(6)
                 .padding(4)
                 .align_x(Center),
@@ -566,6 +788,35 @@ fn fit_text_box(at: TextBox, text: &str) -> TextBox {
         x1: at.x0 + width.max(12.0),
         y1: at.y0 + height,
     }
+}
+
+/// Whether a point (in page points) is on an annotation, with a little slack for thin lines.
+fn hits(a: &Annotation, (x, y): (f32, f32)) -> bool {
+    match &a.kind {
+        Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
+            boxes.iter().any(|b| grown(*b, 1.0).contains(x, y))
+        }
+        _ => grown(Comment::from(a).at, a.width.max(4.0)).contains(x, y),
+    }
+}
+
+fn grown(b: TextBox, by: f32) -> TextBox {
+    TextBox {
+        x0: b.x0 - by,
+        y0: b.y0 - by,
+        x1: b.x1 + by,
+        y1: b.y1 + by,
+    }
+}
+
+/// How far a drag moves a comment with outline `b`, keeping it on the page.
+fn clamp_shift(b: TextBox, m: &Moving) -> (f32, f32) {
+    // A comment already partly off the page can still move, just not further off.
+    let clamp = |d: f32, lo: f32, hi: f32, size: f32| d.clamp((-lo).min(0.0), (size - hi).max(0.0));
+    (
+        clamp(m.to.0 - m.from.0, b.x0, b.x1, m.page.0),
+        clamp(m.to.1 - m.from.1, b.y0, b.y1, m.page.1),
+    )
 }
 
 pub fn to_iced(c: Color, alpha: f32) -> iced::Color {
@@ -766,5 +1017,95 @@ mod tests {
         assert!(!a.dirty());
         a.update(Event::Redo);
         assert_eq!(a.removed, [id]);
+    }
+
+    fn rect_at(a: &mut Annotate, x: f32) {
+        a.update(Event::Tool(Tool::Rect));
+        a.press(0, (x, 10.0));
+        a.drag(0, (x + 50.0, 40.0));
+        a.release();
+        a.update(Event::Tool(Tool::Select));
+    }
+
+    #[test]
+    fn dragging_a_comment_moves_it_within_the_page() {
+        let mut a = Annotate::new();
+        rect_at(&mut a, 10.0);
+        assert!(a.grab(0, (30.0, 20.0), (200.0, 100.0)));
+        a.drag(0, (60.0, 500.0));
+        assert!(matches!(a.release(), Outcome::Changed));
+        // Down as far as the page allows, across by the full drag.
+        assert!(
+            matches!(a.items.first().map(|i| &i.kind), Some(Kind::Rect(r)) if r.x0 == 40.0 && r.y1 == 100.0),
+            "{:?}",
+            a.items
+        );
+        a.update(Event::Undo);
+        assert!(matches!(a.items.first().map(|i| &i.kind), Some(Kind::Rect(r)) if r.x0 == 10.0));
+        assert!(!a.grab(0, (190.0, 90.0), (200.0, 100.0)) && a.picked.is_none());
+    }
+
+    #[test]
+    fn recolouring_the_selected_comment() {
+        let mut a = Annotate::new();
+        rect_at(&mut a, 10.0);
+        a.pick(Picked::New(0));
+        assert!(matches!(a.update(Event::Color(1)), Outcome::Changed));
+        assert_eq!(a.items.first().map(|i| i.color), Some(SWATCHES[1]));
+        // The tool's own colour is untouched.
+        a.unpick();
+        assert_eq!(a.color(), Tool::Select.default_color());
+        // A whole slide is one undo step.
+        a.pick(Picked::New(0));
+        for v in [0.9, 0.7, 0.5] {
+            a.update(Event::Opacity(v));
+        }
+        assert!(matches!(a.update(Event::OpacityDone), Outcome::Changed));
+        assert_eq!(a.items.first().map(|i| i.opacity), Some(0.5));
+        a.update(Event::Undo);
+        assert_eq!(a.items.first().map(|i| i.opacity), Some(1.0));
+    }
+
+    #[test]
+    fn changing_a_saved_comment_replaces_it() {
+        let mut a = Annotate::new();
+        let id = CommentId {
+            page: 0,
+            annot: panna_core::ObjRef {
+                number: 5,
+                generation: 0,
+            },
+            popup: None,
+        };
+        let mut shape = Annotation {
+            page: 0,
+            kind: Kind::Ellipse(TextBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 20.0,
+                y1: 20.0,
+            }),
+            color: SWATCHES[0],
+            opacity: 1.0,
+            width: 1.0,
+            contents: String::new(),
+            author: String::new(),
+        };
+        let mut comment = Comment::from(&shape);
+        comment.id = Some(id);
+        comment.editable = Some(shape.clone());
+        a.saved(&[comment]);
+        assert_eq!(a.hit(0, (10.0, 10.0)), Some(Picked::Saved(id)));
+        a.pick(Picked::Saved(id));
+        assert!(!a.dirty());
+        assert!(matches!(a.update(Event::Color(2)), Outcome::Changed));
+        shape.color = SWATCHES[2];
+        assert_eq!(
+            (a.removed.as_slice(), a.items.as_slice()),
+            (&[id][..], &[shape][..])
+        );
+        assert_eq!(a.picked, Some(Picked::New(0)));
+        a.update(Event::Undo);
+        assert!(!a.dirty());
     }
 }

@@ -1,5 +1,5 @@
 //! The Comments tab: every comment in the document, in page order, like Acrobat's comment list.
-//! Clicking one scrolls to it; comments added since the last save can be deleted from here.
+//! Clicking one scrolls to it and selects it, ready to move or restyle; any can be deleted.
 
 use iced::widget::{Column, button, column, container, row, scrollable, space, text};
 use iced::{Center, Element, Fill, Theme};
@@ -110,6 +110,11 @@ fn entry<'a>(comment: Comment, unsaved: Option<usize>, quote: Option<String>) ->
         (None, Some(id)) => Some(annotate::Event::Remove(id)),
         (None, None) => None,
     };
+    let picked = match (unsaved, comment.id) {
+        (Some(index), _) => Some(annotate::Picked::New(index)),
+        (None, Some(id)) if comment.editable.is_some() => Some(annotate::Picked::Saved(id)),
+        _ => None,
+    };
     if let Some(event) = delete {
         heading = heading.push(icons::button(
             Icon::Delete,
@@ -147,7 +152,7 @@ fn entry<'a>(comment: Comment, unsaved: Option<usize>, quote: Option<String>) ->
             }
             style
         })
-        .on_press(Message::ShowComment(comment.page, comment.at))
+        .on_press(Message::ShowComment(comment.page, comment.at, picked))
         .into()
 }
 

@@ -82,6 +82,38 @@ pub(crate) struct PageInfo {
 }
 
 impl Annotation {
+    /// Shifts it by `dx`, `dy` page points.
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        let shift = |b: &mut TextBox| {
+            b.x0 += dx;
+            b.x1 += dx;
+            b.y0 += dy;
+            b.y1 += dy;
+        };
+        match &mut self.kind {
+            Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
+                boxes.iter_mut().for_each(shift);
+            }
+            Kind::Note { x, y } => {
+                *x += dx;
+                *y += dy;
+            }
+            Kind::FreeText { rect, .. } | Kind::Rect(rect) | Kind::Ellipse(rect) => shift(rect),
+            Kind::Ink(strokes) => {
+                for (x, y) in strokes.iter_mut().flatten() {
+                    *x += dx;
+                    *y += dy;
+                }
+            }
+            Kind::Line { from, to, .. } => {
+                for p in [from, to] {
+                    p.0 += dx;
+                    p.1 += dy;
+                }
+            }
+        }
+    }
+
     pub(crate) fn build(&self, page: &PageInfo, ap_ref: &str, name: &str, date: &str) -> Built {
         let map = |x: f32, y: f32| page.to_user * Point::new(f64::from(x), f64::from(y));
         let user_box = |b: &TextBox| {
@@ -530,6 +562,32 @@ pub fn wrap(text: &str, max: f64) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translating_moves_every_point() {
+        let mut a = Annotation {
+            page: 0,
+            kind: Kind::Line {
+                from: (1.0, 2.0),
+                to: (3.0, 4.0),
+                arrow: false,
+            },
+            color: Color::RED,
+            opacity: 1.0,
+            width: 1.0,
+            contents: String::new(),
+            author: String::new(),
+        };
+        a.translate(10.0, -1.0);
+        assert!(matches!(
+            a.kind,
+            Kind::Line {
+                from: (11.0, 1.0),
+                to: (13.0, 3.0),
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn numbers_are_compact() {

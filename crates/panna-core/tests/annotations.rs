@@ -223,6 +223,53 @@ fn saved_comments_are_listed_after_reopening() {
 }
 
 #[test]
+fn saved_comments_come_back_editable() {
+    let doc = reopen(build(&objects(false)));
+    let rect = TextBox {
+        x0: 40.0,
+        y0: 10.0,
+        x1: 160.0,
+        y1: 30.0,
+    };
+    let mut line = annotation(Kind::Line {
+        from: (10.0, 20.0),
+        to: (90.0, 70.0),
+        arrow: true,
+    });
+    line.opacity = 0.5;
+    let shapes = [annotation(Kind::Rect(rect)), line];
+    let saved = doc.with_annotations(&shapes).unwrap();
+    let listed = reopen(saved).info().unwrap().comments;
+    for (original, comment) in shapes.iter().zip(&listed) {
+        let back = comment
+            .editable
+            .as_ref()
+            .expect("Panna's own comments are editable");
+        assert_eq!(
+            (back.color, back.width, &back.author),
+            (original.color, original.width, &original.author)
+        );
+        assert!((back.opacity - original.opacity).abs() < 0.01);
+        match (&original.kind, &back.kind) {
+            (Kind::Rect(a), Kind::Rect(b)) => {
+                assert!((a.x0 - b.x0).abs() < 0.01 && (a.y1 - b.y1).abs() < 0.01, "{b:?}");
+            }
+            (
+                Kind::Line { from, to, arrow },
+                Kind::Line {
+                    from: f,
+                    to: t,
+                    arrow: r,
+                },
+            ) => {
+                assert!((from.0 - f.0).abs() < 0.01 && (to.1 - t.1).abs() < 0.01 && arrow == r);
+            }
+            other => panic!("came back as {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn highlights_keep_their_marked_areas() {
     let doc = reopen(build(&objects(false)));
     let line = TextBox {

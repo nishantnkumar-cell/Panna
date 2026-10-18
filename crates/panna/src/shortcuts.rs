@@ -49,6 +49,9 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         // F4 shows or hides the navigation pane, as in Acrobat.
         Key::Named(Named::F3) => Some(Message::Find(Event::Next)),
         Key::Named(Named::F4) => Some(Message::Sidebar(crate::sidebar::Event::Toggle)),
+        Key::Named(Named::Delete | Named::Backspace) => {
+            Some(Message::Annotate(annotate::Event::DeletePicked))
+        }
         _ => None,
     }
 }

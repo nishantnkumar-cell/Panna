@@ -10,7 +10,7 @@ use hayro::hayro_syntax::page::Page;
 
 use crate::TextBox;
 use crate::document::decode_text_string;
-use crate::edit::{Annotation, Kind, NOTE_SIZE};
+use crate::edit::{Annotation, Color, Kind, NOTE_SIZE};
 
 const MAX_COMMENTS: usize = 20_000;
 const MAX_PER_PAGE: usize = 2_000;
@@ -108,6 +108,9 @@ pub struct Comment {
     pub at: TextBox,
     /// For highlights, underlines and strikethroughs: the areas of text they mark.
     pub marked: Vec<TextBox>,
+    /// The comment as an annotation Panna can redraw, for the kinds it can make itself. Moving
+    /// or restyling a saved comment replaces it with this, changed.
+    pub editable: Option<Annotation>,
 }
 
 impl From<&Annotation> for Comment {
@@ -182,6 +185,7 @@ impl From<&Annotation> for Comment {
             contents: a.contents.clone(),
             author: a.author.clone(),
             marked,
+            editable: None,
             at: at.unwrap_or(TextBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -212,10 +216,11 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
         if out.len() >= MAX_COMMENTS {
             return;
         }
-        let Some(kind) = annot
-            .get::<Name<'_>>(b"Subtype")
-            .and_then(|s| CommentKind::from_subtype(s.as_str()))
-        else {
+        let Some(subtype) = annot.get::<Name<'_>>(b"Subtype") else {
+            continue;
+        };
+        let subtype = subtype.as_str();
+        let Some(kind) = CommentKind::from_subtype(subtype) else {
             continue;
         };
         // Hidden annotations (flag bit 2) aren't shown, so they aren't listed either.
@@ -287,16 +292,160 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
                     .get_ref(b"Popup")
                     .and_then(|r| ObjRef::new(r.obj_number, r.gen_number)),
             });
+        let contents = text(b"Contents");
+        let author = text(b"T");
+        let editable = editable(&annot, subtype, at, &marked, &view_box).map(|kind| Annotation {
+            page: index,
+            kind,
+            color: color(&annot),
+            opacity: annot.get::<f64>(b"CA").map_or(1.0, |o| o.clamp(0.0, 1.0) as f32),
+            width: width(&annot),
+            contents: contents.clone(),
+            author: author.clone(),
+        });
         out.push(Comment {
             id,
             page: index,
             kind,
-            contents: text(b"Contents"),
-            author: text(b"T"),
+            contents,
+            author,
             at,
             marked,
+            editable,
         });
     }
+}
+
+/// Maps PDF points to the bounding box of their view-space positions.
+type ViewBox<'a> = dyn Fn(&[(f64, f64)]) -> Option<TextBox> + 'a;
+
+/// The shape of a saved comment, for the kinds Panna draws itself.
+fn editable(
+    annot: &Dict<'_>,
+    subtype: &str,
+    at: TextBox,
+    marked: &[TextBox],
+    view_box: &ViewBox<'_>,
+) -> Option<Kind> {
+    // Panna pads a shape's /Rect by a point on each side; others pad by /RD or not at all.
+    let inner = |pad: f32| {
+        let pad = pad.min(at.width() / 2.0).min(at.height() / 2.0).max(0.0);
+        TextBox {
+            x0: at.x0 + pad,
+            y0: at.y0 + pad,
+            x1: at.x1 - pad,
+            y1: at.y1 - pad,
+        }
+    };
+    Some(match subtype {
+        "Highlight" if !marked.is_empty() => Kind::Highlight(marked.to_vec()),
+        "Underline" if !marked.is_empty() => Kind::Underline(marked.to_vec()),
+        "StrikeOut" if !marked.is_empty() => Kind::StrikeOut(marked.to_vec()),
+        "Text" => Kind::Note { x: at.x0, y: at.y0 },
+        "FreeText" => Kind::FreeText {
+            rect: at,
+            size: annot
+                .get::<hayro::hayro_syntax::object::String<'_>>(b"DA")
+                .and_then(|da| font_size(da.as_bytes()))
+                .unwrap_or(12.0),
+        },
+        "Square" | "Circle" => {
+            let pad = annot
+                .get::<Array<'_>>(b"RD")
+                .and_then(|rd| rd.iter::<f64>().next())
+                .map_or(1.0, |p| p as f32);
+            if subtype == "Square" {
+                Kind::Rect(inner(pad))
+            } else {
+                Kind::Ellipse(inner(pad))
+            }
+        }
+        "Line" => {
+            let l: Vec<f64> = annot.get::<Array<'_>>(b"L")?.iter::<f64>().take(4).collect();
+            let [x0, y0, x1, y1] = l.as_slice() else {
+                return None;
+            };
+            let a = view_box(&[(*x0, *y0)])?;
+            let b = view_box(&[(*x1, *y1)])?;
+            let arrow = annot
+                .get::<Array<'_>>(b"LE")
+                .is_some_and(|le| le.iter::<Name<'_>>().any(|n| n.as_str().contains("Arrow")));
+            Kind::Line {
+                from: (a.x0, a.y0),
+                to: (b.x0, b.y0),
+                arrow,
+            }
+        }
+        "Ink" => {
+            let mut strokes = Vec::new();
+            let mut points = 0;
+            for stroke in annot.get::<Array<'_>>(b"InkList")?.iter::<Array<'_>>() {
+                let numbers: Vec<f64> = stroke.iter::<f64>().take(40_000).collect();
+                let (pairs, _) = numbers.as_chunks::<2>();
+                let stroke: Vec<(f32, f32)> = pairs
+                    .iter()
+                    .filter_map(|&[x, y]| view_box(&[(x, y)]).map(|p| (p.x0, p.y0)))
+                    .collect();
+                points += stroke.len();
+                if points > 100_000 {
+                    return None;
+                }
+                if !stroke.is_empty() {
+                    strokes.push(stroke);
+                }
+            }
+            if strokes.is_empty() {
+                return None;
+            }
+            Kind::Ink(strokes)
+        }
+        _ => return None,
+    })
+}
+
+/// The colour in /C: grey, RGB or CMYK.
+fn color(annot: &Dict<'_>) -> Color {
+    let c: Vec<f32> = annot
+        .get::<Array<'_>>(b"C")
+        .map(|c| {
+            c.iter::<f64>()
+                .take(4)
+                .map(|v| v.clamp(0.0, 1.0) as f32)
+                .collect()
+        })
+        .unwrap_or_default();
+    match c.as_slice() {
+        [g] => Color([*g, *g, *g]),
+        [r, g, b] => Color([*r, *g, *b]),
+        [c, m, y, k] => Color([
+            (1.0 - c) * (1.0 - k),
+            (1.0 - m) * (1.0 - k),
+            (1.0 - y) * (1.0 - k),
+        ]),
+        _ => Color::BLACK,
+    }
+}
+
+/// The border width, from /BS or the older /Border array.
+fn width(annot: &Dict<'_>) -> f32 {
+    annot
+        .get::<Dict<'_>>(b"BS")
+        .and_then(|bs| bs.get::<f64>(b"W"))
+        .or_else(|| {
+            annot
+                .get::<Array<'_>>(b"Border")
+                .and_then(|b| b.iter::<f64>().nth(2))
+        })
+        .map_or(1.0, |w| w.clamp(0.0, 50.0) as f32)
+}
+
+/// The font size in a default appearance string such as `/Helv 12 Tf 0 g`.
+fn font_size(da: &[u8]) -> Option<f32> {
+    let da = std::str::from_utf8(da).ok()?;
+    let words: Vec<&str> = da.split_whitespace().collect();
+    let at = words.iter().position(|w| *w == "Tf")?;
+    let size: f32 = words.get(at.checked_sub(1)?)?.parse().ok()?;
+    (size.is_finite() && size > 0.0).then_some(size.min(144.0))
 }
 
 #[cfg(test)]
@@ -316,5 +465,12 @@ mod tests {
             CommentKind::from_subtype("Stamp"),
             Some(CommentKind::Other("Stamp".into()))
         );
+    }
+
+    #[test]
+    fn font_sizes_come_from_the_appearance_string() {
+        assert_eq!(font_size(b"/Helv 14 Tf 0 0 1 rg"), Some(14.0));
+        assert_eq!(font_size(b"0 g /F1 0 Tf"), None);
+        assert_eq!(font_size(b"Tf"), None);
     }
 }

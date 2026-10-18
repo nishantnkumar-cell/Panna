@@ -114,7 +114,8 @@ enum Message {
     Sidebar(sidebar::Event),
     GoToPage(usize),
     /// Scroll to a comment, from the comments list.
-    ShowComment(usize, TextBox),
+    /// Scrolls to a comment, and selects it when it can be changed.
+    ShowComment(usize, TextBox, Option<annotate::Picked>),
     ThumbRendered {
         doc: u64,
         index: usize,
@@ -363,7 +364,7 @@ impl App {
             _ => None,
         });
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
-        if self.selecting || self.annotate.draft.is_some() {
+        if self.selecting || self.annotate.busy() {
             // Finish a text selection even when the button is released outside the page.
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
@@ -431,7 +432,7 @@ impl App {
                         doc.info = info;
                         self.selection = None;
                         self.hover = None;
-                        self.annotate.saved();
+                        self.annotate.saved(&doc.info.comments);
                         self.find.rescan(&doc.texts);
                         self.status = Status::Idle;
                         self.zoom = 1.0;
@@ -591,6 +592,7 @@ impl App {
                     self.find.rescan(&[]);
                 } else {
                     self.selection = None;
+                    self.annotate.unpick();
                 }
                 Task::none()
             }
@@ -601,7 +603,21 @@ impl App {
                 Task::batch([self.request_thumbnails(), self.request_comment_text()])
             }
             Message::GoToPage(index) => self.go_to_page(index),
-            Message::ShowComment(page, at) => self.reveal(page, at),
+            Message::ShowComment(page, at, picked) => {
+                // Selecting a comment in the list selects it on the page too, ready to move
+                // or restyle.
+                if let Some(picked) = picked
+                    && !self.saving
+                {
+                    if !self.annotate.open {
+                        self.annotate.update(annotate::Event::Toggle);
+                    }
+                    self.annotate
+                        .update(annotate::Event::Tool(annotate::Tool::Select));
+                    self.annotate.pick(picked);
+                }
+                self.reveal(page, at)
+            }
             Message::ThumbRendered {
                 doc,
                 index,
@@ -642,7 +658,7 @@ impl App {
             Message::Find(event) => self.find_event(event),
             Message::PagePointer(page, position) => {
                 self.hover = Some((page, position));
-                if self.annotate.draft.is_some() {
+                if self.annotate.busy() {
                     let at = self.page_map(page).to_page(position);
                     self.annotate.drag(page, at);
                     return Task::none();
@@ -657,6 +673,7 @@ impl App {
             }
             Message::PagePress(page) if self.annotate.open && !self.annotate.tool.marks_text() => {
                 self.selection = None;
+                self.annotate.unpick();
                 if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
                     let at = self.page_map(page).to_page(position);
                     self.annotate.press(page, at);
@@ -665,6 +682,19 @@ impl App {
             }
             Message::PagePress(page) => {
                 self.selecting = false;
+                // With the comment tools open, pressing on a comment selects it for moving.
+                if self.annotate.open
+                    && !self.saving
+                    && let Some((_, position)) = self.hover.filter(|(p, _)| *p == page)
+                {
+                    let map = self.page_map(page);
+                    let at = map.to_page(position);
+                    let size = map.page_size();
+                    if self.annotate.grab(page, at, size) {
+                        self.selection = None;
+                        return Task::none();
+                    }
+                }
                 let caret = self
                     .hover
                     .filter(|(p, _)| *p == page)
@@ -700,7 +730,7 @@ impl App {
                 self.copy_primary()
             }
             Message::PointerReleased => {
-                if self.annotate.draft.is_some() {
+                if self.annotate.busy() {
                     let outcome = self.annotate.release();
                     if self.annotate.editing.is_some() {
                         return operation::focus(annotate::editor_id());
@@ -800,7 +830,7 @@ impl App {
                         // Saved comments are listed from the file, so new ones can now be
                         // removed like any other.
                         open.info.comments = comments;
-                        self.annotate.saved();
+                        self.annotate.saved(&open.info.comments);
                         self.settings.add_recent(path);
                         self.settings.save();
                         match self.after_save.take() {
@@ -829,7 +859,8 @@ impl App {
                 match choice {
                     Choice::Cancel => Task::none(),
                     Choice::Discard => {
-                        self.annotate.saved();
+                        self.annotate
+                            .saved(self.doc.as_ref().map_or(&[], |d| d.info.comments.as_slice()));
                         self.proceed(pending)
                     }
                     Choice::Save => {
@@ -1674,12 +1705,29 @@ impl App {
                             self.page_map(index),
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                         );
-                        if marks.is_empty() && preview.is_none() {
+                        let outline = self.annotate.picked_outline(index).map(|b| {
+                            let (x, y, w, h) = self.page_map(index).rect(&b);
+                            Element::from(
+                                pin(container(space()).width(w.max(1.0)).height(h.max(1.0)).style(
+                                    |theme: &iced::Theme| {
+                                        container::Style::default().border(iced::Border {
+                                            color: theme.extended_palette().primary.base.color,
+                                            width: 2.0,
+                                            radius: 2.0.into(),
+                                        })
+                                    },
+                                ))
+                                .x(x)
+                                .y(y),
+                            )
+                        });
+                        if marks.is_empty() && preview.is_none() && outline.is_none() {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
                             let mut layers = vec![image(handle.clone()).width(width).height(height).into()];
                             layers.extend(marks);
                             layers.extend(preview);
+                            layers.extend(outline);
                             iced::widget::Stack::with_children(layers).into()
                         }
                     }
@@ -1697,12 +1745,25 @@ impl App {
                                 t.hit(x, y)
                             })
                 });
+                let over_comment = self.annotate.open
+                    && self.annotate.tool == annotate::Tool::Select
+                    && self.hover.is_some_and(|(page, position)| {
+                        page == index
+                            && self
+                                .annotate
+                                .hit(index, self.page_map(index).to_page(position))
+                                .is_some()
+                    });
                 let content = mouse_area(content)
                     .on_move(move |p| Message::PagePointer(index, p))
                     .on_press(Message::PagePress(index))
                     .on_double_click(Message::PageDoubleClick(index))
                     .on_release(Message::PointerReleased)
-                    .interaction(if self.annotate.open && !self.annotate.tool.marks_text() {
+                    .interaction(if self.annotate.is_moving() {
+                        mouse::Interaction::Grabbing
+                    } else if over_comment {
+                        mouse::Interaction::Grab
+                    } else if self.annotate.open && !self.annotate.tool.marks_text() {
                         mouse::Interaction::Crosshair
                     } else if over_text || self.selecting {
                         mouse::Interaction::Text
