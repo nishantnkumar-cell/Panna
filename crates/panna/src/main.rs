@@ -228,6 +228,10 @@ enum Message {
     },
     Find(find::Event),
     PagePointer(usize, Point),
+    ExportFormData,
+    FormDataExportTo(Option<PathBuf>),
+    ImportFormData,
+    FormDataChosen(Option<PathBuf>),
     /// Show or hide layer n.
     ShowLayer(usize, bool),
     Measure(measure::Event),
@@ -1123,6 +1127,85 @@ impl App {
                         copied: false,
                     }
                 });
+                Task::none()
+            }
+            Message::ExportFormData => {
+                self.all_tools = false;
+                let name = format!("{}.fdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save form data as")
+                            .add_filter("Form data (FDF)", &["fdf"])
+                            .add_filter("Form data (XFDF)", &["xfdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::FormDataExportTo,
+                )
+            }
+            Message::FormDataExportTo(None) | Message::FormDataChosen(None) => Task::none(),
+            Message::FormDataExportTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let xml = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xfdf"));
+                let format = if xml {
+                    panna_core::DataFormat::Xfdf
+                } else {
+                    panna_core::DataFormat::Fdf
+                };
+                let pdf_name = doc
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let bytes = panna_core::export_form_data(&self.form.data(), format, &pdf_name);
+                Task::perform(
+                    async move { std::fs::write(&path, bytes).map_err(|e| SaveError::Io(e.to_string())) },
+                    Message::Extracted,
+                )
+            }
+            Message::ImportFormData => {
+                self.all_tools = false;
+                Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Fill in the form from")
+                            .add_filter("Form data", &["fdf", "xfdf"])
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::FormDataChosen,
+                )
+            }
+            Message::FormDataChosen(Some(path)) => {
+                if self.saving {
+                    return Task::none();
+                }
+                // Form data files are small; a big one isn't one.
+                const MAX: u64 = 16 * 1024 * 1024;
+                let read = std::fs::metadata(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|m| {
+                        if m.len() > MAX {
+                            Err("the file is too large to be form data".into())
+                        } else {
+                            std::fs::read(&path).map_err(|e| e.to_string())
+                        }
+                    })
+                    .and_then(|bytes| panna_core::import_form_data(&bytes));
+                match read {
+                    Ok(data) => {
+                        if self.form.import(&data) == 0 {
+                            self.notice = Some(
+                                "None of the fields in that file could be filled in on this form.".into(),
+                            );
+                        }
+                    }
+                    Err(e) => self.notice = Some(format!("Couldn't read the form data: {e}")),
+                }
                 Task::none()
             }
             Message::ShowLayer(index, show) => {
@@ -3102,7 +3185,7 @@ impl App {
             ));
         }
         if self.all_tools {
-            layers.push(modal(tools::card(), Message::AllTools(false)));
+            layers.push(modal(tools::card(self.form.exists()), Message::AllTools(false)));
         }
         if let Some(state) = self.cleaning {
             layers.push(modal(

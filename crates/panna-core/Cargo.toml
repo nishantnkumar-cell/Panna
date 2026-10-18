@@ -16,6 +16,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 zune-core = "0.5"
 zune-jpeg = "0.5"
 md-5 = "0.10"
+# Reading XFDF form data files (already used by the SVG icons).
+roxmltree = "0.20"
 sha2 = "0.10"
 
 [lints]

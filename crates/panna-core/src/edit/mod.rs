@@ -2,7 +2,7 @@
 
 mod annot;
 mod convert;
-mod crypt;
+pub(crate) mod crypt;
 mod field;
 pub(crate) mod lex;
 mod marks;

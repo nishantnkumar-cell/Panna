@@ -8,7 +8,7 @@ use crate::icons::{self, Icon};
 use crate::{Message, export, protect};
 
 /// The All tools card. Each tool closes the card and opens its own.
-pub fn card<'a>() -> Element<'a, Message> {
+pub fn card<'a>(has_form: bool) -> Element<'a, Message> {
     let tool = |icon: Icon, label: &'static str, message: Message| {
         button(
             row![icons::glyph(icon, true), text(label)]
@@ -36,23 +36,43 @@ pub fn card<'a>() -> Element<'a, Message> {
                 "Export as text or pictures…",
                 Message::Export(export::Event::Open)
             ),
-            tool(
-                Icon::Protect,
-                "Password protection…",
-                Message::Protect(protect::Event::Open)
-            ),
-            tool(
-                Icon::Clean,
-                "Remove hidden information…",
-                Message::Clean(protect::CleanEvent::Open)
-            ),
-            row![
-                space::horizontal(),
-                button("Close")
-                    .style(button::secondary)
-                    .on_press(Message::AllTools(false)),
-            ],
         ]
+        .push(has_form.then(|| {
+            column![
+                tool(
+                    Icon::DataImport,
+                    "Fill in the form from a data file…",
+                    Message::ImportFormData
+                ),
+                tool(
+                    Icon::DataExport,
+                    "Save form data (FDF, XFDF)…",
+                    Message::ExportFormData
+                ),
+            ]
+            .spacing(4)
+        }))
+        .push(
+            column![
+                tool(
+                    Icon::Protect,
+                    "Password protection…",
+                    Message::Protect(protect::Event::Open)
+                ),
+                tool(
+                    Icon::Clean,
+                    "Remove hidden information…",
+                    Message::Clean(protect::CleanEvent::Open)
+                ),
+                row![
+                    space::horizontal(),
+                    button("Close")
+                        .style(button::secondary)
+                        .on_press(Message::AllTools(false)),
+                ],
+            ]
+            .spacing(4),
+        )
         .spacing(4)
         .width(340),
     )

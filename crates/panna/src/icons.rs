@@ -83,6 +83,8 @@ pub enum Icon {
     Ruler,
     Pentagon,
     Area,
+    DataExport,
+    DataImport,
 }
 
 impl Icon {
@@ -163,6 +165,8 @@ impl Icon {
             Icon::Ruler => include_bytes!("../icons/ruler.svg"),
             Icon::Pentagon => include_bytes!("../icons/pentagon.svg"),
             Icon::Area => include_bytes!("../icons/land-plot.svg"),
+            Icon::DataExport => include_bytes!("../icons/file-down.svg"),
+            Icon::DataImport => include_bytes!("../icons/file-up.svg"),
         }
     }
 }
@@ -257,7 +261,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 75] = [
+    const ALL: [Icon; 77] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -333,6 +337,8 @@ mod tests {
         Icon::Ruler,
         Icon::Pentagon,
         Icon::Area,
+        Icon::DataExport,
+        Icon::DataImport,
     ];
 
     #[test]

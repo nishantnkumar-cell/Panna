@@ -123,6 +123,65 @@ impl Form {
         self.fields.iter().zip(&self.values).any(|(f, v)| f.value != *v)
     }
 
+    /// Whether the document has a form.
+    pub fn exists(&self) -> bool {
+        !self.fields.is_empty()
+    }
+
+    /// Every named field's full name and current value, for a form data file.
+    pub fn data(&self) -> Vec<(&str, &FieldValue)> {
+        self.fields
+            .iter()
+            .zip(&self.values)
+            .filter(|(f, _)| !f.name.is_empty())
+            .map(|(f, v)| (f.name.as_str(), v))
+            .collect()
+    }
+
+    /// Fills in fields from a form data file's names and values. Fields that can't be changed,
+    /// and values a field can't take, are left out. Returns how many fields were filled in.
+    pub fn import(&mut self, data: &[(String, String)]) -> usize {
+        let mut filled = 0;
+        for (i, field) in self.fields.iter().enumerate() {
+            if !field.editable() {
+                continue;
+            }
+            let Some((_, text)) = data.iter().rev().find(|(name, _)| *name == field.name) else {
+                continue;
+            };
+            let value = match &field.kind {
+                FieldKind::CheckBox | FieldKind::Radio if text == "Off" => FieldValue::State(None),
+                FieldKind::CheckBox | FieldKind::Radio => {
+                    if !field
+                        .widgets
+                        .iter()
+                        .any(|w| w.on.as_deref() == Some(text.as_str()))
+                    {
+                        continue;
+                    }
+                    FieldValue::State(Some(text.clone()))
+                }
+                FieldKind::Choice {
+                    editable: false,
+                    options,
+                    ..
+                } if !text.is_empty() && !options.iter().any(|o| o.export == *text) => continue,
+                FieldKind::Text {
+                    max_len: Some(max), ..
+                } => FieldValue::Text(text.chars().take(*max).collect()),
+                _ => FieldValue::Text(text.clone()),
+            };
+            if let (Some(editor), FieldValue::Text(t)) = (self.editors.get_mut(&i), &value) {
+                *editor = text_editor::Content::with_text(t);
+            }
+            if let Some(slot) = self.values.get_mut(i) {
+                *slot = value;
+                filled += 1;
+            }
+        }
+        filled
+    }
+
     /// Applies an edit. Returns whether a value changed.
     pub fn update(&mut self, event: Event) -> bool {
         let index = match &event {
@@ -480,6 +539,24 @@ mod tests {
                 FieldValue::Text("abc".into())
             )]
         );
+    }
+
+    #[test]
+    fn form_data_fills_in_what_fits() {
+        let mut f = form();
+        let data = [
+            ("f1".to_owned(), "abcdef".to_owned()),
+            ("f2".to_owned(), "Yes".to_owned()),
+            ("f3".to_owned(), "Z".to_owned()),
+            ("other".to_owned(), "x".to_owned()),
+        ];
+        // The radio button has no state Z, and there's no field named other.
+        assert_eq!(f.import(&data), 2);
+        assert_eq!(f.values[0], FieldValue::Text("abc".into()));
+        assert_eq!(f.values[1], FieldValue::State(Some("Yes".into())));
+        assert_eq!(f.values[2], FieldValue::State(Some("A".into())));
+        let names: Vec<&str> = f.data().iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["f1", "f2", "f3"]);
     }
 
     #[test]

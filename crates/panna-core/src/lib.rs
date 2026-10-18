@@ -11,6 +11,7 @@ mod document;
 mod edit;
 mod export;
 mod formats;
+mod formdata;
 mod forms;
 mod layers;
 mod limits;
@@ -29,6 +30,7 @@ pub use edit::{
 };
 pub use export::{Export, ExportFormat};
 pub use formats::Format;
+pub use formdata::{DataFormat, export as export_form_data, import as import_form_data};
 pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
 pub use layers::Layer;
 pub use limits::Limits;

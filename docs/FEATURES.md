@@ -62,7 +62,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Save filled form | V1 | Done: values and fresh appearances written as an incremental update |
 | Reset form | V1 | Done: eraser button in the toolbar, with a confirmation; fields return to their /DV defaults |
 | Flatten form | Later | Done: fields are drawn with their values and the form is removed |
-| Import / export form data (FDF, XFDF) | Later | |
+| Import / export form data (FDF, XFDF) | Later | Done: All tools fills in a form from an FDF or XFDF file, or saves its data as either. Scripts in data files are ignored |
 | Create and edit form fields | Later | |
 | Auto-detect form fields | Later | Offline heuristic only |
 | Form JavaScript calculations | Later | **Sandboxed** JS subset only, or skip. JavaScript is a major attack surface in PDF readers |
