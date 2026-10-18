@@ -25,6 +25,22 @@ pub struct PageSize {
 pub struct DocumentInfo {
     pub pages: Vec<PageSize>,
     pub title: Option<String>,
+    /// Label/value pairs for a document properties dialog, in display order.
+    pub properties: Vec<(&'static str, String)>,
+    /// Bookmarks, flattened in reading order.
+    pub outline: Vec<crate::OutlineItem>,
+    /// Comments already in the file, in page order.
+    pub comments: Vec<crate::Comment>,
+    /// The form's fields, if it has a form.
+    pub fields: Vec<crate::Field>,
+    /// Links on the pages, in page order.
+    pub links: Vec<crate::Link>,
+    /// Whether the file has password protection.
+    pub protected: bool,
+    /// Files attached to the document and its pages.
+    pub attachments: Vec<crate::Attachment>,
+    /// Layers that can be shown or hidden.
+    pub layers: Vec<crate::Layer>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -33,6 +49,67 @@ pub struct RenderedPage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+impl RenderedPage {
+    /// Returns the bitmap turned clockwise by `quarter_turns` × 90°.
+    pub fn rotated(self, quarter_turns: u8) -> Self {
+        let turns = quarter_turns % 4;
+        if turns == 0 {
+            return self;
+        }
+        let (w, h) = (self.width as usize, self.height as usize);
+        let (out_w, out_h) = if turns == 2 { (w, h) } else { (h, w) };
+        let mut rgba = vec![0u8; self.rgba.len()];
+        for (src, px) in self.rgba.as_chunks::<4>().0.iter().enumerate() {
+            let (x, y) = (src % w, src / w);
+            let (nx, ny) = match turns {
+                1 => (h - 1 - y, x),
+                2 => (w - 1 - x, h - 1 - y),
+                _ => (y, w - 1 - x),
+            };
+            let dst = (ny * out_w + nx) * 4;
+            if let Some(slot) = rgba.get_mut(dst..dst + 4) {
+                slot.copy_from_slice(px);
+            }
+        }
+        Self {
+            width: out_w as u32,
+            height: out_h as u32,
+            rgba,
+        }
+    }
+
+    /// The part of the bitmap inside `area`, given as `[left, top, right, bottom]` fractions of
+    /// its width and height. At least one pixel is kept.
+    pub fn cropped(self, area: [f32; 4]) -> Self {
+        let (w, h) = (self.width as usize, self.height as usize);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let at = |f: f32, size: usize| ((f.clamp(0.0, 1.0) * size as f32).round() as usize).min(size);
+        let [l, t, r, b] = area;
+        let (x0, x1) = (at(l.min(r), w), at(l.max(r), w));
+        let (y0, y1) = (at(t.min(b), h), at(t.max(b), h));
+        let x0 = x0.min(w.saturating_sub(1));
+        let y0 = y0.min(h.saturating_sub(1));
+        let (cw, ch) = (x1.max(x0 + 1).min(w) - x0, y1.max(y0 + 1).min(h) - y0);
+        if w == 0 || h == 0 {
+            return self;
+        }
+        let mut rgba = Vec::with_capacity(cw * ch * 4);
+        for row in y0..y0 + ch {
+            let start = (row * w + x0) * 4;
+            rgba.extend_from_slice(self.rgba.get(start..start + cw * 4).unwrap_or_default());
+        }
+        Self {
+            width: cw as u32,
+            height: ch as u32,
+            rgba,
+        }
+    }
 }
 
 impl fmt::Debug for RenderedPage {
@@ -103,8 +180,13 @@ impl std::error::Error for RenderError {}
 /// A parsed PDF document. Not `Sync`-shared: each document lives on one worker thread.
 pub struct Document {
     pdf: Pdf,
+    /// The file as read, kept for incremental saves.
+    bytes: Arc<Vec<u8>>,
     limits: Limits,
     settings: InterpreterSettings,
+    file_len: u64,
+    /// The password the file was opened with, needed again to save into an encrypted file.
+    password: String,
 }
 
 impl Document {
@@ -140,9 +222,11 @@ impl Document {
                 limit: limits.max_file_bytes,
             });
         }
+        let file_len = bytes.len() as u64;
         let password = password.unwrap_or("");
+        let bytes = Arc::new(bytes);
         let parsed = catch_unwind(AssertUnwindSafe(|| {
-            Pdf::new_with_password(Arc::new(bytes), password)
+            Pdf::new_with_password(Arc::clone(&bytes), password)
         }))
         .map_err(|_| OpenError::EngineCrashed)?;
         let pdf = parsed.map_err(|e| match e {
@@ -159,8 +243,11 @@ impl Document {
         }
         Ok(Self {
             pdf,
+            bytes,
             limits,
             settings: InterpreterSettings::default(),
+            file_len,
+            password: password.to_owned(),
         })
     }
 
@@ -180,16 +267,459 @@ impl Document {
                     PageSize { width, height }
                 })
                 .collect();
-            let title = self
-                .pdf
-                .metadata()
-                .title
-                .as_deref()
-                .map(|t| String::from_utf8_lossy(t).trim().to_owned())
-                .filter(|t| !t.is_empty());
-            DocumentInfo { pages, title }
+            let meta = self.pdf.metadata();
+            let text = |v: &Option<Vec<u8>>| {
+                v.as_deref()
+                    .map(|t| decode_text_string(t).trim().to_owned())
+                    .filter(|t| !t.is_empty())
+            };
+            let title = text(&meta.title);
+            let mut properties = Vec::new();
+            for (label, value) in [
+                ("Title", title.clone()),
+                ("Author", text(&meta.author)),
+                ("Subject", text(&meta.subject)),
+                ("Keywords", text(&meta.keywords)),
+                ("Creator", text(&meta.creator)),
+                ("Producer", text(&meta.producer)),
+                ("Created", meta.creation_date.as_ref().map(format_date)),
+                ("Modified", meta.modification_date.as_ref().map(format_date)),
+            ] {
+                if let Some(value) = value {
+                    properties.push((label, value));
+                }
+            }
+            properties.push(("PDF version", pdf_version(self.pdf.version()).to_owned()));
+            properties.push(("Pages", self.pdf.pages().len().to_string()));
+            if let Some(first) = self.pdf.pages().first() {
+                let (w, h) = first.render_dimensions();
+                properties.push((
+                    "Page size",
+                    format!("{:.1} × {:.1} in ({w:.0} × {h:.0} pt)", w / 72.0, h / 72.0),
+                ));
+            }
+            properties.push(("File size", format_bytes(self.file_len)));
+            // A malformed outline shouldn't stop the document opening.
+            let outline =
+                catch_unwind(AssertUnwindSafe(|| crate::outline::read(&self.pdf))).unwrap_or_default();
+            let comments = self.comments();
+            let fields = catch_unwind(AssertUnwindSafe(|| crate::forms::read(&self.pdf))).unwrap_or_default();
+            let links = catch_unwind(AssertUnwindSafe(|| crate::links::read(&self.pdf))).unwrap_or_default();
+            let protected = crate::edit::protected(&self.bytes);
+            properties.push((
+                "Password protection",
+                if protected { "Yes" } else { "None" }.to_owned(),
+            ));
+            let attachments =
+                catch_unwind(AssertUnwindSafe(|| crate::attachments::read(&self.pdf))).unwrap_or_default();
+            let layers =
+                catch_unwind(AssertUnwindSafe(|| crate::layers::read(&self.pdf))).unwrap_or_default();
+            DocumentInfo {
+                fields,
+                links,
+                protected,
+                attachments,
+                layers,
+                pages,
+                title,
+                properties,
+                outline,
+                comments,
+            }
         }))
         .map_err(|_| OpenError::EngineCrashed)
+    }
+
+    /// The text of page `index`, for search and copy.
+    pub fn page_text(&self, index: usize) -> Result<crate::PageText, RenderError> {
+        let pages = self.pdf.pages();
+        let page = pages.get(index).ok_or(RenderError::NoSuchPage(index))?;
+        catch_unwind(AssertUnwindSafe(|| crate::text::extract(page, &self.settings)))
+            .map_err(|_| RenderError::EngineCrashed)
+    }
+
+    /// The file's bytes with `annotations` added as an incremental update, ready to save or
+    /// to reopen. The original revision is kept intact at the start of the output.
+    pub fn with_annotations(&self, annotations: &[crate::Annotation]) -> Result<Vec<u8>, crate::SaveError> {
+        self.with_changes(&crate::Changes {
+            add: annotations.to_vec(),
+            ..crate::Changes::default()
+        })
+    }
+
+    /// The file's bytes with `changes` (comments added and removed) as an incremental update.
+    pub fn with_changes(&self, changes: &crate::Changes) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::apply(&self.pdf, &self.bytes, changes, &self.password)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// A whole new file with the pages in `plan`: this document's pages (doc 0) and those of
+    /// `others` (doc 1 onwards), in any order, turned or repeated, plus blank pages. Nothing
+    /// the new file doesn't use is kept, so pages left out can't be recovered from it. It keeps
+    /// this document's password protection.
+    pub fn rearranged(
+        &self,
+        plan: &[crate::PageSource],
+        others: &[&Document],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut docs: Vec<crate::edit::Input<'_>> = vec![(&self.pdf, &self.bytes, &self.password)];
+            docs.extend(
+                others
+                    .iter()
+                    .map(|d| (&d.pdf, d.bytes.as_slice(), d.password.as_str())),
+            );
+            crate::edit::rearrange(&docs, plan)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with the pages at `pages` cropped by `margins` (top, right, bottom, left
+    /// as shown, in points), as a new file.
+    pub fn cropped(&self, pages: &[usize], margins: crate::Margins) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::crop(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                pages,
+                margins,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with header and footer text drawn on the pages at `pages`, numbered in
+    /// that order, as a new file.
+    pub fn with_header_footer(
+        &self,
+        pages: &[usize],
+        marks: &crate::HeaderFooter,
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::header_footer(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                pages,
+                marks,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document in as small a file as can be written without changing how it looks.
+    pub fn compacted(&self) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::compacted((&self.pdf, &self.bytes, &self.password), self.page_count())
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with text, pictures or links added to page `page`, as a new file.
+    pub fn with_additions(
+        &self,
+        page: usize,
+        additions: &[crate::Addition],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::add(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                page,
+                additions,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with `add` fields added to its form and the fields `remove` taken out,
+    /// as a new file. Added fields named like one already there get a number after the name.
+    pub fn with_form_fields(
+        &self,
+        add: &[crate::NewField],
+        remove: &[crate::ObjRef],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        let fields = self.info().map(|i| i.fields).unwrap_or_default();
+        let mut taken: std::collections::HashSet<String> = fields
+            .iter()
+            .filter(|f| !remove.contains(&f.id))
+            .map(|f| f.name.clone())
+            .collect();
+        let add: Vec<crate::NewField> = add
+            .iter()
+            .map(|f| {
+                let base = f.name.trim().replace('.', "_");
+                let base = if base.is_empty() { "Field".to_owned() } else { base };
+                let mut name = base.clone();
+                let mut i = 2;
+                while taken.contains(&name) {
+                    name = format!("{base} {i}");
+                    i += 1;
+                }
+                taken.insert(name.clone());
+                crate::NewField { name, ..f.clone() }
+            })
+            .collect();
+        let widgets: Vec<(usize, crate::ObjRef)> = fields
+            .iter()
+            .filter(|f| remove.contains(&f.id))
+            .flat_map(|f| f.widgets.iter().map(|w| (w.page, w.annot)))
+            .collect();
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::form_fields(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                &add,
+                remove,
+                &widgets,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The pictures each page draws (not those inside forms), each as the box it covers in
+    /// the same space as page text.
+    pub fn pictures(&self, page: usize) -> Vec<crate::TextBox> {
+        catch_unwind(AssertUnwindSafe(|| crate::edit::page_pictures(&self.pdf, page))).unwrap_or_default()
+    }
+
+    /// The document with pictures on page `page` moved, replaced or taken out, as a new
+    /// file. Each change names a picture by its place in [`Document::pictures`].
+    pub fn with_pictures_changed(
+        &self,
+        page: usize,
+        changes: &[(usize, crate::PictureChange)],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::change_pictures(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                page,
+                changes,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The differences between this document's text and `other`'s, word by word.
+    pub fn compare_with(&self, other: &Document) -> Result<Vec<crate::Change>, RenderError> {
+        let texts = |doc: &Document| -> Result<Vec<crate::PageText>, RenderError> {
+            (0..doc.page_count()).map(|i| doc.page_text(i)).collect()
+        };
+        let (ours, theirs) = (texts(self)?, texts(other)?);
+        let ours: Vec<&[char]> = ours.iter().map(crate::PageText::chars).collect();
+        let theirs: Vec<&[char]> = theirs.iter().map(crate::PageText::chars).collect();
+        catch_unwind(AssertUnwindSafe(|| crate::compare::compare(&ours, &theirs)))
+            .map_err(|_| RenderError::EngineCrashed)
+    }
+
+    /// The document with everything inside the marked areas taken out for good and covered
+    /// with black boxes, as a new file. Each page's areas are in the same space as its text
+    /// boxes.
+    pub fn redacted(&self, areas: &[(usize, Vec<crate::TextBox>)]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::redact((&self.pdf, &self.bytes, &self.password), self.page_count(), areas)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with `mark` drawn on the pages at `pages`, as a new file.
+    pub fn with_watermark(
+        &self,
+        pages: &[usize],
+        mark: &crate::Watermark,
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::watermark(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                pages,
+                mark,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with its comments (`comments`), form fields (`fields`) or both drawn into
+    /// the pages so they can no longer be changed, as a new file.
+    pub fn flattened(&self, comments: bool, fields: bool) -> Result<Vec<u8>, crate::SaveError> {
+        // Text and choice fields may rely on the viewer to draw them; writing their values
+        // again gives each one an appearance to flatten.
+        let drawn;
+        let source = if fields {
+            let info = self.info().map_err(|_| crate::SaveError::Damaged)?;
+            let values: Vec<_> = info
+                .fields
+                .iter()
+                .filter(|f| {
+                    matches!(
+                        f.kind,
+                        crate::FieldKind::Text { .. } | crate::FieldKind::Choice { .. }
+                    )
+                })
+                .map(|f| (f.id, f.value.clone()))
+                .collect();
+            if values.is_empty() {
+                self
+            } else {
+                let changes = crate::Changes {
+                    fields: values,
+                    ..crate::Changes::default()
+                };
+                drawn = self
+                    .reopen(self.with_changes(&changes)?)
+                    .map_err(|_| crate::SaveError::Damaged)?;
+                &drawn
+            }
+        } else {
+            self
+        };
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::flatten(
+                (&source.pdf, &source.bytes, &source.password),
+                source.page_count(),
+                comments,
+                fields,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with new password protection, or none, as a new file, and the password
+    /// that opens it with full rights. Fails unless this document was opened with the owner
+    /// password or allows changes.
+    pub fn protected(
+        &self,
+        protection: Option<&crate::Protection>,
+    ) -> Result<(Vec<u8>, String), crate::SaveError> {
+        let bytes = catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::protect(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                protection,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)??;
+        let password = match protection {
+            Some(p) if !p.owner_password.is_empty() => p.owner_password.clone(),
+            Some(p) => p.open_password.clone(),
+            None => String::new(),
+        };
+        Ok((bytes, password))
+    }
+
+    /// The document without the hidden information `clean` names, as a new file.
+    pub fn cleaned(&self, clean: crate::Cleanup) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::clean_up((&self.pdf, &self.bytes, &self.password), self.page_count(), clean)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The contents of attached file `index` (in [`DocumentInfo::attachments`]).
+    pub fn attachment(&self, index: usize) -> Option<Vec<u8>> {
+        catch_unwind(AssertUnwindSafe(|| crate::attachments::data(&self.pdf, index)))
+            .ok()
+            .flatten()
+    }
+
+    /// The whole document, without password protection, for the printing system. Fails when
+    /// the file's permissions don't allow printing.
+    pub fn print_copy(&self) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::print_copy((&self.pdf, &self.bytes, &self.password), self.page_count())
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The comments in the document, as listed in [`DocumentInfo::comments`].
+    pub fn comments(&self) -> Vec<crate::Comment> {
+        catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default()
+    }
+
+    /// Parses `bytes`, a later revision of this file, with the same password and limits.
+    /// This document as it looks with the layers in `hidden` hidden and the rest shown, for
+    /// viewing; never saved.
+    pub fn with_layers_hidden(&self, hidden: &[crate::ObjRef]) -> Result<Self, crate::SaveError> {
+        let layers: Vec<crate::ObjRef> = crate::layers::read(&self.pdf).iter().map(|l| l.id).collect();
+        let bytes = catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::with_layers(&self.pdf, &self.bytes, &layers, hidden)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)??;
+        self.reopen(bytes).map_err(|_| crate::SaveError::Damaged)
+    }
+
+    /// The document's comments as an FDF or XFDF file, for the PDF named `pdf_name`.
+    pub fn comments_file(&self, format: crate::DataFormat, pdf_name: &str) -> Vec<u8> {
+        let comments =
+            catch_unwind(AssertUnwindSafe(|| crate::commentdata::read(&self.pdf))).unwrap_or_default();
+        crate::commentdata::export(&comments, format, pdf_name)
+    }
+
+    /// The comments in an FDF or XFDF file, as comments to add to this document, and how many
+    /// in it couldn't be added: replies, comments on pages it doesn't have, and kinds Panna
+    /// can't draw.
+    pub fn comments_from_file(&self, bytes: &[u8]) -> Result<(Vec<crate::Annotation>, usize), String> {
+        let markups = crate::commentdata::import(bytes)?;
+        let total = markups.len();
+        let pages = self.pdf.pages();
+        let mut per_page: Vec<Vec<String>> = vec![Vec::new(); pages.len()];
+        for (i, m) in markups.iter().enumerate() {
+            if m.in_reply_to.is_some() {
+                continue;
+            }
+            if let Some(list) = per_page.get_mut(m.page) {
+                list.push(m.pdf_dict_for_import(i));
+            }
+        }
+        // A stand-in document with the same pages as this one, holding just the comments, read
+        // the way comments saved in a PDF are.
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            format!(
+                "<< /Type /Pages /Kids [{}] /Count {} >>",
+                (0..pages.len())
+                    .map(|i| format!("{} 0 R", i + 3))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                pages.len()
+            ),
+        ];
+        for (page, annots) in pages.iter().zip(&per_page) {
+            let b = |r: hayro::hayro_syntax::object::Rect| format!("[{} {} {} {}]", r.x0, r.y0, r.x1, r.y1);
+            let rotate = match page.rotation() {
+                hayro::hayro_syntax::page::Rotation::None => 0,
+                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
+                hayro::hayro_syntax::page::Rotation::Flipped => 180,
+                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+            };
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox {} /CropBox {} /Rotate {rotate} /Annots [{}] >>",
+                b(page.media_box()),
+                b(page.crop_box()),
+                annots.join("\n")
+            ));
+        }
+        let stand_in = crate::edit::assemble(&objects);
+        let doc = Self::from_bytes(stand_in, None, self.limits).map_err(|e| e.to_string())?;
+        let comments = doc.info().map_err(|e| e.to_string())?.comments;
+        let added: Vec<crate::Annotation> = comments.into_iter().filter_map(|c| c.editable).collect();
+        let skipped = total - added.len().min(total);
+        Ok((added, skipped))
+    }
+
+    pub fn reopen(&self, bytes: Vec<u8>) -> Result<Self, OpenError> {
+        Self::from_bytes(bytes, Some(&self.password), self.limits)
+    }
+
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    /// The bytes this document was opened from.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     /// A render cache tied to this document. Reuse it across pages for speed.
@@ -240,5 +770,106 @@ fn decryption_error(e: hayro::hayro_syntax::DecryptionError) -> OpenError {
         D::PasswordProtected => OpenError::PasswordRequired,
         D::UnsupportedAlgorithm => OpenError::UnsupportedEncryption,
         _ => OpenError::Invalid,
+    }
+}
+
+/// Decodes a PDF text string:UTF-16BE or UTF-8 with a byte-order mark, otherwise
+/// PDFDocEncoding.
+pub(crate) fn decode_text_string(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        let units = rest
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair));
+        return char::decode_utf16(units)
+            .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect();
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    // ponytail: Latin-1 approximation of PDFDocEncoding; only 0x18–0x1F and 0x80–0x9F differ.
+    bytes.iter().map(|&b| char::from(b)).collect()
+}
+
+fn format_date(d: &hayro::hayro_syntax::object::DateTime) -> String {
+    let sign = if d.utc_offset_hour < 0 { '-' } else { '+' };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC{sign}{:02}:{:02}",
+        d.year,
+        d.month,
+        d.day,
+        d.hour,
+        d.minute,
+        d.second,
+        d.utc_offset_hour.unsigned_abs(),
+        d.utc_offset_minute
+    )
+}
+
+fn pdf_version(v: hayro::hayro_syntax::PdfVersion) -> &'static str {
+    use hayro::hayro_syntax::PdfVersion as V;
+    match v {
+        V::Pdf10 => "1.0",
+        V::Pdf11 => "1.1",
+        V::Pdf12 => "1.2",
+        V::Pdf13 => "1.3",
+        V::Pdf14 => "1.4",
+        V::Pdf15 => "1.5",
+        V::Pdf16 => "1.6",
+        V::Pdf17 => "1.7",
+        V::Pdf20 => "2.0",
+    }
+}
+
+fn format_bytes(n: u64) -> String {
+    match n {
+        0..1_000 => format!("{n} bytes"),
+        1_000..1_000_000 => format!("{:.1} KB", n as f64 / 1e3),
+        _ => format!("{:.1} MB", n as f64 / 1e6),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crops_to_an_area() {
+        // 4×2 pixels, each pixel's red value its index.
+        let page = RenderedPage {
+            width: 4,
+            height: 2,
+            rgba: (0..8u8).flat_map(|i| [i, 0, 0, 255]).collect(),
+        };
+        let part = page.clone().cropped([0.75, 1.0, 0.25, 0.5]);
+        assert_eq!((part.width, part.height), (2, 1));
+        assert_eq!(part.rgba.iter().step_by(4).copied().collect::<Vec<_>>(), [5, 6]);
+        // Nothing selected still keeps a pixel; out of range is clamped.
+        let dot = page.clone().cropped([2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(
+            (dot.width, dot.height, dot.rgba.first().copied()),
+            (1, 1, Some(7))
+        );
+        let all = page.clone().cropped([-1.0, -1.0, 2.0, 2.0]);
+        assert_eq!(all, page);
+    }
+
+    #[test]
+    fn decodes_text_strings() {
+        assert_eq!(decode_text_string(b"Plain"), "Plain");
+        assert_eq!(decode_text_string(&[0xFE, 0xFF, 0x00, 0x48, 0x00, 0xE9]), "Hé");
+        assert_eq!(decode_text_string(&[0xEF, 0xBB, 0xBF, 0xC3, 0xA9]), "é");
+        assert_eq!(decode_text_string(&[0xE9]), "é");
+        // Lone surrogate and odd trailing byte don't panic.
+        assert_eq!(decode_text_string(&[0xFE, 0xFF, 0xD8, 0x00, 0x41]), "\u{FFFD}");
+    }
+
+    #[test]
+    fn formats_sizes() {
+        assert_eq!(format_bytes(512), "512 bytes");
+        assert_eq!(format_bytes(2_500), "2.5 KB");
+        assert_eq!(format_bytes(3_400_000), "3.4 MB");
     }
 }

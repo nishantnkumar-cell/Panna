@@ -12,9 +12,29 @@ path = "src/main.rs"
 
 [dependencies]
 panna-core = { path = "../panna-core", version = "0.1.0" }
-iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "image-without-codecs", "thread-pool", "linux-theme-detection", "x11", "wayland", "web-colors"] }
+iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "image-without-codecs", "svg", "canvas", "thread-pool", "linux-theme-detection", "x11", "wayland", "web-colors"] }
 rfd = "0.17"
 futures-channel = "0.3"
+# Pictures on the system clipboard (iced only copies text).
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
+# Drawing signatures and initials into pictures.
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+ab_glyph = "0.2"
+
+# The Windows and macOS print dialogs.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+panna-print = { path = "../panna-print", version = "0.1.0" }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+
+# The desktop print portal (KDE and GNOME print dialogs, Flatpak).
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [lints]
 workspace = true
+
+# Embeds the app icon and version details in the Windows executable.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

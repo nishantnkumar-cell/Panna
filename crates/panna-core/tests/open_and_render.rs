@@ -67,6 +67,46 @@ fn renders_red_square_on_white() {
 }
 
 #[test]
+fn rotation_moves_pixels_clockwise() {
+    let doc = Document::from_bytes(sample_pdf(1), None, Limits::default()).unwrap();
+    let cache = doc.new_cache();
+    let page = doc.render_page(&cache, 0, 1.0).unwrap();
+    let red = |p: &panna_core::RenderedPage, x: usize, y: usize| {
+        p.rgba[(y * p.width as usize + x) * 4..][..4] == [255, 0, 0, 255]
+    };
+    // Red square spans x 100..300, y 492..692 (from the top) on a 612 x 792 page.
+    let cw = page.clone().rotated(1);
+    assert_eq!((cw.width, cw.height), (792, 612));
+    assert!(
+        red(&cw, 792 - 1 - 600, 200),
+        "point (200, 600) moves to (191, 200)"
+    );
+    let half = page.clone().rotated(2);
+    assert!(red(&half, 612 - 1 - 200, 792 - 1 - 600));
+    let ccw = page.clone().rotated(3);
+    assert!(red(&ccw, 600, 612 - 1 - 200));
+    assert_eq!(page.clone().rotated(4), page);
+}
+
+#[test]
+fn encrypted_file_needs_the_right_password() {
+    let bytes = include_bytes!("fixtures/encrypted-rc4.pdf").to_vec();
+    for wrong in [None, Some("nope")] {
+        assert!(matches!(
+            Document::from_bytes(bytes.clone(), wrong, Limits::default()),
+            Err(OpenError::PasswordRequired)
+        ));
+    }
+    let doc = Document::from_bytes(bytes, Some("secret"), Limits::default()).unwrap();
+    let cache = doc.new_cache();
+    let page = doc.render_page(&cache, 0, 1.0).unwrap();
+    assert!(
+        page.rgba.as_chunks::<4>().0.iter().any(|px| px[0] < 128),
+        "decrypted text draws dark pixels"
+    );
+}
+
+#[test]
 fn missing_page_is_an_error() {
     let doc = Document::from_bytes(sample_pdf(1), None, Limits::default()).unwrap();
     let cache = doc.new_cache();
@@ -153,10 +193,10 @@ fn worker_opens_and_renders_from_disk() {
     assert_eq!(info.pages.len(), 2);
 
     let (tx, rx) = mpsc::channel();
-    worker.render(1, 0.5, move |r| {
+    worker.render(1, 0.5, 1, move |r| {
         let _ = tx.send(r);
     });
     let page = rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
-    assert_eq!((page.width, page.height), (306, 396));
+    assert_eq!((page.width, page.height), (396, 306), "rotated a quarter turn");
     let _ = std::fs::remove_dir_all(dir);
 }
