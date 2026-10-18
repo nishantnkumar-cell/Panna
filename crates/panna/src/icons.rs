@@ -59,6 +59,8 @@ pub enum Icon {
     Cloud,
     Reply,
     Moon,
+    FullScreen,
+    Present,
 }
 
 impl Icon {
@@ -115,6 +117,8 @@ impl Icon {
             Icon::Cloud => include_bytes!("../icons/cloud.svg"),
             Icon::Reply => include_bytes!("../icons/reply.svg"),
             Icon::Moon => include_bytes!("../icons/moon.svg"),
+            Icon::FullScreen => include_bytes!("../icons/fullscreen.svg"),
+            Icon::Present => include_bytes!("../icons/presentation.svg"),
         }
     }
 }
@@ -209,7 +213,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 51] = [
+    const ALL: [Icon; 53] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -261,6 +265,8 @@ mod tests {
         Icon::Cloud,
         Icon::Reply,
         Icon::Moon,
+        Icon::FullScreen,
+        Icon::Present,
     ];
 
     #[test]

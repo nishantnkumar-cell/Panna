@@ -107,6 +107,12 @@ enum Message {
     RotateCw,
     NextSpread,
     NextColors,
+    /// Full screen with the toolbars and panels still showing (F11).
+    ToggleFullScreen,
+    /// Full screen, one page at a time, nothing else on screen (Ctrl+L, as in Acrobat).
+    Present,
+    /// Next or previous page while presenting; ignored otherwise.
+    Advance(bool),
     RotateCcw,
     PrevPage,
     NextPage,
@@ -208,6 +214,19 @@ struct App {
     after_save: Option<Pending>,
     /// A problem to show the user, such as a failed save.
     notice: Option<String>,
+    screen: Screen,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Screen {
+    Windowed,
+    Full,
+    /// Presenting `page`; `zoom` and `was_full` are restored afterwards.
+    Present {
+        page: usize,
+        zoom: f32,
+        was_full: bool,
+    },
 }
 
 /// An action that would lose unsaved annotations.
@@ -418,6 +437,7 @@ impl App {
             sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
             settings,
             window_size: INITIAL_SIZE,
+            screen: Screen::Windowed,
             show_properties: false,
             find: find::Find::default(),
             selection: None,
@@ -656,6 +676,9 @@ impl App {
                 self.relayout()
             }
             Message::RotateCcw => self.rotate(3),
+            Message::PrevPage | Message::NextPage if matches!(self.screen, Screen::Present { .. }) => {
+                self.update(Message::Advance(matches!(message, Message::NextPage)))
+            }
             Message::PrevPage => self.step_page(false),
             Message::NextPage => self.step_page(true),
             Message::FocusPageBox => {
@@ -696,8 +719,44 @@ impl App {
             }
             Message::WindowResized(size) => {
                 self.window_size = size;
-                Task::none()
+                // Refit the page once the window has gone full screen.
+                match self.screen {
+                    Screen::Present { page, .. } => self.present_page(page),
+                    _ => Task::none(),
+                }
             }
+            Message::ToggleFullScreen => match self.screen {
+                Screen::Windowed => {
+                    self.screen = Screen::Full;
+                    set_window_mode(window::Mode::Fullscreen)
+                }
+                Screen::Full => {
+                    self.screen = Screen::Windowed;
+                    set_window_mode(window::Mode::Windowed)
+                }
+                Screen::Present { .. } => self.stop_presenting(),
+            },
+            Message::Present => match self.screen {
+                Screen::Present { .. } => self.stop_presenting(),
+                _ if self.doc.as_ref().is_some_and(|d| !d.pages.is_empty()) => {
+                    self.screen = Screen::Present {
+                        page: self.current_page(),
+                        zoom: self.zoom,
+                        was_full: self.screen == Screen::Full,
+                    };
+                    self.selection = None;
+                    self.annotate.unpick();
+                    let page = self.current_page();
+                    Task::batch([set_window_mode(window::Mode::Fullscreen), self.present_page(page)])
+                }
+                _ => Task::none(),
+            },
+            Message::Advance(forward) => match self.screen {
+                Screen::Present { page, .. } => {
+                    self.present_page(if forward { page + 1 } else { page.saturating_sub(1) })
+                }
+                _ => Task::none(),
+            },
             Message::PasswordInput(value) => {
                 if let Status::Password { input, .. } = &mut self.status {
                     *input = value;
@@ -716,6 +775,9 @@ impl App {
                 Task::none()
             }
             Message::CloseOverlays => {
+                if matches!(self.screen, Screen::Present { .. }) {
+                    return self.stop_presenting();
+                }
                 if self.confirm_link.is_some() {
                     self.confirm_link = None;
                 } else if self.confirm_reset {
@@ -727,6 +789,11 @@ impl App {
                     self.find.rescan(&[]);
                 } else if self.annotate.draft.is_some() {
                     self.annotate.update(annotate::Event::CancelShape);
+                } else if self.screen == Screen::Full
+                    && self.selection.is_none()
+                    && self.annotate.picked.is_none()
+                {
+                    return self.update(Message::ToggleFullScreen);
                 } else {
                     self.selection = None;
                     self.annotate.unpick();
@@ -739,7 +806,10 @@ impl App {
                 }
                 Task::batch([self.request_thumbnails(), self.request_comment_text()])
             }
-            Message::GoToPage(index) => self.go_to_page(index),
+            Message::GoToPage(index) => match self.screen {
+                Screen::Present { .. } => self.present_page(index),
+                _ => self.go_to_page(index),
+            },
             Message::ShowComment(page, at, picked) => {
                 // Selecting a comment in the list selects it on the page too, ready to move
                 // or restyle.
@@ -1523,6 +1593,36 @@ impl App {
         Task::batch([self.go_to_page(page), self.request_thumbnails()])
     }
 
+    /// Shows `index` fitted to the whole window, for presenting.
+    fn present_page(&mut self, index: usize) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        let index = index.min(doc.pages.len().saturating_sub(1));
+        let Some(size) = doc.layout.sizes().get(index).copied() else {
+            return Task::none();
+        };
+        if let Screen::Present { page, .. } = &mut self.screen {
+            *page = index;
+        }
+        let fit = (self.window_size.width / size.width.max(1.0))
+            .min(self.window_size.height / size.height.max(1.0));
+        self.zoom = fit.clamp(MIN_ZOOM, MAX_ZOOM);
+        self.go_to_page(index)
+    }
+
+    fn stop_presenting(&mut self) -> Task<Message> {
+        let Screen::Present { page, zoom, was_full } = self.screen else {
+            return Task::none();
+        };
+        self.screen = if was_full { Screen::Full } else { Screen::Windowed };
+        self.zoom = zoom;
+        let mode = if was_full {
+            Task::none()
+        } else {
+            set_window_mode(window::Mode::Windowed)
+        };
+        Task::batch([mode, self.go_to_page(page)])
+    }
+
     fn step_page(&mut self, forward: bool) -> Task<Message> {
         let page = self.current_page();
         let target = self.doc.as_ref().map_or(page, |d| d.layout.step(page, forward));
@@ -1676,6 +1776,9 @@ impl App {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        if let Screen::Present { page, .. } = self.screen {
+            return self.present_view(page);
+        }
         let page_count = self.doc.as_ref().map_or(0, |d| d.pages.len());
         let has_doc = page_count > 0;
         let current = self.current_page() + 1;
@@ -1740,6 +1843,21 @@ impl App {
                     Spread::TwoCover => format!("Two pages with cover: click for single page ({m}Shift+T)"),
                 },
                 on(Message::NextSpread),
+            ),
+            icons::button(
+                Icon::Present,
+                format!("Present, one page at a time ({m}L)"),
+                on(Message::Present),
+            ),
+            icons::toggle(
+                Icon::FullScreen,
+                if self.screen == Screen::Full {
+                    "Leave full screen (F11)"
+                } else {
+                    "Full screen (F11)"
+                },
+                self.screen == Screen::Full,
+                Message::ToggleFullScreen,
             ),
             icons::toggle(
                 Icon::Moon,
@@ -1880,6 +1998,27 @@ impl App {
             ]
             .into(),
         }
+    }
+
+    /// One page on black, nothing else. A click goes forward, a right-click back.
+    fn present_view(&self, index: usize) -> Element<'_, Message> {
+        let page = self.doc.as_ref().and_then(|doc| {
+            let size = doc.layout.sizes().get(index)?;
+            let handle = doc.pages.get(index)?.image.as_ref()?;
+            Some(
+                image(handle.clone())
+                    .width((size.width * self.zoom).round())
+                    .height((size.height * self.zoom).round()),
+            )
+        });
+        let page: Element<'_, Message> = match page {
+            Some(page) => page.into(),
+            None => space().into(),
+        };
+        mouse_area(center(page).style(|_| container::Style::default().background(iced::Color::BLACK)))
+            .on_press(Message::Advance(true))
+            .on_right_press(Message::Advance(false))
+            .into()
     }
 
     fn confirm_view(&self) -> Element<'_, Message> {
@@ -2187,4 +2326,8 @@ impl App {
             })
             .into()
     }
+}
+
+fn set_window_mode(mode: window::Mode) -> Task<Message> {
+    window::oldest().and_then(move |id| window::set_mode(id, mode))
 }

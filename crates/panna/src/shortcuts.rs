@@ -39,6 +39,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         return match key.as_ref() {
             Key::Character("o") => Some(Message::OpenDialog),
             Key::Character("d") => Some(Message::ToggleProperties),
+            Key::Character("l") => Some(Message::Present),
             Key::Character("=" | "+") => Some(Message::ZoomIn),
             Key::Character("-") => Some(Message::ZoomOut),
             Key::Character("0") => Some(Message::FitPage),
@@ -63,6 +64,10 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         // F4 shows or hides the navigation pane, as in Acrobat.
         Key::Named(Named::F3) => Some(Message::Find(Event::Next)),
         Key::Named(Named::F4) => Some(Message::Sidebar(crate::sidebar::Event::Toggle)),
+        Key::Named(Named::F11) => Some(Message::ToggleFullScreen),
+        // Arrows and Space step through pages while presenting, and do nothing here otherwise.
+        Key::Named(Named::ArrowRight | Named::ArrowDown | Named::Space) => Some(Message::Advance(true)),
+        Key::Named(Named::ArrowLeft | Named::ArrowUp) => Some(Message::Advance(false)),
         Key::Named(Named::Delete | Named::Backspace) => {
             Some(Message::Annotate(annotate::Event::DeletePicked))
         }
@@ -110,6 +115,23 @@ mod tests {
         assert!(matches!(
             letter("C", Modifiers::COMMAND | Modifiers::SHIFT),
             Some(Message::Annotate(annotate::Event::Toggle))
+        ));
+    }
+
+    #[test]
+    fn presenting_keys() {
+        assert!(matches!(letter("l", Modifiers::COMMAND), Some(Message::Present)));
+        assert!(matches!(
+            press(Key::Named(Named::F11), Modifiers::empty()),
+            Some(Message::ToggleFullScreen)
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::Space), Modifiers::empty()),
+            Some(Message::Advance(true))
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::ArrowLeft), Modifiers::empty()),
+            Some(Message::Advance(false))
         ));
     }
 

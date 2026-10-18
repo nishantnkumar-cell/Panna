@@ -22,7 +22,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Copy image / snapshot tool | Later | |
 | Internal links and cross-references | V1 | Done: page links jump straight there; web and mail links ask first, then go to the system browser or mail program (Panna itself stays offline). Links that launch programs, open files or run scripts are ignored |
 | Tabs / multiple documents open | Later | |
-| Full-screen / presentation mode | Later | |
+| Full-screen / presentation mode | Later | Done: full screen keeping the tools (F11), and presenting one page at a time on black (Ctrl+L, as in Acrobat); click, Space or arrows to move, Escape to leave |
 | Night mode / custom page colours (accessibility) | Later | Done: original, dark (hues kept, lightness inverted) and sepia, cycled from the moon button or Ctrl+Shift+D; remembered |
 | Recent files list | V1 | Done; stored locally only |
 | Toolbars dock to any edge or float; position remembered | V1 | Done; icon-only (Lucide, ISC) with hover tips |
