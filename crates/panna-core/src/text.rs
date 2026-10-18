@@ -80,6 +80,10 @@ impl PageText {
         self.chars.len()
     }
 
+    pub(crate) fn chars(&self) -> &[char] {
+        &self.chars
+    }
+
     pub fn is_empty(&self) -> bool {
         self.chars.is_empty()
     }

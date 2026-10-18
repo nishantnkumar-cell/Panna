@@ -9,6 +9,7 @@ mod annotate;
 mod clipboard;
 mod colors;
 mod comments;
+mod compare;
 mod export;
 mod find;
 mod form;
@@ -254,6 +255,13 @@ enum Message {
     /// Adding text, pictures and links to pages.
     Add(add::Event),
     Redact(redact::Event),
+    Compare(compare::Event),
+    CompareChosen(Option<PathBuf>),
+    Compared {
+        doc: u64,
+        name: String,
+        result: Result<Vec<panna_core::Change>, String>,
+    },
     AddPictureChosen(Option<PathBuf>),
     AddPictureLoaded(Result<panna_core::StampImage, String>),
     /// Turn the snapshot tool on or off.
@@ -319,6 +327,8 @@ struct App {
     measure: measure::Measure,
     adder: add::Adder,
     redactor: redact::Redactor,
+    /// The comparison with another file, while it's shown.
+    comparison: Option<compare::Comparison>,
     annotate: annotate::Annotate,
     form: form::Form,
     /// Asking whether to reset the form.
@@ -660,6 +670,7 @@ impl App {
             measure: measure::Measure::default(),
             adder: add::Adder::default(),
             redactor: redact::Redactor::default(),
+            comparison: None,
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -1348,6 +1359,41 @@ impl App {
                 Task::perform(rx, |result| {
                     Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
                 })
+            }
+            Message::Compare(event) => self.compare_event(event),
+            Message::CompareChosen(None) => Task::none(),
+            Message::CompareChosen(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.compare(path, move |result| {
+                    let _ = tx.send(result);
+                });
+                self.notice = Some(format!("Comparing with {name}…"));
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::Compared {
+                    doc: id,
+                    name,
+                    result: result.unwrap_or_else(|_| Err("The files couldn't be compared.".into())),
+                })
+            }
+            Message::Compared { doc, name, result } => {
+                if self.doc.as_ref().is_none_or(|d| d.id != doc) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(changes) => {
+                        self.notice = None;
+                        self.comparison = Some(compare::Comparison::new(name, changes));
+                        self.sidebar.open = true;
+                        self.sidebar.tab = sidebar::Tab::Changes;
+                    }
+                    Err(e) => self.notice = Some(e),
+                }
+                Task::none()
             }
             Message::ImportComments => {
                 self.all_tools = false;
@@ -2214,8 +2260,9 @@ impl App {
                 open.info = info;
                 self.selection = None;
                 self.hover = None;
-                // Marks to redact were for the pages as they were.
+                // Marks to redact, and differences found, were for the pages as they were.
                 self.redactor.stop();
+                self.comparison = None;
                 self.annotate.saved(&open.info.comments);
                 self.form.load(&open.info.fields);
                 self.find.rescan(&open.texts);
@@ -2587,6 +2634,38 @@ impl App {
             }
         }
         Task::none()
+    }
+
+    fn compare_event(&mut self, event: compare::Event) -> Task<Message> {
+        let spot = match event {
+            compare::Event::Open => {
+                self.all_tools = false;
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Compare with")
+                            .add_filter("PDF documents", &["pdf", "PDF"])
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::CompareChosen,
+                );
+            }
+            compare::Event::Close => {
+                self.comparison = None;
+                if self.sidebar.tab == sidebar::Tab::Changes {
+                    self.sidebar.tab = sidebar::Tab::Thumbnails;
+                }
+                return Task::none();
+            }
+            compare::Event::Goto(index) => self.comparison.as_mut().and_then(|c| c.select(index)),
+            compare::Event::Step(forward) => self.comparison.as_mut().and_then(|c| c.step(forward)),
+        };
+        let Some((page, range)) = spot else {
+            return Task::none();
+        };
+        self.reveal_hit(&find::Hit { page, range })
     }
 
     /// Marks every match Find has found so far for redacting.
@@ -3040,6 +3119,8 @@ impl App {
             }
         };
         self.status = Status::Loading(path.clone());
+        self.comparison = None;
+        self.redactor.stop();
         self.doc = Some(OpenDoc {
             id,
             path,
@@ -3741,6 +3822,7 @@ impl App {
                 layers_shown: &doc.layers_shown,
                 can_undo_pages: self.page_edits > 0,
                 pages_busy: self.pages_busy,
+                comparison: self.comparison.as_ref(),
             })
         };
         match self.sidebar.side {
@@ -3783,6 +3865,22 @@ impl App {
         }
         if let Some(range) = self.selection.and_then(|s| s.range_on(index, text.len())) {
             mark(range, iced::Color::from_rgba(0.2, 0.45, 0.95, 0.35));
+        }
+        if let Some(comparison) = &self.comparison {
+            let (tints, bars) = comparison.marks(index, text);
+            let bar = compare::Comparison::bar_color();
+            for (b, color) in tints.into_iter().chain(bars.into_iter().map(|b| (b, bar))) {
+                let (x, y, w, h) = map.rect(&b);
+                out.push(
+                    pin(container(space())
+                        .width(w.max(2.0))
+                        .height(h.max(1.0))
+                        .style(move |_| container::Style::default().background(color)))
+                    .x(x)
+                    .y(y)
+                    .into(),
+                );
+            }
         }
         out
     }

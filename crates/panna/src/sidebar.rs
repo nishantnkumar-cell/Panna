@@ -32,6 +32,7 @@ pub enum Tab {
     Comments,
     Files,
     Layers,
+    Changes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -67,6 +68,7 @@ impl Tab {
             Tab::Comments => "comments",
             Tab::Files => "files",
             Tab::Layers => "layers",
+            Tab::Changes => "changes",
         }
     }
 
@@ -78,6 +80,7 @@ impl Tab {
             "comments" => Some(Tab::Comments),
             "files" => Some(Tab::Files),
             "layers" => Some(Tab::Layers),
+            "changes" => Some(Tab::Changes),
             _ => None,
         }
     }
@@ -211,6 +214,8 @@ pub struct ViewData<'a> {
     pub layers: &'a [Layer],
     /// Whether each layer is shown.
     pub layers_shown: &'a [bool],
+    /// The comparison with another file, if one was made.
+    pub comparison: Option<&'a crate::compare::Comparison>,
     /// Page changes can be undone.
     pub can_undo_pages: bool,
     /// A page change is in progress.
@@ -265,6 +270,12 @@ impl Sidebar {
             show.then(|| icons::toggle(icon, tip, self.tab == tab, ev(Event::Tab(tab))))
         };
         let title = row![text("Navigation").size(14), space::horizontal(),]
+            .push(icon_tab(
+                data.comparison.is_some(),
+                Icon::Compare,
+                "Differences from the compared file",
+                Tab::Changes,
+            ))
             .push(icon_tab(has_layers, Icon::Layers, "Layers", Tab::Layers))
             .push(icon_tab(has_files, Icon::Paperclip, "Attached files", Tab::Files))
             .push(
@@ -296,7 +307,10 @@ impl Sidebar {
         let content = match self.tab {
             Tab::Files if has_files => files(data.attachments),
             Tab::Layers if has_layers => layers(data.layers, data.layers_shown),
-            Tab::Thumbnails | Tab::Files | Tab::Layers => self.thumbnails(&data),
+            Tab::Changes if data.comparison.is_some() => data
+                .comparison
+                .map_or_else(|| space().into(), crate::compare::Comparison::panel),
+            Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes => self.thumbnails(&data),
             Tab::Bookmarks => bookmarks(data.outline, data.find),
             Tab::Results => data.find.results(data.texts),
             Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),

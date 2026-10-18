@@ -46,6 +46,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                     Message::Add(crate::add::Event::Toggle)
                 ),
                 tool(
+                    Icon::Compare,
+                    "Compare with another file…",
+                    Message::Compare(crate::compare::Event::Open)
+                ),
+                tool(
                     Icon::Redact,
                     "Remove content for good (redact)",
                     Message::Redact(crate::redact::Event::Toggle)

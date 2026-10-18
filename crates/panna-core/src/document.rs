@@ -433,6 +433,18 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The differences between this document's text and `other`'s, word by word.
+    pub fn compare_with(&self, other: &Document) -> Result<Vec<crate::Change>, RenderError> {
+        let texts = |doc: &Document| -> Result<Vec<crate::PageText>, RenderError> {
+            (0..doc.page_count()).map(|i| doc.page_text(i)).collect()
+        };
+        let (ours, theirs) = (texts(self)?, texts(other)?);
+        let ours: Vec<&[char]> = ours.iter().map(crate::PageText::chars).collect();
+        let theirs: Vec<&[char]> = theirs.iter().map(crate::PageText::chars).collect();
+        catch_unwind(AssertUnwindSafe(|| crate::compare::compare(&ours, &theirs)))
+            .map_err(|_| RenderError::EngineCrashed)
+    }
+
     /// The document with everything inside the marked areas taken out for good and covered
     /// with black boxes, as a new file. Each page's areas are in the same space as its text
     /// boxes.

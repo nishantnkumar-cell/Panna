@@ -19,6 +19,7 @@ type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
+type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 
 /// Earlier versions kept for undoing page changes.
@@ -97,6 +98,8 @@ enum Reply {
     ExportComments(PathBuf, crate::DataFormat, String, ExtractReply),
     /// Reads a comments file into annotations for this document.
     ReadComments(Vec<u8>, CommentsReply),
+    /// Compares the document's text with another file's.
+    Compare(PathBuf, CompareReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
@@ -331,6 +334,19 @@ impl RenderWorker {
         });
     }
 
+    /// Compares the document's text with the file at `path`, word by word.
+    pub fn compare(
+        &self,
+        path: PathBuf,
+        reply: impl FnOnce(Result<Vec<crate::Change>, String>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Compare(path, Box::new(reply)),
+        });
+    }
+
     /// The whole document with unsaved changes, without password protection, for printing.
     pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -487,6 +503,15 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     Ok((current.bytes().len() as u64, bytes.len() as u64))
                 })),
                 Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
+                Reply::Compare(path, reply) => reply(match Document::open(&path, None, current.limits()) {
+                    Ok(other) => current
+                        .compare_with(&other)
+                        .map_err(|e| format!("The files couldn't be compared: {e}")),
+                    Err(OpenError::PasswordRequired) => {
+                        Err("That file is password protected, so it can't be compared yet.".into())
+                    }
+                    Err(e) => Err(format!("That file couldn't be opened: {e}")),
+                }),
                 Reply::Snapshot {
                     page,
                     scale,

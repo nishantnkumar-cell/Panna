@@ -8,6 +8,7 @@
 mod attachments;
 mod commentdata;
 mod comments;
+mod compare;
 mod document;
 mod edit;
 mod export;
@@ -23,6 +24,7 @@ mod worker;
 
 pub use attachments::Attachment;
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
+pub use compare::{Change, ChangeKind};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{
     Addition, Annotation, Changes, Cleanup, Color, HeaderFooter, Kind, LINE_HEIGHT, MAX_PICTURES, Margins,

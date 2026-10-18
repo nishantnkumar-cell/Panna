@@ -86,3 +86,43 @@ fn text_under_marked_areas() {
     assert_eq!(text.text_in(&areas), "World Second");
     assert_eq!(text.text_in(&[]), "");
 }
+
+#[test]
+fn two_files_are_compared_word_by_word() {
+    let make = |line: &str| {
+        let content = format!("BT /F1 14 Tf 60 740 Td ({line}) Tj ET");
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+             /Resources << /Font << /F1 5 0 R >> >> >>"
+                .to_owned(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+        panna_core::Document::from_bytes(out, None, panna_core::Limits::default()).unwrap()
+    };
+    let new = make("Starts on 1 April 2026 with notice");
+    let old = make("Starts on 1 March 2026 with written notice");
+    let changes = new.compare_with(&old).unwrap();
+    let found: Vec<(&str, &str)> = changes
+        .iter()
+        .map(|c| (c.text.as_str(), c.other_text.as_str()))
+        .collect();
+    assert_eq!(found, [("April", "March"), ("", "written")]);
+    assert_eq!(new.page_text(0).unwrap().slice(changes[0].range.clone()), "April");
+}
