@@ -67,7 +67,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Auto-detect form fields | Later | Offline heuristic only |
 | Form JavaScript calculations | Later | **Sandboxed** JS subset only, or skip. JavaScript is a major attack surface in PDF readers |
 | XFA forms (dynamic LiveCycle forms) | Skip | Deprecated, huge attack surface |
-| Fill & Sign: add typed/drawn signature image, initials, dates | Later | |
+| Fill & Sign: add typed/drawn signature image, initials, dates | Later | Done: the Fill & Sign comment tool (F). Draw a signature or initials on a pad, or type them in a handwriting font (Dancing Script, OFL); click to place them as picture stamps, which can be moved and resized. Also places today's date (editable text), check marks and crosses. Signatures are kept until Panna closes, not stored on disk |
 | Send for signature / e-sign workflows | Skip | Online |
 
 ## 4. Page organisation

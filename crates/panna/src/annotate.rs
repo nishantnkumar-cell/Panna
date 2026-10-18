@@ -32,10 +32,11 @@ pub enum Tool {
     Polygon,
     Cloud,
     Stamp,
+    Sign,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 14] = [
+    pub const ALL: [Tool; 15] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
@@ -50,6 +51,7 @@ impl Tool {
         Tool::Polygon,
         Tool::Cloud,
         Tool::Stamp,
+        Tool::Sign,
     ];
 
     fn icon(self) -> Icon {
@@ -68,6 +70,7 @@ impl Tool {
             Tool::Polygon => Icon::Polygon,
             Tool::Cloud => Icon::Cloud,
             Tool::Stamp => Icon::Stamp,
+            Tool::Sign => Icon::Signature,
         }
     }
 
@@ -87,6 +90,9 @@ impl Tool {
             Tool::Polygon => "Draw a polygon: click each corner, double-click or Enter to finish",
             Tool::Cloud => "Draw a cloud: click each corner, double-click or Enter to finish",
             Tool::Stamp => "Add a stamp such as Approved or Draft: click, or drag to size it",
+            Tool::Sign => {
+                "Fill & Sign: add your signature, initials, the date or a check mark where you click"
+            }
         };
         format!("{what} ({})", self.key().to_ascii_uppercase())
     }
@@ -108,6 +114,7 @@ impl Tool {
             Tool::Polygon => 'g',
             Tool::Cloud => 'c',
             Tool::Stamp => 's',
+            Tool::Sign => 'f',
         }
     }
 
@@ -137,7 +144,7 @@ impl Tool {
     fn default_color(self) -> Color {
         match self {
             Tool::Select | Tool::Highlight | Tool::Note => SWATCHES[0],
-            Tool::TextBox => SWATCHES[5],
+            Tool::TextBox | Tool::Sign => SWATCHES[5],
             Tool::Pen => SWATCHES[2],
             _ => SWATCHES[3],
         }
@@ -162,6 +169,11 @@ const STAMP_HEIGHT: f32 = 34.0;
 /// A picture stamp's height for a click, and its widest, in points.
 const PICTURE_HEIGHT: f32 = 60.0;
 const PICTURE_MAX_WIDTH: f32 = 220.0;
+/// The usual height of a placed signature and of initials, in points.
+const SIGNATURE_HEIGHT: f32 = 36.0;
+const INITIALS_HEIGHT: f32 = 24.0;
+/// The size of a placed check mark or cross, in points.
+const MARK_SIZE: f32 = 12.0;
 /// Drags shorter than this (in points) count as clicks.
 const CLICK_SLOP: f32 = 3.0;
 /// Most corners one polygon or cloud can have.
@@ -203,6 +215,7 @@ pub enum Event {
     StampCustom,
     /// Places a picture, such as a signature or logo, named for its file.
     StampPicture(StampImage, String),
+    Sign(crate::sign::Event),
 }
 
 /// Where a stamp goes, while its kind is being chosen.
@@ -212,6 +225,8 @@ pub struct Stamping {
     /// The dragged box, or a point (an empty box) for a click.
     at: TextBox,
     custom: String,
+    /// Placing with Fill & Sign rather than choosing a stamp.
+    signing: bool,
 }
 
 /// A saved comment that replies and statuses attach to.
@@ -278,6 +293,8 @@ pub struct Annotate {
     pub draft: Option<Draft>,
     pub editing: Option<Editing>,
     pub stamping: Option<Stamping>,
+    /// The signature and initials made for Fill & Sign.
+    pub sign: crate::sign::Signer,
     author: String,
     /// Saved comments Panna can redraw, so they can be moved and restyled.
     saved: Vec<(CommentId, Annotation)>,
@@ -692,10 +709,11 @@ impl Annotate {
             Event::EditCancel => {
                 self.editing = None;
                 self.stamping = None;
+                self.sign.pad = None;
             }
             Event::Stamp(i) => {
                 if let Some(name) = STAMPS.get(i) {
-                    return self.place_stamp((*name).to_owned(), None);
+                    return self.place_stamp((*name).to_owned(), None, PICTURE_HEIGHT);
                 }
             }
             Event::StampText(value) => {
@@ -706,10 +724,11 @@ impl Annotate {
             Event::StampCustom => {
                 let text = self.stamping.as_ref().map(|s| s.custom.trim().to_owned());
                 if let Some(text) = text.filter(|t| !t.is_empty()) {
-                    return self.place_stamp(text, None);
+                    return self.place_stamp(text, None, PICTURE_HEIGHT);
                 }
             }
-            Event::StampPicture(image, name) => return self.place_stamp(name, Some(image)),
+            Event::StampPicture(image, name) => return self.place_stamp(name, Some(image), PICTURE_HEIGHT),
+            Event::Sign(event) => return self.sign(event),
             Event::FinishShape => return self.finish_shape(),
             Event::Reply(thread) => {
                 self.unpick();
@@ -747,7 +766,7 @@ impl Annotate {
 
     /// Adds the stamp being placed. A click centres a stamp sized to its words on the point; a
     /// picture keeps its shape, fitted inside a dragged box or at a usual size for a click.
-    fn place_stamp(&mut self, name: String, image: Option<StampImage>) -> Outcome {
+    fn place_stamp(&mut self, name: String, image: Option<StampImage>, height: f32) -> Outcome {
         let Some(stamping) = self.stamping.take() else {
             return Outcome::Nothing;
         };
@@ -759,11 +778,14 @@ impl Annotate {
                 let w = at.width().min(at.height() * aspect);
                 (w, w / aspect)
             } else {
-                let w = (PICTURE_HEIGHT * aspect).min(PICTURE_MAX_WIDTH);
+                let w = (height * aspect).min(PICTURE_MAX_WIDTH);
                 (w, w / aspect)
             };
             let (cx, cy) = if dragged {
                 ((at.x0 + at.x1) / 2.0, (at.y0 + at.y1) / 2.0)
+            } else if stamping.signing {
+                // Signatures start where the click was, as when signing on a line.
+                (at.x0 + w / 2.0, at.y0)
             } else {
                 (at.x0, at.y0)
             };
@@ -802,6 +824,78 @@ impl Annotate {
         {
             a.color = stamp_color(&name);
         }
+        Outcome::Changed
+    }
+
+    /// A Fill & Sign choice: makes a signature, or places one or a mark where the user clicked.
+    fn sign(&mut self, event: crate::sign::Event) -> Outcome {
+        use crate::sign::Action;
+        let ink = self
+            .colors
+            .get(Tool::Sign.index())
+            .copied()
+            .flatten()
+            .unwrap_or_else(|| Tool::Sign.default_color());
+        let action = self.sign.update(event, ink);
+        let Some(stamping) = &self.stamping else {
+            return Outcome::Nothing;
+        };
+        let (page, at) = (stamping.page, stamping.at);
+        // A click's point, or the middle of a dragged box.
+        let (cx, cy) = ((at.x0 + at.x1) / 2.0, (at.y0 + at.y1) / 2.0);
+        let kind = match action {
+            Action::None => return Outcome::Nothing,
+            Action::Picture(image, name) => {
+                let height = if name == crate::sign::Which::Initials.name() {
+                    INITIALS_HEIGHT
+                } else {
+                    SIGNATURE_HEIGHT
+                };
+                return self.place_stamp(name.to_owned(), Some(image), height);
+            }
+            Action::Date => {
+                let date = panna_core::today();
+                self.stamping = None;
+                self.record();
+                let rect = fit_text_box(
+                    TextBox {
+                        x0: at.x0,
+                        y0: at.y0,
+                        x1: at.x0 + TEXT_BOX_WIDTH,
+                        y1: at.y0 + NOTE_SIZE,
+                    },
+                    &date,
+                );
+                self.push(
+                    page,
+                    Kind::FreeText {
+                        rect,
+                        size: TEXT_SIZE,
+                    },
+                    Tool::Sign,
+                    date,
+                );
+                return Outcome::Changed;
+            }
+            Action::Check => {
+                let s = MARK_SIZE;
+                Kind::Ink(vec![vec![
+                    (cx - s * 0.5, cy),
+                    (cx - s * 0.15, cy + s * 0.4),
+                    (cx + s * 0.55, cy - s * 0.45),
+                ]])
+            }
+            Action::Cross => {
+                let h = MARK_SIZE * 0.45;
+                Kind::Ink(vec![
+                    vec![(cx - h, cy - h), (cx + h, cy + h)],
+                    vec![(cx - h, cy + h), (cx + h, cy - h)],
+                ])
+            }
+        };
+        self.stamping = None;
+        self.record();
+        self.push(page, kind, Tool::Sign, String::new());
         Outcome::Changed
     }
 
@@ -1056,7 +1150,8 @@ impl Annotate {
                 return Outcome::Nothing;
             }
             Tool::Pen => Kind::Ink(vec![draft.points]),
-            Tool::Stamp => {
+            Tool::Stamp | Tool::Sign => {
+                self.sign.pad = None;
                 self.stamping = Some(Stamping {
                     page: draft.page,
                     at: if dragged {
@@ -1070,6 +1165,7 @@ impl Annotate {
                         }
                     },
                     custom: String::new(),
+                    signing: draft.tool == Tool::Sign,
                 });
                 return Outcome::Nothing;
             }
@@ -1173,6 +1269,9 @@ impl Annotate {
     /// The card for typing a note's or text box's text.
     pub fn editor(&self) -> Option<Element<'_, Message>> {
         if let Some(stamping) = &self.stamping {
+            if stamping.signing {
+                return Some(self.sign.card());
+            }
             return Some(stamp_card(stamping));
         }
         let editing = self.editing.as_ref()?;
@@ -1446,7 +1545,7 @@ impl canvas::Program<Message> for Preview<'_> {
                     b.close();
                 }
             }),
-            Tool::Rect | Tool::TextBox | Tool::Stamp => Path::rectangle(top_left, size),
+            Tool::Rect | Tool::TextBox | Tool::Stamp | Tool::Sign => Path::rectangle(top_left, size),
             Tool::Ellipse => Path::new(|b| {
                 b.ellipse(canvas::path::arc::Elliptical {
                     center: Point::new(top_left.x + size.width / 2.0, top_left.y + size.height / 2.0),
@@ -1535,6 +1634,53 @@ mod tests {
             a.items.first().map(|i| (i.page, i.contents.as_str())),
             Some((2, "x"))
         );
+    }
+
+    #[test]
+    fn fill_and_sign_places_marks_the_date_and_a_signature_at_the_click() {
+        use crate::sign::Event as Sign;
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Sign));
+        a.press(0, (100.0, 50.0));
+        a.release();
+        assert!(a.stamping.as_ref().is_some_and(|s| s.signing));
+        assert!(matches!(a.update(Event::Sign(Sign::Check)), Outcome::Changed));
+        assert!(
+            matches!(a.items.first(), Some(Annotation { kind: Kind::Ink(lines), .. }) if lines.len() == 1)
+        );
+        assert!(a.stamping.is_none());
+
+        a.press(0, (20.0, 30.0));
+        a.release();
+        assert!(matches!(a.update(Event::Sign(Sign::Date)), Outcome::Changed));
+        assert!(matches!(
+            a.items.get(1),
+            Some(Annotation { kind: Kind::FreeText { rect, .. }, contents, color, .. })
+                if rect.x0 == 20.0 && contents.len() == 10 && *color == SWATCHES[5]
+        ));
+
+        a.press(0, (40.0, 200.0));
+        a.release();
+        a.update(Event::Sign(Sign::Create(crate::sign::Which::Initials)));
+        a.update(Event::Sign(Sign::PenDown(Point::new(0.0, 0.0))));
+        a.update(Event::Sign(Sign::PenMove(Point::new(30.0, 20.0))));
+        a.update(Event::Sign(Sign::PenUp));
+        assert!(matches!(a.update(Event::Sign(Sign::Use)), Outcome::Changed));
+        let Some(Annotation {
+            kind:
+                Kind::Stamp {
+                    rect,
+                    name,
+                    image: Some(_),
+                },
+            ..
+        }) = a.items.get(2)
+        else {
+            panic!("no initials: {:?}", a.items.get(2));
+        };
+        assert_eq!(name, "Initials");
+        assert!((rect.x0 - 40.0).abs() < 0.01 && (rect.height() - INITIALS_HEIGHT).abs() < 0.01);
+        assert!(a.sign.made(crate::sign::Which::Initials).is_some());
     }
 
     #[test]

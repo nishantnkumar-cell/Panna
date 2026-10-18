@@ -296,7 +296,7 @@ impl Lines {
 }
 
 /// Today's date as year-month-day, in UTC.
-pub(crate) fn today() -> String {
+pub fn today() -> String {
     let d = super::pdf_date(std::time::SystemTime::now());
     match (d.get(2..6), d.get(6..8), d.get(8..10)) {
         (Some(y), Some(m), Some(day)) => format!("{y}-{m}-{day}"),

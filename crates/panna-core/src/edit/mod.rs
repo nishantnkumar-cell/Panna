@@ -23,7 +23,7 @@ pub use picture::StampImage;
 
 pub use convert::{MAX_PICTURES, pictures_to_pdf};
 pub use crypt::Protection;
-pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer};
+pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
 
 use crate::{CommentId, FieldValue, ObjRef};

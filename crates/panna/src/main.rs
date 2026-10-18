@@ -22,6 +22,7 @@ mod selection;
 mod settings;
 mod shortcuts;
 mod sidebar;
+mod sign;
 mod toolbar;
 mod tools;
 
@@ -1547,7 +1548,11 @@ impl App {
                     return Task::none();
                 }
                 let was_editing = self.annotate.editing.is_some();
+                let typing = matches!(event, annotate::Event::Sign(sign::Event::Mode(sign::Mode::Type)));
                 let outcome = self.annotate.update(event);
+                if typing {
+                    return operation::focus(sign::input_id());
+                }
                 if marks_now {
                     return self.mark_selection();
                 }

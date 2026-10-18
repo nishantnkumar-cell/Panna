@@ -2676,6 +2676,7 @@ dependencies = [
 name = "panna"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "arboard",
  "futures-channel",
  "iced",
@@ -2683,6 +2684,7 @@ dependencies = [
  "panna-print",
  "raw-window-handle",
  "rfd",
+ "tiny-skia",
  "winresource",
  "zbus",
 ]

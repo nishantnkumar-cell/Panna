@@ -27,7 +27,7 @@ pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, Ren
 pub use edit::{
     Annotation, Changes, Cleanup, Color, HeaderFooter, Kind, LINE_HEIGHT, MAX_PICTURES, Margins, NOTE_SIZE,
     PageSource, Protection, STAMPS, SaveError, StampImage, Watermark, fill_header_footer, pictures_to_pdf,
-    stamp_label, text_width, wrap,
+    stamp_label, text_width, today, wrap,
 };
 pub use export::{Export, ExportFormat};
 pub use formats::Format;

@@ -46,8 +46,16 @@ impl StampImage {
         } else {
             return Err("Choose a PNG or JPEG picture.".into());
         };
+        Self::from_rgba(width, height, &rgba)
+    }
+
+    /// A picture from RGBA samples, row by row, such as a drawn signature.
+    pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Self, String> {
         if width == 0 || height == 0 {
             return Err("That picture is empty.".into());
+        }
+        if too_big(width, height) || rgba.len() as u64 != u64::from(width) * u64::from(height) * 4 {
+            return Err("That picture is too large.".into());
         }
         let (pixels, _) = rgba.as_chunks::<4>();
         let rgb: Vec<u8> = pixels.iter().flat_map(|&[r, g, b, _]| [r, g, b]).collect();
