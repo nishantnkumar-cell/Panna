@@ -10,6 +10,7 @@ mod find;
 mod form;
 mod icons;
 mod layout;
+mod links;
 mod selection;
 mod settings;
 mod shortcuts;
@@ -26,8 +27,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
-    Changes, Comment, DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker,
-    RenderedPage, SaveError, TextBox,
+    Changes, Comment, DocumentInfo, Limits, LinkTarget, OpenError, PageSize, PageText, RenderError,
+    RenderWorker, RenderedPage, SaveError, TextBox,
 };
 
 use icons::Icon;
@@ -142,6 +143,8 @@ enum Message {
     /// The Reset form button, then the answer to its confirmation.
     ResetForm,
     ConfirmReset(bool),
+    /// The answer to "Open this link?": open it, copy it, or neither.
+    OpenLink(LinkChoice),
     AnnotationsApplied {
         doc: u64,
         result: Result<(), SaveError>,
@@ -186,6 +189,10 @@ struct App {
     form: form::Form,
     /// Asking whether to reset the form.
     confirm_reset: bool,
+    /// A link pressed, followed when the button is released over it.
+    pending_link: Option<usize>,
+    /// A web address waiting for the user's go-ahead.
+    confirm_link: Option<String>,
     saving: bool,
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
@@ -305,6 +312,51 @@ fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Messag
     )
 }
 
+#[derive(Debug, Clone, Copy)]
+enum LinkChoice {
+    Open,
+    Copy,
+    Cancel,
+}
+
+fn link_view(uri: &str) -> Element<'_, Message> {
+    let mail = uri.to_ascii_lowercase().starts_with("mailto:");
+    container(
+        column![
+            text(if mail {
+                "Write an email?"
+            } else {
+                "Open this link in your browser?"
+            })
+            .size(16),
+            text(uri).size(13).style(text::secondary),
+            text(if mail {
+                "Your mail program will open."
+            } else {
+                "Panna stays offline; your browser opens the page."
+            })
+            .size(13)
+            .style(text::secondary),
+            row![
+                button("Copy link")
+                    .style(button::secondary)
+                    .on_press(Message::OpenLink(LinkChoice::Copy)),
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(Message::OpenLink(LinkChoice::Cancel)),
+                button("Open").on_press(Message::OpenLink(LinkChoice::Open)),
+            ]
+            .spacing(8),
+        ]
+        .spacing(12)
+        .width(440),
+    )
+    .padding(18)
+    .style(container::rounded_box)
+    .into()
+}
+
 fn reset_view<'a>() -> Element<'a, Message> {
     container(
         column![
@@ -361,6 +413,8 @@ impl App {
             annotate: annotate::Annotate::new(),
             form: form::Form::default(),
             confirm_reset: false,
+            pending_link: None,
+            confirm_link: None,
             saving: false,
             confirm: None,
             after_save: None,
@@ -622,7 +676,9 @@ impl App {
                 Task::none()
             }
             Message::CloseOverlays => {
-                if self.confirm_reset {
+                if self.confirm_link.is_some() {
+                    self.confirm_link = None;
+                } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
                     self.show_properties = false;
@@ -735,6 +791,12 @@ impl App {
                         return Task::none();
                     }
                 }
+                // Pressing a link follows it when the button comes up over it.
+                self.pending_link = self.link_under(page);
+                if self.pending_link.is_some() {
+                    self.selection = None;
+                    return Task::none();
+                }
                 let caret = self
                     .hover
                     .filter(|(p, _)| *p == page)
@@ -770,6 +832,12 @@ impl App {
                 self.copy_primary()
             }
             Message::PointerReleased => {
+                if let Some(index) = self.pending_link.take()
+                    && let Some(page) = self.hover.map(|(p, _)| p)
+                    && self.link_under(page) == Some(index)
+                {
+                    return self.follow_link(index);
+                }
                 if self.annotate.busy() {
                     let outcome = self.annotate.release();
                     if self.annotate.editing.is_some() {
@@ -794,6 +862,21 @@ impl App {
                     self.form.update(event);
                 }
                 Task::none()
+            }
+            Message::OpenLink(choice) => {
+                let Some(uri) = self.confirm_link.take() else {
+                    return Task::none();
+                };
+                match choice {
+                    LinkChoice::Open => {
+                        if let Err(e) = links::open(&uri) {
+                            self.notice = Some(format!("Couldn't open the link: {e}"));
+                        }
+                        Task::none()
+                    }
+                    LinkChoice::Copy => iced::clipboard::write(uri),
+                    LinkChoice::Cancel => Task::none(),
+                }
             }
             Message::ResetForm => {
                 self.confirm_reset = self.form.can_reset() && !self.saving;
@@ -981,6 +1064,34 @@ impl App {
             path: path.clone(),
             result: result.unwrap_or(Err(SaveError::EngineCrashed)),
         })
+    }
+
+    /// The link under the pointer on `page`, unless a drawing tool is in use.
+    fn link_under(&self, page: usize) -> Option<usize> {
+        if self.annotate.open && self.annotate.tool != annotate::Tool::Select {
+            return None;
+        }
+        let (_, position) = self.hover.filter(|(p, _)| *p == page)?;
+        let doc = self.doc.as_ref()?;
+        links::at(&doc.info.links, page, self.page_map(page).to_page(position))
+    }
+
+    fn follow_link(&mut self, index: usize) -> Task<Message> {
+        let Some(target) = self
+            .doc
+            .as_ref()
+            .and_then(|d| d.info.links.get(index))
+            .map(|l| l.target.clone())
+        else {
+            return Task::none();
+        };
+        match target {
+            LinkTarget::Page(page) => self.go_to_page(page),
+            LinkTarget::Uri(uri) => {
+                self.confirm_link = Some(uri);
+                Task::none()
+            }
+        }
     }
 
     /// Everything not yet saved: comments, and filled-in fields.
@@ -1274,6 +1385,7 @@ impl App {
                 outline: Vec::new(),
                 comments: Vec::new(),
                 fields: Vec::new(),
+                links: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -1620,6 +1732,9 @@ impl App {
         if self.confirm_reset {
             layers.push(modal(reset_view(), Message::ConfirmReset(false)));
         }
+        if let Some(uri) = &self.confirm_link {
+            layers.push(modal(link_view(uri), Message::OpenLink(LinkChoice::Cancel)));
+        }
         if self.confirm.is_some() {
             layers.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
         }
@@ -1844,12 +1959,15 @@ impl App {
                                 .hit(index, self.page_map(index).to_page(position))
                                 .is_some()
                     });
+                let over_link = !self.selecting && self.link_under(index).is_some();
                 let content = mouse_area(content)
                     .on_move(move |p| Message::PagePointer(index, p))
                     .on_press(Message::PagePress(index))
                     .on_double_click(Message::PageDoubleClick(index))
                     .on_release(Message::PointerReleased)
-                    .interaction(if self.annotate.is_moving() {
+                    .interaction(if over_link {
+                        mouse::Interaction::Pointer
+                    } else if self.annotate.is_moving() {
                         mouse::Interaction::Grabbing
                     } else if over_comment {
                         mouse::Interaction::Grab

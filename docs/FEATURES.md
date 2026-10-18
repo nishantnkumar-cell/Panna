@@ -20,7 +20,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Text search (find, find next, match case, whole word) | V1 | Done: search panel in the sidebar listing every result in context, like Word (Ctrl+F, F3/Shift+F3); includes hidden OCR text |
 | Select and copy text | V1 | Done; drag or double-click, Ctrl+C; across pages; Linux middle-click paste |
 | Copy image / snapshot tool | Later | |
-| Internal links and cross-references | V1 | |
+| Internal links and cross-references | V1 | Done: page links jump straight there; web and mail links ask first, then go to the system browser or mail program (Panna itself stays offline). Links that launch programs, open files or run scripts are ignored |
 | Tabs / multiple documents open | Later | |
 | Full-screen / presentation mode | Later | |
 | Night mode / custom page colours (accessibility) | Later | |

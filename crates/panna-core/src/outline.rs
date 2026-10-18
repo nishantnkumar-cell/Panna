@@ -24,7 +24,7 @@ const MAX_DEPTH: u16 = 48;
 /// Bound on name-tree nodes visited per lookup.
 const MAX_NAME_NODES: usize = 4_096;
 
-struct Ctx<'a> {
+pub(crate) struct Ctx<'a> {
     catalog: Dict<'a>,
     page_ids: HashMap<ObjectIdentifier, usize>,
     page_count: usize,
@@ -32,26 +32,33 @@ struct Ctx<'a> {
     out: Vec<OutlineItem>,
 }
 
+impl<'a> Ctx<'a> {
+    /// What resolving destinations needs: the catalog and where each page object sits.
+    pub(crate) fn new(pdf: &'a Pdf) -> Option<Self> {
+        let xref = pdf.xref();
+        let catalog = xref.get::<Dict<'_>>(xref.root_id())?;
+        let pages = pdf.pages();
+        let page_ids = pages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, page)| page.raw().obj_id().map(|id| (id, i)))
+            .collect();
+        Some(Ctx {
+            catalog,
+            page_ids,
+            page_count: pages.len(),
+            seen: HashSet::new(),
+            out: Vec::new(),
+        })
+    }
+}
+
 pub(crate) fn read(pdf: &Pdf) -> Vec<OutlineItem> {
-    let xref = pdf.xref();
-    let Some(catalog) = xref.get::<Dict<'_>>(xref.root_id()) else {
+    let Some(mut ctx) = Ctx::new(pdf) else {
         return Vec::new();
     };
-    let Some(root) = catalog.get::<Dict<'_>>(b"Outlines") else {
+    let Some(root) = ctx.catalog.get::<Dict<'_>>(b"Outlines") else {
         return Vec::new();
-    };
-    let pages = pdf.pages();
-    let page_ids = pages
-        .iter()
-        .enumerate()
-        .filter_map(|(i, page)| page.raw().obj_id().map(|id| (id, i)))
-        .collect();
-    let mut ctx = Ctx {
-        catalog,
-        page_ids,
-        page_count: pages.len(),
-        seen: HashSet::new(),
-        out: Vec::new(),
     };
     walk(&mut ctx, root.get::<Dict<'_>>(b"First"), 0);
     ctx.out
@@ -91,8 +98,8 @@ fn clean_title(s: &str) -> String {
         .join(" ")
 }
 
-/// Page index for an outline item's `/Dest` or `/A << /S /GoTo /D … >>`.
-fn destination(ctx: &Ctx<'_>, item: &Dict<'_>) -> Option<usize> {
+/// Page index for an outline item's or link's `/Dest` or `/A << /S /GoTo /D … >>`.
+pub(crate) fn destination(ctx: &Ctx<'_>, item: &Dict<'_>) -> Option<usize> {
     let dest = match item.get::<Object<'_>>(b"Dest") {
         Some(dest) => dest,
         None => {

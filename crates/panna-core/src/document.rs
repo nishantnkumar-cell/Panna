@@ -33,6 +33,8 @@ pub struct DocumentInfo {
     pub comments: Vec<crate::Comment>,
     /// The form's fields, if it has a form.
     pub fields: Vec<crate::Field>,
+    /// Links on the pages, in page order.
+    pub links: Vec<crate::Link>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -262,8 +264,10 @@ impl Document {
                 catch_unwind(AssertUnwindSafe(|| crate::outline::read(&self.pdf))).unwrap_or_default();
             let comments = self.comments();
             let fields = catch_unwind(AssertUnwindSafe(|| crate::forms::read(&self.pdf))).unwrap_or_default();
+            let links = catch_unwind(AssertUnwindSafe(|| crate::links::read(&self.pdf))).unwrap_or_default();
             DocumentInfo {
                 fields,
+                links,
                 pages,
                 title,
                 properties,

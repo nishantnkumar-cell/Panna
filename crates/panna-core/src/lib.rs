@@ -11,6 +11,7 @@ mod edit;
 mod formats;
 mod forms;
 mod limits;
+mod links;
 mod outline;
 mod text;
 mod worker;
@@ -21,6 +22,7 @@ pub use edit::{Annotation, Changes, Color, Kind, LINE_HEIGHT, NOTE_SIZE, SaveErr
 pub use formats::Format;
 pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
 pub use limits::Limits;
+pub use links::{Link, LinkTarget, safe_uri};
 pub use outline::OutlineItem;
 pub use text::{FindOptions, PageText, TextBox};
 pub use worker::RenderWorker;
