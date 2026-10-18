@@ -26,10 +26,12 @@ pub enum Tool {
     Ellipse,
     Arrow,
     Line,
+    Polygon,
+    Cloud,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 11] = [
+    pub const ALL: [Tool; 13] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
@@ -41,6 +43,8 @@ impl Tool {
         Tool::Ellipse,
         Tool::Arrow,
         Tool::Line,
+        Tool::Polygon,
+        Tool::Cloud,
     ];
 
     fn icon(self) -> Icon {
@@ -56,6 +60,8 @@ impl Tool {
             Tool::Ellipse => Icon::Circle,
             Tool::Arrow => Icon::Arrow,
             Tool::Line => Icon::Line,
+            Tool::Polygon => Icon::Polygon,
+            Tool::Cloud => Icon::Cloud,
         }
     }
 
@@ -72,7 +78,14 @@ impl Tool {
             Tool::Ellipse => "Draw an ellipse",
             Tool::Arrow => "Draw an arrow",
             Tool::Line => "Draw a line",
+            Tool::Polygon => "Draw a polygon: click each corner, double-click or Enter to finish",
+            Tool::Cloud => "Draw a cloud: click each corner, double-click or Enter to finish",
         }
+    }
+
+    /// Tools that place one corner per click instead of drawing with a drag.
+    pub fn by_corners(self) -> bool {
+        matches!(self, Tool::Polygon | Tool::Cloud)
     }
 
     /// Tools that work on selected text, so dragging selects text as the Select tool does.
@@ -112,6 +125,8 @@ const TEXT_SIZE: f32 = 12.0;
 const TEXT_BOX_WIDTH: f32 = 200.0;
 /// Drags shorter than this (in points) count as clicks.
 const CLICK_SLOP: f32 = 3.0;
+/// Most corners one polygon or cloud can have.
+const MAX_CORNERS: usize = 1_000;
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -133,6 +148,10 @@ pub enum Event {
     Edit(text_editor::Action),
     EditDone,
     EditCancel,
+    /// Finishes the polygon or cloud being drawn.
+    FinishShape,
+    /// Drops the polygon or cloud being drawn.
+    CancelShape,
 }
 
 /// A shape being drawn, in page points.
@@ -580,6 +599,12 @@ impl Annotate {
                 }
             }
             Event::EditCancel => self.editing = None,
+            Event::FinishShape => return self.finish_shape(),
+            Event::CancelShape => {
+                if self.draft.as_ref().is_some_and(|d| d.tool.by_corners()) {
+                    self.draft = None;
+                }
+            }
         }
         Outcome::Nothing
     }
@@ -627,15 +652,81 @@ impl Annotate {
     }
 
     /// Starts drawing at a point on `page`, for tools that draw.
-    pub fn press(&mut self, page: usize, at: (f32, f32)) {
+    pub fn press(&mut self, page: usize, at: (f32, f32)) -> Outcome {
         if self.tool.marks_text() || self.editing.is_some() {
-            return;
+            return Outcome::Nothing;
         }
+        if self.tool.by_corners() {
+            // The last point follows the pointer; a click fixes it and starts the next one.
+            if let Some(draft) = self
+                .draft
+                .as_mut()
+                .filter(|d| d.page == page && d.tool.by_corners())
+            {
+                // Clicking the first corner, or the last one again (as a double-click does),
+                // finishes the shape.
+                let near = |p: Option<&(f32, f32)>| {
+                    p.is_some_and(|p| (p.0 - at.0).hypot(p.1 - at.1) < CLICK_SLOP * 2.0)
+                };
+                let fixed = draft.points.len() - 1;
+                let closes = fixed >= 3
+                    && (near(draft.points.first()) || near(draft.points.get(fixed.saturating_sub(1))));
+                if closes {
+                    return self.finish_shape();
+                }
+                if let Some(last) = draft.points.last_mut() {
+                    *last = at;
+                }
+                if draft.points.len() < MAX_CORNERS {
+                    draft.points.push(at);
+                }
+                return Outcome::Nothing;
+            }
+        }
+        let points = if self.tool.by_corners() {
+            vec![at, at]
+        } else {
+            vec![at]
+        };
         self.draft = Some(Draft {
             page,
             tool: self.tool,
-            points: vec![at],
+            points,
         });
+        Outcome::Nothing
+    }
+
+    /// Ends a polygon or cloud: the corners clicked so far, if there are at least three.
+    fn finish_shape(&mut self) -> Outcome {
+        let Some(draft) = self.draft.take_if(|d| d.tool.by_corners()) else {
+            return Outcome::Nothing;
+        };
+        // Drop the point following the pointer, and repeats from a double-click.
+        let mut points: Vec<(f32, f32)> = Vec::new();
+        for p in draft.points.iter().take(draft.points.len().saturating_sub(1)) {
+            if points
+                .last()
+                .is_none_or(|q| (q.0 - p.0).hypot(q.1 - p.1) >= CLICK_SLOP)
+            {
+                points.push(*p);
+            }
+        }
+        if points.len() > 3
+            && let (Some(first), Some(last)) = (points.first(), points.last())
+            && (first.0 - last.0).hypot(first.1 - last.1) < CLICK_SLOP * 2.0
+        {
+            points.pop();
+        }
+        if points.len() < 3 {
+            return Outcome::Nothing;
+        }
+        self.record();
+        let kind = Kind::Polygon {
+            points,
+            cloud: draft.tool == Tool::Cloud,
+        };
+        self.push(draft.page, kind, draft.tool, String::new());
+        Outcome::Changed
     }
 
     pub fn drag(&mut self, page: usize, at: (f32, f32)) {
@@ -649,7 +740,11 @@ impl Annotate {
         let Some(draft) = self.draft.as_mut().filter(|d| d.page == page) else {
             return;
         };
-        if draft.tool == Tool::Pen {
+        if draft.tool.by_corners() {
+            if let Some(last) = draft.points.last_mut() {
+                *last = at;
+            }
+        } else if draft.tool == Tool::Pen {
             let far = draft
                 .points
                 .last()
@@ -683,7 +778,8 @@ impl Annotate {
             }
             return Outcome::Changed;
         }
-        let Some(draft) = self.draft.take() else {
+        // Polygons and clouds go on until they are finished.
+        let Some(draft) = self.draft.take_if(|d| !d.tool.by_corners()) else {
             return Outcome::Nothing;
         };
         let start = draft.points.first().copied().unwrap_or_default();
@@ -725,7 +821,14 @@ impl Annotate {
                 to: end,
                 arrow: draft.tool == Tool::Arrow,
             },
-            Tool::Select | Tool::Highlight | Tool::Underline | Tool::StrikeOut => return Outcome::Nothing,
+            Tool::Select
+            | Tool::Highlight
+            | Tool::Underline
+            | Tool::StrikeOut
+            | Tool::Polygon
+            | Tool::Cloud => {
+                return Outcome::Nothing;
+            }
         };
         self.record();
         self.push(draft.page, kind, draft.tool, String::new());
@@ -881,7 +984,12 @@ fn fit_text_box(at: TextBox, text: &str) -> TextBox {
 fn can_resize(a: &Annotation) -> bool {
     matches!(
         a.kind,
-        Kind::Rect(_) | Kind::Ellipse(_) | Kind::FreeText { .. } | Kind::Ink(_) | Kind::Line { .. }
+        Kind::Rect(_)
+            | Kind::Ellipse(_)
+            | Kind::FreeText { .. }
+            | Kind::Ink(_)
+            | Kind::Line { .. }
+            | Kind::Polygon { .. }
     )
 }
 
@@ -994,10 +1102,13 @@ impl canvas::Program<Message> for Preview<'_> {
         let top_left = Point::new(first.x.min(last.x), first.y.min(last.y));
         let size = Size::new((first.x - last.x).abs(), (first.y - last.y).abs());
         let path = match self.draft.tool {
-            Tool::Pen => Path::new(|b| {
+            Tool::Pen | Tool::Polygon | Tool::Cloud => Path::new(|b| {
                 b.move_to(first);
                 for p in &view {
                     b.line_to(*p);
+                }
+                if self.draft.tool.by_corners() && view.len() > 2 {
+                    b.close();
                 }
             }),
             Tool::Rect | Tool::TextBox => Path::rectangle(top_left, size),
@@ -1232,6 +1343,43 @@ mod tests {
         assert!(matches!(a.update(Event::EditDone), Outcome::Nothing));
         a.update(Event::Undo);
         assert_eq!(a.items[0], before);
+    }
+
+    #[test]
+    fn a_cloud_takes_a_corner_per_click() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Cloud));
+        for at in [(10.0, 10.0), (100.0, 10.0), (100.0, 80.0)] {
+            a.press(0, at);
+            assert!(matches!(a.release(), Outcome::Nothing));
+            a.drag(0, (at.0 + 5.0, at.1 + 5.0));
+        }
+        // A double-click's second press lands on the last corner again, which finishes it.
+        assert!(matches!(a.press(0, (100.0, 80.0)), Outcome::Changed));
+        assert!(matches!(a.update(Event::FinishShape), Outcome::Nothing));
+        assert_eq!(
+            a.items.first().map(|i| &i.kind),
+            Some(&Kind::Polygon {
+                points: vec![(10.0, 10.0), (100.0, 10.0), (100.0, 80.0)],
+                cloud: true
+            })
+        );
+        // Clicking the first corner again closes the shape too.
+        a.update(Event::Tool(Tool::Polygon));
+        for at in [(10.0, 10.0), (50.0, 10.0), (50.0, 50.0)] {
+            a.press(0, at);
+        }
+        assert!(matches!(a.press(0, (11.0, 11.0)), Outcome::Changed));
+        assert!(
+            matches!(a.items.get(1).map(|i| &i.kind), Some(Kind::Polygon { points, cloud: false }) if points.len() == 3)
+        );
+        // Two corners aren't a shape; Escape drops what's drawn.
+        a.press(0, (1.0, 1.0));
+        a.press(0, (9.0, 1.0));
+        assert!(matches!(a.update(Event::FinishShape), Outcome::Nothing));
+        a.press(0, (1.0, 1.0));
+        a.update(Event::CancelShape);
+        assert!(a.draft.is_none() && a.items.len() == 2);
     }
 
     #[test]

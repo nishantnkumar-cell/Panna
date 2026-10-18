@@ -31,6 +31,8 @@ pub enum CommentKind {
     Rect,
     Ellipse,
     Line,
+    Polygon,
+    Cloud,
     /// Any other markup, with its PDF subtype name (Stamp, Polygon, Caret, …).
     Other(String),
 }
@@ -47,6 +49,7 @@ impl CommentKind {
             "Square" => Self::Rect,
             "Circle" => Self::Ellipse,
             "Line" => Self::Line,
+            "Polygon" => Self::Polygon,
             "Link" | "Widget" | "Popup" | "PrinterMark" | "TrapNet" | "Watermark" | "3D" | "RichMedia"
             | "Screen" | "Movie" | "Sound" => return None,
             other => Self::Other(other.to_owned()),
@@ -65,6 +68,8 @@ impl CommentKind {
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
             Self::Line => "Line",
+            Self::Polygon => "Polygon",
+            Self::Cloud => "Cloud",
             Self::Other(name) => name,
         }
     }
@@ -173,6 +178,16 @@ impl From<&Annotation> for Comment {
                 add(to.0, to.1);
                 CommentKind::Line
             }
+            Kind::Polygon { points, cloud } => {
+                for &(x, y) in points {
+                    add(x, y);
+                }
+                if *cloud {
+                    CommentKind::Cloud
+                } else {
+                    CommentKind::Polygon
+                }
+            }
         };
         let marked = match &a.kind {
             Kind::Highlight(b) | Kind::Underline(b) | Kind::StrikeOut(b) => b.clone(),
@@ -220,9 +235,12 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             continue;
         };
         let subtype = subtype.as_str();
-        let Some(kind) = CommentKind::from_subtype(subtype) else {
+        let Some(mut kind) = CommentKind::from_subtype(subtype) else {
             continue;
         };
+        if kind == CommentKind::Polygon && is_cloudy(&annot) {
+            kind = CommentKind::Cloud;
+        }
         // Hidden annotations (flag bit 2) aren't shown, so they aren't listed either.
         if annot.get::<i64>(b"F").is_some_and(|f| f & 2 != 0) {
             continue;
@@ -376,6 +394,25 @@ fn editable(
                 arrow,
             }
         }
+        "Polygon" => {
+            let numbers: Vec<f64> = annot
+                .get::<Array<'_>>(b"Vertices")?
+                .iter::<f64>()
+                .take(20_000)
+                .collect();
+            let (pairs, _) = numbers.as_chunks::<2>();
+            let points: Vec<(f32, f32)> = pairs
+                .iter()
+                .filter_map(|&[x, y]| view_box(&[(x, y)]).map(|p| (p.x0, p.y0)))
+                .collect();
+            if points.len() < 3 {
+                return None;
+            }
+            Kind::Polygon {
+                points,
+                cloud: is_cloudy(annot),
+            }
+        }
         "Ink" => {
             let mut strokes = Vec::new();
             let mut points = 0;
@@ -401,6 +438,14 @@ fn editable(
         }
         _ => return None,
     })
+}
+
+/// A border effect of /S /C: a cloudy outline.
+fn is_cloudy(annot: &Dict<'_>) -> bool {
+    annot
+        .get::<Dict<'_>>(b"BE")
+        .and_then(|be| be.get::<Name<'_>>(b"S"))
+        .is_some_and(|s| s.as_str() == "C")
 }
 
 /// The colour in /C: grey, RGB or CMYK.

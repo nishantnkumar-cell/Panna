@@ -24,6 +24,8 @@ fn icon(kind: &CommentKind) -> Icon {
         CommentKind::Rect => Icon::Square,
         CommentKind::Ellipse => Icon::Circle,
         CommentKind::Line => Icon::Line,
+        CommentKind::Polygon => Icon::Polygon,
+        CommentKind::Cloud => Icon::Cloud,
         CommentKind::Other(_) => Icon::Annotate,
     }
 }

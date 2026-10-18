@@ -43,7 +43,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Sticky notes | V1 | Done |
 | Free text / text box comments | V1 | Done; Helvetica, wrapped to the box |
 | Freehand drawing (ink) | V1 | Done |
-| Shapes: rectangle, ellipse, line, arrow, polygon, cloud | V1 | Rectangle, ellipse, line and arrow done; polygon and cloud later |
+| Shapes: rectangle, ellipse, line, arrow, polygon, cloud | V1 | Done: click each corner of a polygon or cloud, then double-click, press Enter or click the first corner to finish; Escape drops it |
 | Stamps (Approved, Draft, custom image stamps) | Later | |
 | Comment list panel, replies, status (accepted/rejected) | V1 | List done: Comments tab in the navigation pane, quotes highlighted text, click to jump. Replies and status later |
 | Edit / move / delete annotations, colour and opacity | V1 | Six-colour palette per tool done; any comment, saved or new, can be deleted from the list (undoable; removed from the file on save, with its pop-up). Drag any comment to move it; recolour it or set its opacity (slider) while selected; Delete key removes it. Saved comments of kinds Panna draws are redrawn on change. Drag a selected shape, drawing or text box by a corner handle to resize it; double-click a comment to edit its text |

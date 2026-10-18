@@ -53,6 +53,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         Key::Named(Named::PageDown) => Some(Message::NextPage),
         Key::Named(Named::PageUp) => Some(Message::PrevPage),
         Key::Named(Named::Escape) => Some(Message::CloseOverlays),
+        Key::Named(Named::Enter) => Some(Message::Annotate(annotate::Event::FinishShape)),
         // F4 shows or hides the navigation pane, as in Acrobat.
         Key::Named(Named::F3) => Some(Message::Find(Event::Next)),
         Key::Named(Named::F4) => Some(Message::Sidebar(crate::sidebar::Event::Toggle)),

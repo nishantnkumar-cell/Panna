@@ -693,6 +693,8 @@ impl App {
                 } else if self.find.open {
                     self.find.open = false;
                     self.find.rescan(&[]);
+                } else if self.annotate.draft.is_some() {
+                    self.annotate.update(annotate::Event::CancelShape);
                 } else {
                     self.selection = None;
                     self.annotate.unpick();
@@ -779,7 +781,8 @@ impl App {
                 self.annotate.unpick();
                 if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
                     let at = self.page_map(page).to_page(position);
-                    self.annotate.press(page, at);
+                    let outcome = self.annotate.press(page, at);
+                    return self.after_annotate(outcome);
                 }
                 Task::none()
             }
@@ -817,6 +820,11 @@ impl App {
                 let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) else {
                     return Task::none();
                 };
+                // A double-click ends a polygon or cloud.
+                if self.annotate.open && self.annotate.tool.by_corners() {
+                    let outcome = self.annotate.update(annotate::Event::FinishShape);
+                    return self.after_annotate(outcome);
+                }
                 // With the select tool, double-clicking a comment edits its text.
                 if self.annotate.open
                     && self.annotate.tool == annotate::Tool::Select

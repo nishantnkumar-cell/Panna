@@ -237,7 +237,19 @@ fn saved_comments_come_back_editable() {
         arrow: true,
     });
     line.opacity = 0.5;
-    let shapes = [annotation(Kind::Rect(rect)), line];
+    let polygon = vec![(20.0, 20.0), (80.0, 30.0), (60.0, 80.0)];
+    let shapes = [
+        annotation(Kind::Rect(rect)),
+        line,
+        annotation(Kind::Polygon {
+            points: polygon.clone(),
+            cloud: false,
+        }),
+        annotation(Kind::Polygon {
+            points: polygon,
+            cloud: true,
+        }),
+    ];
     let saved = doc.with_annotations(&shapes).unwrap();
     let listed = reopen(saved).info().unwrap().comments;
     for (original, comment) in shapes.iter().zip(&listed) {
@@ -263,6 +275,14 @@ fn saved_comments_come_back_editable() {
                 },
             ) => {
                 assert!((from.0 - f.0).abs() < 0.01 && (to.1 - t.1).abs() < 0.01 && arrow == r);
+            }
+            (Kind::Polygon { points, cloud }, Kind::Polygon { points: p, cloud: c }) => {
+                assert_eq!((points.len(), cloud), (p.len(), c));
+                for (a, b) in points.iter().zip(p) {
+                    assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01, "{p:?}");
+                }
+                let label = if *cloud { "Cloud" } else { "Polygon" };
+                assert_eq!(comment.kind.label(), label);
             }
             other => panic!("came back as {other:?}"),
         }

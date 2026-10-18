@@ -45,6 +45,12 @@ pub enum Kind {
         to: (f32, f32),
         arrow: bool,
     },
+    /// A closed shape through these corners; with `cloud`, its edges are drawn as a row of
+    /// bumps, as for marking up drawings.
+    Polygon {
+        points: Vec<(f32, f32)>,
+        cloud: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +111,12 @@ impl Annotation {
                     *y += dy;
                 }
             }
+            Kind::Polygon { points, .. } => {
+                for (x, y) in points {
+                    *x += dx;
+                    *y += dy;
+                }
+            }
             Kind::Line { from, to, .. } => {
                 for p in [from, to] {
                     p.0 += dx;
@@ -143,6 +155,11 @@ impl Annotation {
             Kind::FreeText { rect, .. } | Kind::Rect(rect) | Kind::Ellipse(rect) => map_box(rect),
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
+                    (*x, *y) = (fx(*x), fy(*y));
+                }
+            }
+            Kind::Polygon { points, .. } => {
+                for (x, y) in points {
                     (*x, *y) = (fx(*x), fy(*y));
                 }
             }
@@ -392,8 +409,32 @@ impl Annotation {
                 bounds.grow(width);
                 "Line"
             }
+            Kind::Polygon { points, cloud } => {
+                let corners: Vec<Point> = points.iter().map(|(x, y)| map(*x, *y)).collect();
+                extra.push_str("/Vertices [");
+                for p in &corners {
+                    bounds.add(p.x, p.y);
+                    let _ = write!(extra, "{} {} ", n(p.x), n(p.y));
+                }
+                extra.push_str("] ");
+                let _ = write!(content, "{color} RG {} w 1 J 1 j ", n(width));
+                if *cloud {
+                    extra.push_str("/BE << /S /C /I 1 >> ");
+                    let bump = cloud_path(&mut content, &corners, width);
+                    bounds.grow(bump);
+                } else {
+                    for (i, p) in corners.iter().enumerate() {
+                        let op = if i == 0 { "m" } else { "l" };
+                        let _ = write!(content, "{} {} {op} ", n(p.x), n(p.y));
+                    }
+                    content.push_str("h ");
+                }
+                content.push_str("S ");
+                bounds.grow(width);
+                "Polygon"
+            }
         };
-        if !matches!(self.kind, Kind::Ink(_) | Kind::Line { .. }) {
+        if !matches!(self.kind, Kind::Ink(_) | Kind::Line { .. } | Kind::Polygon { .. }) {
             bounds.grow(1.0);
         }
         let [x0, y0, x1, y1] = bounds.rect();
@@ -408,7 +449,7 @@ impl Annotation {
         );
         if matches!(
             self.kind,
-            Kind::Ink(_) | Kind::Rect(_) | Kind::Ellipse(_) | Kind::Line { .. }
+            Kind::Ink(_) | Kind::Rect(_) | Kind::Ellipse(_) | Kind::Line { .. } | Kind::Polygon { .. }
         ) {
             let _ = write!(dict, "/BS << /W {} >> ", n(width));
         }
@@ -433,6 +474,67 @@ impl Annotation {
             appearance: appearance.into_bytes(),
         }
     }
+}
+
+/// Appends a cloud outline through `corners` (user space): each edge becomes a row of
+/// half-circle bumps facing outwards. Returns how far the bumps reach beyond the corners.
+fn cloud_path(out: &mut String, corners: &[Point], width: f64) -> f64 {
+    // Signed area: positive when the corners run anticlockwise (PDF's y axis points up).
+    let area: f64 = corners
+        .iter()
+        .zip(corners.iter().cycle().skip(1))
+        .map(|(a, b)| a.x * b.y - b.x * a.y)
+        .sum();
+    let outwards = if area >= 0.0 { 1.0 } else { -1.0 };
+    let bump = (width * 2.0 + 8.0).clamp(8.0, 30.0);
+    // Four-point Bézier approximation of a quarter circle.
+    const K: f64 = 0.552_284_75;
+    let mut first = true;
+    for (a, b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
+        let d = *b - *a;
+        let len = d.hypot();
+        if len < 1e-6 {
+            continue;
+        }
+        let dir = d / len;
+        let normal = Point::new(dir.y * outwards, -dir.x * outwards).to_vec2();
+        let count = (len / bump).round().clamp(1.0, 500.0);
+        let step = len / count;
+        let r = step / 2.0;
+        for i in 0..count as usize {
+            let q0 = *a + dir * (step * i as f64);
+            let q1 = q0 + dir * step;
+            let top = q0 + dir * r + normal * r;
+            if first {
+                let _ = write!(out, "{} {} m ", n(q0.x), n(q0.y));
+                first = false;
+            }
+            let c1 = q0 + normal * (r * K);
+            let c2 = top - dir * (r * K);
+            let c3 = top + dir * (r * K);
+            let c4 = q1 + normal * (r * K);
+            let _ = write!(
+                out,
+                "{} {} {} {} {} {} c {} {} {} {} {} {} c ",
+                n(c1.x),
+                n(c1.y),
+                n(c2.x),
+                n(c2.y),
+                n(top.x),
+                n(top.y),
+                n(c3.x),
+                n(c3.y),
+                n(c4.x),
+                n(c4.y),
+                n(q1.x),
+                n(q1.y)
+            );
+        }
+    }
+    if !first {
+        out.push_str("h ");
+    }
+    bump / 2.0
 }
 
 #[derive(Default)]
