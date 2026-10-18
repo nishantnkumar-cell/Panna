@@ -19,7 +19,7 @@ use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
 pub use picture::StampImage;
 
-pub use rebuild::PageSource;
+pub use rebuild::{Margins, PageSource};
 
 use crate::{CommentId, FieldValue, ObjRef};
 
@@ -51,6 +51,8 @@ pub enum SaveError {
     Io(String),
     /// The file's permissions don't allow printing it.
     PrintingNotAllowed,
+    /// Cropping would leave too little of a page.
+    CropTooLarge,
 }
 
 impl fmt::Display for SaveError {
@@ -67,6 +69,7 @@ impl fmt::Display for SaveError {
             Self::NoSuchPage(i) => write!(f, "Page {} doesn't exist.", i + 1),
             Self::EngineCrashed => write!(f, "The PDF engine failed while preparing the changes."),
             Self::Io(e) => write!(f, "Couldn't write the file: {e}"),
+            Self::CropTooLarge => write!(f, "Those margins would leave too little of the page."),
             Self::PrintingNotAllowed => write!(
                 f,
                 "This PDF's author doesn't allow it to be printed. Opening it with the owner \
@@ -211,7 +214,27 @@ pub(crate) type Input<'a> = (&'a Pdf, &'a [u8], &'a str);
 /// A whole new file with the pages in `plan`, taken from `docs` (the first is the one being
 /// changed, whose catalog, document information and password the new file keeps).
 pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u8>, SaveError> {
-    rebuild_from(docs, plan, true)
+    rebuild_from(docs, plan, &[], true)
+}
+
+/// Every page of `doc`, with the pages at `pages` cropped by `margins`.
+pub(crate) fn crop(
+    doc: Input<'_>,
+    count: usize,
+    pages: &[usize],
+    margins: Margins,
+) -> Result<Vec<u8>, SaveError> {
+    let plan: Vec<PageSource> = (0..count)
+        .map(|index| PageSource::Page {
+            doc: 0,
+            index,
+            turns: 0,
+        })
+        .collect();
+    let crops: Vec<Option<Margins>> = (0..count)
+        .map(|i| pages.contains(&i).then_some(margins))
+        .collect();
+    rebuild_from(&[doc], &plan, &crops, true)
 }
 
 /// Every page of `doc` in a file without password protection, to hand to the printing
@@ -224,10 +247,15 @@ pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveEr
             turns: 0,
         })
         .collect();
-    rebuild_from(&[doc], &plan, false)
+    rebuild_from(&[doc], &plan, &[], false)
 }
 
-fn rebuild_from(docs: &[Input<'_>], plan: &[PageSource], keep_password: bool) -> Result<Vec<u8>, SaveError> {
+fn rebuild_from(
+    docs: &[Input<'_>],
+    plan: &[PageSource],
+    crops: &[Option<Margins>],
+    keep_password: bool,
+) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
     let mut first = None;
     for (i, &(pdf, bytes, password)) in docs.iter().enumerate() {
@@ -254,7 +282,7 @@ fn rebuild_from(docs: &[Input<'_>], plan: &[PageSource], keep_password: bool) ->
         sources.push(rebuild::Source { pdf, bytes, crypt });
     }
     let (info, encryption) = first.ok_or(SaveError::Damaged)?;
-    rebuild::rebuild(&sources, plan, info, encryption)
+    rebuild::rebuild(&sources, plan, crops, info, encryption)
 }
 
 /// The /Encrypt dictionary's bytes, whether the trailer holds it or refers to it.

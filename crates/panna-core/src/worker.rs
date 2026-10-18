@@ -29,6 +29,11 @@ pub enum PageEdit {
     Plan(Vec<PageSource>),
     /// Every page of another file, inserted before page `at`.
     InsertFile { at: usize, path: PathBuf },
+    /// Trims margins (top, right, bottom, left as shown, in points) from these pages.
+    Crop {
+        pages: Vec<usize>,
+        margins: crate::Margins,
+    },
     /// Goes back to before the last page change.
     Undo,
 }
@@ -329,6 +334,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         .rearranged(&plan, &[])
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::InsertFile { at, path } => insert_file(current, at, &path),
+                    PageEdit::Crop { pages, margins } => current
+                        .cropped(&pages, margins)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                 };
                 match result.and_then(|doc| Ok((doc.info().map_err(|_| SaveError::Damaged)?, doc))) {
                     Ok((info, doc)) => {

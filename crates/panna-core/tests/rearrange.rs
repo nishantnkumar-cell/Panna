@@ -285,3 +285,24 @@ fn print_copies_have_no_password_and_respect_permissions() {
     let copy = open(restricted, Some("owner")).print_copy().unwrap();
     assert!(text(&open(copy, None), 0).contains("Hello secret world"));
 }
+
+#[test]
+fn pages_are_cropped_by_the_margins_as_shown() {
+    let doc = open(three_pages(), None);
+    // Top, right, bottom, left.
+    let margins = [10.0, 20.0, 30.0, 40.0];
+    let out = open(doc.cropped(&[0, 2], margins).unwrap(), None);
+    let info = out.info().unwrap();
+    // Page 1 is shown turned, 400 × 300; page 2 is left alone; page 3 is 300 × 400.
+    assert_eq!((info.pages[0].width, info.pages[0].height), (340.0, 260.0));
+    assert_eq!((info.pages[1].width, info.pages[1].height), (400.0, 300.0));
+    assert_eq!((info.pages[2].width, info.pages[2].height), (240.0, 360.0));
+    assert!(text(&out, 2).contains("Page 3"));
+    // Cropping again trims what is left, and too much is refused.
+    let again = open(out.cropped(&[2], margins).unwrap(), None);
+    assert_eq!(again.info().unwrap().pages[2].width, 180.0);
+    assert_eq!(
+        doc.cropped(&[2], [0.0, 150.0, 0.0, 150.0]),
+        Err(panna_core::SaveError::CropTooLarge)
+    );
+}

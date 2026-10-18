@@ -121,6 +121,8 @@ enum Message {
     InsertFileChosen(Option<PathBuf>),
     /// The Extract pages card.
     Extract(pages::ExtractEvent),
+    /// The Crop pages card.
+    Crop(pages::CropEvent),
     /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
     /// The folder to save extracted pages to, a file each, once chosen.
@@ -242,6 +244,8 @@ struct App {
     printing: bool,
     /// Choosing pages to extract.
     extracting: Option<pages::Extracting>,
+    /// Choosing how much to crop.
+    cropping: Option<pages::Cropping>,
     /// The pages being extracted, while their file or folder is chosen.
     extract_pages: Vec<usize>,
     /// What to do once unsaved changes are saved or discarded.
@@ -492,6 +496,7 @@ impl App {
             saving: false,
             printing: false,
             extracting: None,
+            cropping: None,
             extract_pages: Vec::new(),
             confirm: None,
             after_save: None,
@@ -826,6 +831,8 @@ impl App {
                     self.confirm_link = None;
                 } else if self.extracting.is_some() {
                     self.extracting = None;
+                } else if self.cropping.is_some() {
+                    self.cropping = None;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1124,6 +1131,38 @@ impl App {
                 self.edit_pages(PageEdit::InsertFile { at, path }, at, false)
             }
             Message::Extract(event) => self.extract(event),
+            Message::Crop(event) => {
+                let Some(state) = &mut self.cropping else {
+                    return Task::none();
+                };
+                match event {
+                    pages::CropEvent::Margin(i, value) => {
+                        if let Some(slot) = state.margins.get_mut(i) {
+                            *slot = value.chars().filter(|c| !c.is_control()).take(8).collect();
+                        }
+                    }
+                    pages::CropEvent::All(all) => state.all = all,
+                    pages::CropEvent::Cancel => self.cropping = None,
+                    pages::CropEvent::Go => {
+                        let Ok(margins) = pages::crop_margins(state) else {
+                            return Task::none();
+                        };
+                        let all = state.all;
+                        let current = self.current_page();
+                        let pages = if all {
+                            (0..self.doc.as_ref().map_or(0, |d| d.pages.len())).collect()
+                        } else {
+                            vec![current]
+                        };
+                        self.cropping = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        return self.edit_pages(PageEdit::Crop { pages, margins }, current, false);
+                    }
+                }
+                Task::none()
+            }
             Message::ExtractChosen(Some(path)) => {
                 let pages = std::mem::take(&mut self.extract_pages)
                     .into_iter()
@@ -1411,6 +1450,10 @@ impl App {
                 },
                 Message::InsertFileChosen,
             ),
+            pages::Op::Crop => {
+                self.cropping = Some(pages::Cropping::default());
+                operation::focus(pages::crop_input_id()).chain(operation::select_all(pages::crop_input_id()))
+            }
             pages::Op::Extract => {
                 self.extracting = Some(pages::Extracting {
                     range: (current + 1).to_string(),
@@ -2317,6 +2360,12 @@ impl App {
             layers.push(modal(
                 pages::extract_card(state, doc.pages.len()),
                 Message::Extract(pages::ExtractEvent::Cancel),
+            ));
+        }
+        if let Some(state) = &self.cropping {
+            layers.push(modal(
+                pages::crop_card(state),
+                Message::Crop(pages::CropEvent::Cancel),
             ));
         }
         if self.confirm_reset {

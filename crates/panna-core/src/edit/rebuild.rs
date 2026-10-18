@@ -247,11 +247,60 @@ fn inherited<'a>(pdf: &'a Pdf, page: ObjRef, dict: &Dict<'a>, key: &[u8]) -> Opt
     None
 }
 
+/// Margins to trim from a page as it is shown, in points: top, right, bottom, left.
+pub type Margins = [f32; 4];
+
+/// The smallest a cropped page may be, in points a side.
+const MIN_CROPPED: f64 = 18.0;
+
+/// The page's visible box (its crop box within its media box) with `margins` trimmed from
+/// the sides as shown on screen, given its `/Rotate`.
+fn cropped(media: [f64; 4], crop: Option<[f64; 4]>, rotate: i64, margins: Margins) -> Option<[f64; 4]> {
+    let norm = |b: [f64; 4]| [b[0].min(b[2]), b[1].min(b[3]), b[0].max(b[2]), b[1].max(b[3])];
+    let media = norm(media);
+    let [mut x0, mut y0, mut x1, mut y1] = match crop.map(norm) {
+        Some(c) => [
+            c[0].max(media[0]),
+            c[1].max(media[1]),
+            c[2].min(media[2]),
+            c[3].min(media[3]),
+        ],
+        None => media,
+    };
+    let [top, right, bottom, left] = margins.map(|m| f64::from(m.max(0.0)));
+    // Which side of the unturned page each shown side is.
+    let (from_x0, from_y0, from_x1, from_y1) = match rotate.rem_euclid(360) {
+        90 => (top, left, bottom, right),
+        180 => (right, top, left, bottom),
+        270 => (bottom, right, top, left),
+        _ => (left, bottom, right, top),
+    };
+    x0 += from_x0;
+    y0 += from_y0;
+    x1 -= from_x1;
+    y1 -= from_y1;
+    (x1 - x0 >= MIN_CROPPED && y1 - y0 >= MIN_CROPPED).then_some([x0, y0, x1, y1])
+}
+
+/// The four numbers of a rectangle written as an array.
+fn rect(value: &[u8]) -> Option<[f64; 4]> {
+    let inner = value.trim_ascii().strip_prefix(b"[")?.strip_suffix(b"]")?;
+    let numbers: Vec<f64> = std::str::from_utf8(inner)
+        .ok()?
+        .split_ascii_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    numbers.try_into().ok()
+}
+
 /// Writes a new file with the pages in `plan`, the first source's catalog, document
-/// information and everything they use.
+/// information and everything they use. Pages with margins in `crops` (by place in `plan`;
+/// it may be shorter) are cropped.
 pub(crate) fn rebuild(
     sources: &[Source<'_>],
     plan: &[PageSource],
+    crops: &[Option<Margins>],
     info: Option<ObjRef>,
     encryption: Option<Encryption>,
 ) -> Result<Vec<u8>, SaveError> {
@@ -296,7 +345,8 @@ pub(crate) fn rebuild(
             }
         }
     }
-    for (source, num) in plan.iter().zip(&page_nums) {
+    for (place, (source, num)) in plan.iter().zip(&page_nums).enumerate() {
+        let crop = crops.get(place).copied().flatten();
         let body = match *source {
             PageSource::Blank { width, height } => format!(
                 "<< /Type /Page /Parent {pages_num} 0 R /MediaBox [0 0 {} {}] /Resources << >> >>",
@@ -325,7 +375,7 @@ pub(crate) fn rebuild(
                     let Some((owner, value)) = inherited(pdf, *r, dict, key) else {
                         continue;
                     };
-                    if key == b"Rotate" {
+                    if key == b"Rotate" || (key == b"CropBox" && crop.is_some()) {
                         continue;
                     }
                     body.push(b'/');
@@ -338,6 +388,15 @@ pub(crate) fn rebuild(
                     .and_then(|(_, v)| std::str::from_utf8(v).ok()?.trim().parse::<f64>().ok())
                     .map_or(0, |v| v as i64);
                 let rotate = (rotate + 90 * i64::from(turns)).rem_euclid(360);
+                if let Some(margins) = crop {
+                    let boxed = |key: &[u8]| inherited(pdf, *r, dict, key).and_then(|(_, v)| rect(v));
+                    let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+                    let [x0, y0, x1, y1] =
+                        cropped(media, boxed(b"CropBox"), rotate, margins).ok_or(SaveError::CropTooLarge)?;
+                    body.extend_from_slice(
+                        format!("/CropBox [{} {} {} {}]\n", n(x0), n(y0), n(x1), n(y1)).as_bytes(),
+                    );
+                }
                 body.extend_from_slice(format!("/Parent {pages_num} 0 R\n/Rotate {rotate}\n>>").as_bytes());
                 body
             }
@@ -425,4 +484,27 @@ pub(crate) fn rebuild(
     let _ = write!(xref, ">>\nstartxref\n{xref_at}\n%%EOF\n");
     out.extend_from_slice(xref.as_bytes());
     Ok(out)
+}
+
+#[cfg(test)]
+mod crop_tests {
+    use super::cropped;
+
+    #[test]
+    fn margins_follow_the_page_as_shown() {
+        let media = [0.0, 0.0, 600.0, 800.0];
+        let top = [100.0, 0.0, 0.0, 0.0];
+        // Unturned, the top of the screen is the top of the page.
+        assert_eq!(cropped(media, None, 0, top), Some([0.0, 0.0, 600.0, 700.0]));
+        // Turned a quarter clockwise, the page's left edge is at the top of the screen.
+        assert_eq!(cropped(media, None, 90, top), Some([100.0, 0.0, 600.0, 800.0]));
+        assert_eq!(cropped(media, None, 180, top), Some([0.0, 100.0, 600.0, 800.0]));
+        assert_eq!(cropped(media, None, 270, top), Some([0.0, 0.0, 500.0, 800.0]));
+        // An existing crop box is the starting point, kept within the media box.
+        assert_eq!(
+            cropped(media, Some([-50.0, 50.0, 550.0, 750.0]), 0, [0.0; 4]),
+            Some([0.0, 50.0, 550.0, 750.0])
+        );
+        assert_eq!(cropped(media, None, 0, [790.0, 0.0, 0.0, 0.0]), None);
+    }
 }

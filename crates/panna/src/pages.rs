@@ -22,6 +22,8 @@ pub enum Op {
     InsertFile,
     /// Asks which pages to save as new files.
     Extract,
+    /// Asks how much to trim from the page edges.
+    Crop,
     Delete,
     Undo,
 }
@@ -102,6 +104,7 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             "Save pages as a new PDF, or split into files",
             ev(Op::Extract, true)
         ),
+        icons::button(Icon::Crop, "Crop pages", ev(Op::Crop, true)),
         icons::button(Icon::Delete, "Delete this page", ev(Op::Delete, count > 1)),
         icons::button(
             Icon::Undo,
@@ -111,6 +114,8 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
     ]
     .spacing(0)
     .padding([2, 4])
+    // Onto a second line when the sidebar is too narrow for them all.
+    .wrap()
     .into()
 }
 
@@ -210,6 +215,115 @@ pub fn extract_card<'a>(state: &Extracting, count: usize) -> Element<'a, Message
     .into()
 }
 
+/// The Crop pages card: margins in millimetres as typed, and whether every page is cropped.
+#[derive(Debug, Clone)]
+pub struct Cropping {
+    /// Top, right, bottom, left.
+    pub margins: [String; 4],
+    pub all: bool,
+}
+
+impl Default for Cropping {
+    fn default() -> Self {
+        Self {
+            margins: std::array::from_fn(|_| "0".to_owned()),
+            all: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CropEvent {
+    Margin(usize, String),
+    All(bool),
+    Go,
+    Cancel,
+}
+
+pub fn crop_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("crop-top")
+}
+
+const POINTS_PER_MM: f32 = 72.0 / 25.4;
+
+/// The margins in points, or what's wrong with them.
+pub fn crop_margins(state: &Cropping) -> Result<panna_core::Margins, String> {
+    let mut out = [0.0; 4];
+    for (slot, typed) in out.iter_mut().zip(&state.margins) {
+        let typed = typed.trim().replace(',', ".");
+        let mm: f32 = if typed.is_empty() {
+            0.0
+        } else {
+            typed
+                .parse()
+                .map_err(|_| format!("“{typed}” isn't a number of millimetres."))?
+        };
+        if !(0.0..=2000.0).contains(&mm) {
+            return Err("Margins go from 0 to 2000 mm.".into());
+        }
+        *slot = mm * POINTS_PER_MM;
+    }
+    if out.iter().all(|m| *m == 0.0) {
+        return Err("Enter how much to trim from at least one edge.".into());
+    }
+    Ok(out)
+}
+
+/// The Crop pages card.
+pub fn crop_card<'a>(state: &Cropping) -> Element<'a, Message> {
+    let ev = Message::Crop;
+    let parsed = crop_margins(state);
+    let field = |i: usize, label: &'static str| {
+        let input = text_input("0", state.margins.get(i).map_or("", String::as_str))
+            .on_input(move |v| ev(CropEvent::Margin(i, v)))
+            .on_submit(ev(CropEvent::Go))
+            .width(70);
+        let input = if i == 0 { input.id(crop_input_id()) } else { input };
+        row![text(label).width(60), input, text("mm").size(13)]
+            .spacing(6)
+            .align_y(iced::Center)
+    };
+    let untouched = state
+        .margins
+        .iter()
+        .all(|m| m.trim().parse::<f32>().is_ok_and(|v| v == 0.0));
+    let hint: Element<'a, Message> = match &parsed {
+        Ok(_) => space().height(0).into(),
+        Err(_) if untouched => space().height(0).into(),
+        Err(e) => text(e.clone())
+            .size(13)
+            .style(|theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().danger.base.color),
+            })
+            .into(),
+    };
+    let all = Some(state.all);
+    container(
+        column![
+            text("Crop pages").size(16),
+            text("Trim from the edges as the page is shown.").size(13),
+            row![field(0, "Top"), field(1, "Right")].spacing(16),
+            row![field(2, "Bottom"), field(3, "Left")].spacing(16),
+            hint,
+            radio("This page", false, all, |v| ev(CropEvent::All(v))),
+            radio("All pages", true, all, |v| ev(CropEvent::All(v))),
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(CropEvent::Cancel)),
+                button("Crop").on_press_maybe(parsed.is_ok().then_some(ev(CropEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(380),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +354,20 @@ mod tests {
         assert_eq!((indices(&p), show), (vec![Some(0), None, Some(1)], 1));
         let (p, _) = plan(Op::RotateCcw, 2, 1, SIZE).unwrap();
         assert!(matches!(p[1], PageSource::Page { turns: 3, .. }));
+    }
+
+    #[test]
+    fn crop_margins_in_millimetres() {
+        let mut state = Cropping::default();
+        assert!(crop_margins(&state).is_err());
+        state.margins[0] = "25,4".into();
+        state.margins[3] = " ".into();
+        let m = crop_margins(&state).unwrap();
+        assert!((m[0] - 72.0).abs() < 0.01 && m[3] == 0.0);
+        state.margins[1] = "-1".into();
+        assert!(crop_margins(&state).is_err());
+        state.margins[1] = "lots".into();
+        assert!(crop_margins(&state).is_err());
     }
 
     #[test]

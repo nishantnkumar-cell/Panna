@@ -327,6 +327,20 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with the pages at `pages` cropped by `margins` (top, right, bottom, left
+    /// as shown, in points), as a new file.
+    pub fn cropped(&self, pages: &[usize], margins: crate::Margins) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::crop(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                pages,
+                margins,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The whole document, without password protection, for the printing system. Fails when
     /// the file's permissions don't allow printing.
     pub fn print_copy(&self) -> Result<Vec<u8>, crate::SaveError> {
