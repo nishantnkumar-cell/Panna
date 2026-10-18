@@ -50,10 +50,11 @@ pub enum Icon {
     Save,
     Annotate,
     Delete,
+    Check,
 }
 
 impl Icon {
-    fn bytes(self) -> &'static [u8] {
+    pub fn bytes(self) -> &'static [u8] {
         match self {
             Icon::Open => include_bytes!("../icons/folder-open.svg"),
             Icon::PrevPage => include_bytes!("../icons/chevron-left.svg"),
@@ -97,6 +98,7 @@ impl Icon {
             Icon::Save => include_bytes!("../icons/save.svg"),
             Icon::Annotate => include_bytes!("../icons/message-square-plus.svg"),
             Icon::Delete => include_bytes!("../icons/trash-2.svg"),
+            Icon::Check => include_bytes!("../icons/check.svg"),
         }
     }
 }
@@ -191,7 +193,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 42] = [
+    const ALL: [Icon; 43] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -234,6 +236,7 @@ mod tests {
         Icon::Save,
         Icon::Annotate,
         Icon::Delete,
+        Icon::Check,
     ];
 
     #[test]

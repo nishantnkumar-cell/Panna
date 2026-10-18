@@ -57,9 +57,9 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Fill AcroForm fields: text, checkbox, radio, list, dropdown | V1 | |
-| Tab between fields, field validation and formatting | V1 | Basic formats (number, date) |
-| Save filled form | V1 | |
+| Fill AcroForm fields: text, checkbox, radio, list, dropdown | V1 | Done: fields drawn as inputs over the page (single and multiline text, password, max length, checkboxes, radio groups, drop-downs and lists). Multi-select lists keep their first choice only. Saved appearances use Helvetica, so characters outside Western European show as ? in other viewers until they redraw the field |
+| Tab between fields, field validation and formatting | V1 | Tab / Shift+Tab done. Validation and formats (number, date) next |
+| Save filled form | V1 | Done: values and fresh appearances written as an incremental update |
 | Reset form | V1 | |
 | Flatten form | Later | |
 | Import / export form data (FDF, XFDF) | Later | |

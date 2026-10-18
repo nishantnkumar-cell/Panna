@@ -11,6 +11,13 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
         return None;
     };
+    if key == Key::Named(Named::Tab) && !modifiers.command() && !modifiers.alt() {
+        return Some(if modifiers.shift() {
+            Message::FocusPrevious
+        } else {
+            Message::FocusNext
+        });
+    }
     if modifiers.shift() && !modifiers.command() && key == Key::Named(Named::F3) {
         return Some(Message::Find(Event::Prev));
     }

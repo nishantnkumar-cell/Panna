@@ -7,6 +7,7 @@
 mod annotate;
 mod comments;
 mod find;
+mod form;
 mod icons;
 mod layout;
 mod selection;
@@ -25,8 +26,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
-    Comment, DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker, RenderedPage,
-    SaveError, TextBox,
+    Changes, Comment, DocumentInfo, Limits, OpenError, PageSize, PageText, RenderError, RenderWorker,
+    RenderedPage, SaveError, TextBox,
 };
 
 use icons::Icon;
@@ -134,6 +135,10 @@ enum Message {
     PointerReleased,
     Copy,
     Annotate(annotate::Event),
+    Form(form::Event),
+    /// Tab and Shift+Tab: the next or previous form field.
+    FocusNext,
+    FocusPrevious,
     AnnotationsApplied {
         doc: u64,
         result: Result<(), SaveError>,
@@ -175,6 +180,7 @@ struct App {
     /// A drag-selection is in progress.
     selecting: bool,
     annotate: annotate::Annotate,
+    form: form::Form,
     saving: bool,
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
@@ -325,6 +331,7 @@ impl App {
             hover: None,
             selecting: false,
             annotate: annotate::Annotate::new(),
+            form: form::Form::default(),
             saving: false,
             confirm: None,
             after_save: None,
@@ -433,6 +440,7 @@ impl App {
                         self.selection = None;
                         self.hover = None;
                         self.annotate.saved(&doc.info.comments);
+                        self.form.load(&doc.info.fields);
                         self.find.rescan(&doc.texts);
                         self.status = Status::Idle;
                         self.zoom = 1.0;
@@ -749,6 +757,14 @@ impl App {
                 }
                 self.copy_primary()
             }
+            Message::Form(event) => {
+                if !self.saving {
+                    self.form.update(event);
+                }
+                Task::none()
+            }
+            Message::FocusNext => operation::focus_next(),
+            Message::FocusPrevious => operation::focus_previous(),
             Message::Annotate(event) => {
                 // Choosing a markup tool with text selected marks it straight away.
                 let marks_now = matches!(
@@ -831,6 +847,7 @@ impl App {
                         // removed like any other.
                         open.info.comments = comments;
                         self.annotate.saved(&open.info.comments);
+                        self.form.saved();
                         self.settings.add_recent(path);
                         self.settings.save();
                         match self.after_save.take() {
@@ -861,6 +878,7 @@ impl App {
                     Choice::Discard => {
                         self.annotate
                             .saved(self.doc.as_ref().map_or(&[], |d| d.info.comments.as_slice()));
+                        self.form.discard();
                         self.proceed(pending)
                     }
                     Choice::Save => {
@@ -882,7 +900,7 @@ impl App {
 
     /// Whether there are annotations that haven't been saved.
     fn dirty(&self) -> bool {
-        self.doc.is_some() && self.annotate.dirty()
+        self.doc.is_some() && (self.annotate.dirty() || self.form.dirty())
     }
 
     /// Carries out an action that was waiting on "Save changes?".
@@ -900,6 +918,11 @@ impl App {
             return Task::none();
         }
         self.saving = true;
+        // Field values reach the worker only now, since the inputs on the page already show
+        // them; re-rendering every keystroke would be wasted work.
+        if self.form.dirty() {
+            doc.worker.set_changes(self.changes(), |_| {});
+        }
         let (tx, rx) = futures_channel::oneshot::channel();
         doc.worker.save(path.clone(), move |result| {
             let _ = tx.send(result);
@@ -912,6 +935,14 @@ impl App {
         })
     }
 
+    /// Everything not yet saved: comments, and filled-in fields.
+    fn changes(&self) -> Changes {
+        Changes {
+            fields: self.form.changes(),
+            ..self.annotate.changes()
+        }
+    }
+
     /// Sends the current annotation list to the worker after a change.
     fn after_annotate(&mut self, outcome: annotate::Outcome) -> Task<Message> {
         if !matches!(outcome, annotate::Outcome::Changed) {
@@ -919,7 +950,7 @@ impl App {
         }
         let Some(doc) = &self.doc else { return Task::none() };
         let (tx, rx) = futures_channel::oneshot::channel();
-        doc.worker.set_changes(self.annotate.changes(), move |result| {
+        doc.worker.set_changes(self.changes(), move |result| {
             let _ = tx.send(result);
         });
         let id = doc.id;
@@ -1722,13 +1753,15 @@ impl App {
                                 .y(y),
                             )
                         });
-                        if marks.is_empty() && preview.is_none() && outline.is_none() {
+                        let fields = self.form.overlays(index, self.page_map(index));
+                        if marks.is_empty() && preview.is_none() && outline.is_none() && fields.is_empty() {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
                             let mut layers = vec![image(handle.clone()).width(width).height(height).into()];
                             layers.extend(marks);
                             layers.extend(preview);
                             layers.extend(outline);
+                            layers.extend(fields);
                             iced::widget::Stack::with_children(layers).into()
                         }
                     }
