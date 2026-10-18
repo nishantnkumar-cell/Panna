@@ -569,6 +569,7 @@ mod tests {
             color: Color::BLACK,
             align: 0,
             format: None,
+            calculation: None,
             widgets: vec![Widget {
                 page: 0,
                 annot: ObjRef {

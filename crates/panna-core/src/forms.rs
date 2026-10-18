@@ -92,6 +92,8 @@ pub struct Field {
     pub align: u8,
     /// For text fields: a standard number, date or other format the form asks for.
     pub format: Option<crate::Format>,
+    /// For fields worked out from others: how.
+    pub calculation: Option<crate::Calculation>,
     pub widgets: Vec<Widget>,
 }
 
@@ -117,6 +119,8 @@ struct Ctx {
     out: Vec<Field>,
     default_da: Option<Vec<u8>>,
     default_q: u8,
+    /// Fields' places in the form's calculation order (/CO).
+    order: HashMap<ObjRef, usize>,
 }
 
 fn obj_ref(dict: &Dict<'_>) -> Option<ObjRef> {
@@ -157,6 +161,17 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<Field> {
             .get::<hayro::hayro_syntax::object::String<'_>>(b"DA")
             .map(|s| s.as_bytes().to_vec()),
         default_q: form.get::<i64>(b"Q").map_or(0, |q| q.clamp(0, 2) as u8),
+        order: form
+            .get::<Array<'_>>(b"CO")
+            .map(|co| {
+                co.iter::<Dict<'_>>()
+                    .take(MAX_FIELDS)
+                    .filter_map(|d| obj_ref(&d))
+                    .enumerate()
+                    .map(|(i, r)| (r, i))
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
     let root = Inherited {
         name: String::new(),
@@ -319,6 +334,13 @@ fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widget
         color,
         align: here.q.unwrap_or(ctx.default_q),
         format: format(node),
+        calculation: script(node, b"C")
+            .and_then(|s| crate::Formula::from_script(&s))
+            .map(|formula| crate::Calculation {
+                // Fields left out of the order are worked out last, in form order.
+                order: ctx.order.get(&id).copied().unwrap_or(MAX_FIELDS + ctx.out.len()),
+                formula,
+            }),
         widgets: placed,
     });
 }
@@ -326,22 +348,23 @@ fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widget
 /// The format set by the field's format (or, failing that, keystroke) script, when it is a
 /// standard one. The script itself is never run.
 fn format(node: &Dict<'_>) -> Option<crate::Format> {
-    let actions = node.get::<Dict<'_>>(b"AA")?;
-    [b"F".as_slice(), b"K"].iter().find_map(|key| {
-        let js = actions.get::<Dict<'_>>(*key)?;
-        let script = js
-            .get::<hayro::hayro_syntax::object::String<'_>>(b"JS")
-            .map(|s| decode_text_string(s.as_bytes()))
-            .or_else(|| {
-                js.get::<hayro::hayro_syntax::object::Stream<'_>>(b"JS")
-                    .and_then(|s| s.decoded().ok())
-                    .map(|b| {
-                        String::from_utf8_lossy(b.get(..b.len().min(MAX_TEXT)).unwrap_or_default())
-                            .into_owned()
-                    })
-            })?;
-        crate::Format::from_script(&script)
-    })
+    [b"F".as_slice(), b"K"]
+        .iter()
+        .find_map(|key| crate::Format::from_script(&script(node, key)?))
+}
+
+/// The text of the field's script for the event `key` (/AA), to recognise, never to run.
+fn script(node: &Dict<'_>, key: &[u8]) -> Option<String> {
+    let js = node.get::<Dict<'_>>(b"AA")?.get::<Dict<'_>>(key)?;
+    js.get::<hayro::hayro_syntax::object::String<'_>>(b"JS")
+        .map(|s| decode_text_string(s.as_bytes()))
+        .or_else(|| {
+            js.get::<hayro::hayro_syntax::object::Stream<'_>>(b"JS")
+                .and_then(|s| s.decoded().ok())
+                .map(|b| {
+                    String::from_utf8_lossy(b.get(..b.len().min(MAX_TEXT)).unwrap_or_default()).into_owned()
+                })
+        })
 }
 
 /// A choice field's options: plain strings, or [export label] pairs.
