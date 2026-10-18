@@ -83,6 +83,11 @@ impl Find {
         self.open && !self.query.trim().is_empty()
     }
 
+    /// Every match found so far, by page, then position.
+    pub fn hits(&self) -> &[Hit] {
+        if self.active() { &self.hits } else { &[] }
+    }
+
     /// Matches on `page`, and which of them (if any) is the current one.
     pub fn hits_on(&self, page: usize) -> (&[Hit], Option<usize>) {
         let start = self.hits.partition_point(|h| h.page < page);

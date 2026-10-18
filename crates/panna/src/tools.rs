@@ -46,6 +46,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                     Message::Add(crate::add::Event::Toggle)
                 ),
                 tool(
+                    Icon::Redact,
+                    "Remove content for good (redact)",
+                    Message::Redact(crate::redact::Event::Toggle)
+                ),
+                tool(
                     Icon::CommentsImport,
                     "Add comments from a file…",
                     Message::ImportComments

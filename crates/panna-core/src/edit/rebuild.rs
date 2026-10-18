@@ -273,6 +273,8 @@ pub(crate) struct Extra {
     pub flatten: Flatten,
     /// Links to add: left, top, right, bottom from the top-left corner of the page as shown.
     pub links: Vec<([f64; 4], crate::LinkTarget)>,
+    /// Areas to take content out of for good, in the same space as `links`.
+    pub redact: Vec<[f64; 4]>,
 }
 
 /// Hidden information to leave out of the new file.
@@ -448,7 +450,12 @@ fn with_xobjects<'a>(
     let mut out = b"<<".to_vec();
     let mut xobjects = Vec::new();
     for (name, form) in forms {
-        xobjects.extend_from_slice(format!(" /{name} {form} 0 R").as_bytes());
+        if *form == 0 {
+            // Taken out by redaction.
+            xobjects.extend_from_slice(format!(" /{name} null").as_bytes());
+        } else {
+            xobjects.extend_from_slice(format!(" /{name} {form} 0 R").as_bytes());
+        }
     }
     let ours = |key: &[u8]| forms.iter().any(|(name, _)| name.as_bytes() == key);
     let copy =
@@ -599,10 +606,49 @@ pub(crate) fn rebuild(
                 let data = dict.data();
                 let mut body = b"<<".to_vec();
                 let mut contents = None;
+                let rotate = inherited(pdf, *r, dict, b"Rotate")
+                    .and_then(|(_, v)| std::str::from_utf8(v).ok()?.trim().parse::<f64>().ok())
+                    .map_or(0, |v| v as i64);
+                let rotate = (rotate + 90 * i64::from(turns)).rem_euclid(360);
+                let boxed = |key: &[u8]| inherited(pdf, *r, dict, key).and_then(|(_, v)| rect(v));
+                let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+                let shown = match crop {
+                    Some(margins) => {
+                        let [x0, y0, x1, y1] = cropped(media, boxed(b"CropBox"), rotate, margins)
+                            .ok_or(SaveError::CropTooLarge)?;
+                        body.extend_from_slice(
+                            format!("/CropBox [{} {} {} {}]\n", n(x0), n(y0), n(x1), n(y1)).as_bytes(),
+                        );
+                        [x0, y0, x1, y1]
+                    }
+                    None => cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media),
+                };
+                // Marked areas in the page's own space.
+                let areas: Vec<[f64; 4]> = {
+                    let (matrix, _, height) = shown_space(shown, rotate);
+                    let [a, b, c, d, e, f] = matrix;
+                    let user = |x: f64, y: f64| (a * x + c * (height - y) + e, b * x + d * (height - y) + f);
+                    extra
+                        .redact
+                        .iter()
+                        .map(|&[x0, top, x1, bottom]| {
+                            let (ux0, uy0) = user(x0, top);
+                            let (ux1, uy1) = user(x1, bottom);
+                            [ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)]
+                        })
+                        .collect()
+                };
+                let redacting = !areas.is_empty();
                 // Annotations drawn into the page, and the ones left as they are.
                 let mut flattened = Vec::new();
                 let mut kept = String::new();
-                let filtering = extra.flatten.any() || clean.annotations() || !extra.links.is_empty();
+                let filtering =
+                    extra.flatten.any() || clean.annotations() || !extra.links.is_empty() || redacting;
+                let gone = if redacting {
+                    redacted_annotations(pdf, dict, &areas)?
+                } else {
+                    std::collections::HashSet::new()
+                };
                 if filtering
                     && let Some(annots) = dict.get::<hayro::hayro_syntax::object::Array<'_>>(b"Annots")
                 {
@@ -615,6 +661,9 @@ pub(crate) fn rebuild(
                             .map(|n| n.as_str().to_owned())
                             .unwrap_or_default();
                         if subtype == "Popup" && (extra.flatten.comments || clean.comments) {
+                            continue;
+                        }
+                        if gone.contains(&r) {
                             continue;
                         }
                         let script = runs_script(&annot);
@@ -664,12 +713,17 @@ pub(crate) fn rebuild(
                         }
                     }
                 }
-                let drawn = !extra.under.is_empty() || !extra.over.is_empty() || !flattened.is_empty();
+                let drawn =
+                    !extra.under.is_empty() || !extra.over.is_empty() || !flattened.is_empty() || redacting;
                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
                     if key == b"Parent" || INHERITED.contains(&key) {
                         continue;
                     }
                     if (key == b"Annots" && filtering) || (key == b"AA" && clean.scripts) {
+                        continue;
+                    }
+                    // A redacted page's thumbnail picture would show what was taken out.
+                    if redacting && (key == b"Contents" || key == b"Thumb") {
                         continue;
                     }
                     if key == b"Contents" && drawn {
@@ -702,23 +756,6 @@ pub(crate) fn rebuild(
                     body.extend(copy_syntax(&mut w, sources, doc, owner, value)?);
                     body.push(b'\n');
                 }
-                let rotate = inherited(pdf, *r, dict, b"Rotate")
-                    .and_then(|(_, v)| std::str::from_utf8(v).ok()?.trim().parse::<f64>().ok())
-                    .map_or(0, |v| v as i64);
-                let rotate = (rotate + 90 * i64::from(turns)).rem_euclid(360);
-                let boxed = |key: &[u8]| inherited(pdf, *r, dict, key).and_then(|(_, v)| rect(v));
-                let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
-                let shown = match crop {
-                    Some(margins) => {
-                        let [x0, y0, x1, y1] = cropped(media, boxed(b"CropBox"), rotate, margins)
-                            .ok_or(SaveError::CropTooLarge)?;
-                        body.extend_from_slice(
-                            format!("/CropBox [{} {} {} {}]\n", n(x0), n(y0), n(x1), n(y1)).as_bytes(),
-                        );
-                        [x0, y0, x1, y1]
-                    }
-                    None => cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media),
-                };
                 if !extra.links.is_empty() {
                     let (matrix, _, height) = shown_space(shown, rotate);
                     let [a, b, c, d, e, f] = matrix;
@@ -802,6 +839,26 @@ pub(crate) fn rebuild(
                         }
                         ops
                     };
+                    if redacting {
+                        let res = resources.and_then(|(owner, raw)| resolved(pdf, owner, raw));
+                        let content = page_content(dict);
+                        let mut counter = 0;
+                        let (content, overrides) = redact_into(
+                            &mut w,
+                            sources,
+                            doc,
+                            res,
+                            &content,
+                            &areas,
+                            super::redact::IDENTITY,
+                            0,
+                            &mut counter,
+                        )?;
+                        let num = w.alloc();
+                        w.set(num, flate_stream("", &content));
+                        contents = Some(format!("{num} 0 R").into_bytes());
+                        forms.extend(overrides);
+                    }
                     // The page's own drawing is kept apart in q ... Q, so whatever state it
                     // leaves behind doesn't move what's drawn over it.
                     let under = draw(&mut w, &mut forms, &extra.under);
@@ -904,6 +961,209 @@ pub(crate) fn rebuild(
         super::pack::compress_streams(&mut w.objects);
     }
     write_file(w.objects, catalog_num, info_num, encryption.as_ref(), compact)
+}
+
+/// A resources dictionary written in `owner` or referred to from it.
+fn resolved<'a>(pdf: &'a Pdf, owner: ObjRef, raw: &'a [u8]) -> Option<Dict<'a>> {
+    match lex::reference(raw) {
+        Some(r) => pdf.xref().get::<Dict<'a>>(id(r)),
+        None => pdf
+            .xref()
+            .get::<Dict<'a>>(id(owner))?
+            .get::<Dict<'a>>(b"Resources"),
+    }
+}
+
+/// A page's content, all its streams decoded and joined.
+fn page_content(page: &Dict<'_>) -> Vec<u8> {
+    use hayro::hayro_syntax::object::{Array, Stream};
+    let mut out = Vec::new();
+    if let Some(stream) = page.get::<Stream<'_>>(b"Contents") {
+        out.extend_from_slice(&stream.decoded().unwrap_or_default());
+    } else if let Some(list) = page.get::<Array<'_>>(b"Contents") {
+        for stream in list.iter::<Stream<'_>>().take(10_000) {
+            out.extend_from_slice(&stream.decoded().unwrap_or_default());
+            out.push(b'\n');
+        }
+    }
+    out
+}
+
+fn flate_stream(dict: &str, data: &[u8]) -> Vec<u8> {
+    let packed = super::pack::deflate(data);
+    let mut body = format!(
+        "<< {dict}/Filter /FlateDecode /Length {} >>\nstream\n",
+        packed.len()
+    )
+    .into_bytes();
+    body.extend_from_slice(&packed);
+    body.extend_from_slice(b"\nendstream");
+    body
+}
+
+/// The annotations on a page that touch one of `areas` (in the page's own space), with their
+/// pop-ups and replies. Fails on a form field, whose value lives on in the form.
+fn redacted_annotations(
+    pdf: &Pdf,
+    page: &Dict<'_>,
+    areas: &[[f64; 4]],
+) -> Result<std::collections::HashSet<ObjRef>, SaveError> {
+    use hayro::hayro_syntax::object::{Array, Name};
+    let mut gone = std::collections::HashSet::new();
+    let Some(annots) = page.get::<Array<'_>>(b"Annots") else {
+        return Ok(gone);
+    };
+    let list: Vec<(ObjRef, Dict<'_>)> = annots
+        .iter::<Dict<'_>>()
+        .take(20_000)
+        .filter_map(|a| Some((a.obj_id().and_then(obj_ref)?, a)))
+        .collect();
+    for (r, annot) in &list {
+        let Some(rect) = annot.get::<Array<'_>>(b"Rect") else {
+            continue;
+        };
+        let v: Vec<f64> = rect.iter::<f64>().take(4).collect();
+        let [x0, y0, x1, y1] = v[..] else { continue };
+        let b = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        if areas
+            .iter()
+            .any(|a| b[0] < a[2] && a[0] < b[2] && b[1] < a[3] && a[1] < b[3])
+        {
+            let subtype = annot.get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_owned());
+            if subtype.as_deref() == Some("Widget") {
+                return Err(SaveError::RedactsFormField);
+            }
+            if subtype.as_deref() == Some("Popup") {
+                continue;
+            }
+            gone.insert(*r);
+        }
+    }
+    // Pop-ups and replies of what went, and replies to those.
+    for _ in 0..16 {
+        let before = gone.len();
+        for (r, annot) in &list {
+            let linked = [b"Parent".as_slice(), b"IRT"]
+                .iter()
+                .filter_map(|k| annot.get_ref(k).and_then(obj_ref_of))
+                .any(|p| gone.contains(&p));
+            if linked {
+                gone.insert(*r);
+            }
+        }
+        if gone.len() == before {
+            break;
+        }
+    }
+    let _ = pdf;
+    Ok(gone)
+}
+
+fn obj_ref_of(r: hayro::hayro_syntax::object::ObjRef) -> Option<ObjRef> {
+    ObjRef::new(r.obj_number, r.gen_number)
+}
+
+/// Forms renamed in a page's or form's resources: the name, and the copy's object number (0
+/// to remove the name).
+type FormOverrides = Vec<(String, u32)>;
+
+/// Redacts `content` (drawn with `ctm`, using `res`), writing redacted copies of the forms it
+/// touches. Returns the new content and the resource changes it needs: forms renamed to their
+/// copies, and pictures and original forms dropped.
+#[allow(clippy::too_many_arguments)]
+fn redact_into<'a>(
+    w: &mut Writer,
+    sources: &[Source<'a>],
+    doc: usize,
+    res: Option<Dict<'a>>,
+    content: &[u8],
+    areas: &[[f64; 4]],
+    ctm: super::redact::Matrix,
+    depth: usize,
+    counter: &mut u32,
+) -> Result<(Vec<u8>, FormOverrides), SaveError> {
+    let mut lookup = super::redact::Resources { dict: res.clone() };
+    let mut names = || {
+        *counter += 1;
+        format!("PannaRedact{counter}")
+    };
+    // Content Panna can't follow is dropped rather than kept unredacted.
+    let redacted = super::redact::redact(content, &mut lookup, areas, ctm, &mut names).unwrap_or_default();
+    let mut overrides: Vec<(String, u32)> = Vec::new();
+    for image in &redacted.images {
+        overrides.push((String::from_utf8_lossy(image).into_owned(), 0));
+    }
+    for name in redacted
+        .forms
+        .iter()
+        .map(|f| &f.name)
+        .collect::<std::collections::HashSet<_>>()
+    {
+        overrides.push((String::from_utf8_lossy(name).into_owned(), 0));
+    }
+    for form in &redacted.forms {
+        let Some((stream, Some(form_ref))) = lookup.stream(&form.name) else {
+            continue;
+        };
+        let num = w.alloc();
+        overrides.push((form.new_name.clone(), num));
+        let dict = stream.dict();
+        let own = dict.get::<Dict<'a>>(b"Resources");
+        let (inner, inner_overrides) = if depth + 1 >= super::redact::MAX_DEPTH {
+            (Vec::new(), Vec::new())
+        } else {
+            let data = stream.decoded().unwrap_or_default();
+            redact_into(
+                w,
+                sources,
+                doc,
+                own.clone().or_else(|| res.clone()),
+                &data,
+                areas,
+                form.ctm,
+                depth + 1,
+                counter,
+            )?
+        };
+        let data = dict.data();
+        let mut body = b"<<".to_vec();
+        let mut resources_raw = None;
+        for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
+            let value = data.get(value).ok_or(SaveError::Damaged)?;
+            if key == b"Resources" {
+                resources_raw = Some(value);
+                continue;
+            }
+            if matches!(key, b"Length" | b"Filter" | b"DecodeParms") {
+                continue;
+            }
+            body.push(b'/');
+            body.extend_from_slice(key);
+            body.push(b' ');
+            body.extend(copy_syntax(w, sources, doc, form_ref, value)?);
+            body.push(b'\n');
+        }
+        // A form without resources of its own uses the page's; its copy names them itself.
+        body.extend_from_slice(b"/Resources ");
+        match resources_raw {
+            Some(raw) => body.extend(with_xobjects(
+                w,
+                sources,
+                doc,
+                Some((form_ref, raw)),
+                &inner_overrides,
+            )?),
+            None => body.extend(with_xobjects(w, sources, doc, None, &inner_overrides)?),
+        }
+        let packed = super::pack::deflate(&inner);
+        body.extend_from_slice(
+            format!("\n/Filter /FlateDecode /Length {} >>\nstream\n", packed.len()).as_bytes(),
+        );
+        body.extend_from_slice(&packed);
+        body.extend_from_slice(b"\nendstream");
+        w.set(num, body);
+    }
+    Ok((redacted.content, overrides))
 }
 
 /// The file: a header, every object (sealed for an encrypted file), then the cross-reference

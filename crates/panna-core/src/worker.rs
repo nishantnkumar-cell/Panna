@@ -51,6 +51,9 @@ pub enum PageEdit {
         page: usize,
         additions: Vec<crate::Addition>,
     },
+    /// Takes everything inside these areas (as page text boxes, per page) out for good, and
+    /// covers them in black.
+    Redact(Vec<(usize, Vec<crate::TextBox>)>),
     /// Removes hidden information.
     Clean(crate::Cleanup),
     /// Gives the document new password protection, or removes it.
@@ -550,6 +553,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Flatten { comments, fields } => current
                         .flattened(comments, fields)
+                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::Redact(areas) => current
+                        .redacted(&areas)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Add { page, additions } => current
                         .with_additions(page, &additions)

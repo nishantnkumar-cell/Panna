@@ -9,6 +9,7 @@ mod marks;
 mod pack;
 mod picture;
 mod rebuild;
+mod redact;
 mod update;
 
 use std::collections::{BTreeMap, HashSet};
@@ -61,6 +62,8 @@ pub enum SaveError {
     CropTooLarge,
     /// Changing the password protection needs the owner password.
     ProtectionLocked,
+    /// A marked area covers a form field, whose value would stay in the form.
+    RedactsFormField,
 }
 
 impl fmt::Display for SaveError {
@@ -82,6 +85,11 @@ impl fmt::Display for SaveError {
                 f,
                 "Only the owner can change this PDF's password protection. Open it with the \
                  owner password first."
+            ),
+            Self::RedactsFormField => write!(
+                f,
+                "A marked area covers a form field. Flatten the form first (in the page tools), \
+                 then redact."
             ),
             Self::PrintingNotAllowed => write!(
                 f,
@@ -465,6 +473,40 @@ pub(crate) fn add(
             }),
             Addition::Link { rect, target } => extra.links.push((corners(rect), target.clone())),
         }
+    }
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+/// `doc` with everything inside `areas` taken out for good (text, pictures, drawings and
+/// comments), and black boxes left in their place. Each page's areas are left, top, right,
+/// bottom from the top-left corner of the page as shown.
+pub(crate) fn redact(
+    doc: Input<'_>,
+    count: usize,
+    areas: &[(usize, Vec<crate::TextBox>)],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for (page, boxes) in areas {
+        let extra = extras.get_mut(*page).ok_or(SaveError::NoSuchPage(*page))?;
+        let rects: Vec<[f64; 4]> = boxes
+            .iter()
+            .map(|r| [r.x0.min(r.x1), r.y0.min(r.y1), r.x0.max(r.x1), r.y0.max(r.y1)].map(f64::from))
+            .filter(|[x0, y0, x1, y1]| x1 > x0 && y1 > y0)
+            .collect();
+        if rects.is_empty() {
+            continue;
+        }
+        extra.redact.extend_from_slice(&rects);
+        extra.over.push(marks::Drawing::Boxes {
+            rects,
+            color: crate::Color([0.0, 0.0, 0.0]),
+        });
     }
     rebuild_from(
         &[doc],

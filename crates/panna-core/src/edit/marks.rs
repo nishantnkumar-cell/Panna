@@ -186,6 +186,12 @@ pub(crate) enum Drawing {
         rect: [f64; 4],
         image: super::picture::StampImage,
     },
+    /// Filled rectangles (left, top, right, bottom from the top-left corner of the page as
+    /// shown), such as the black boxes left where content was redacted.
+    Boxes {
+        rects: Vec<[f64; 4]>,
+        color: Color,
+    },
     /// One, then the other.
     Both(Box<Drawing>, Box<Drawing>),
 }
@@ -307,6 +313,21 @@ impl Drawing {
                 n(*x0),
                 n(height - bottom)
             ),
+            Drawing::Boxes { rects, color } => {
+                let mut out = format!("q {} rg", rgb(*color));
+                for [x0, top, x1, bottom] in rects {
+                    let _ = write!(
+                        out,
+                        " {} {} {} {} re",
+                        n(*x0),
+                        n(height - bottom),
+                        n(x1 - x0),
+                        n(bottom - top)
+                    );
+                }
+                out.push_str(" f Q\n");
+                out
+            }
             Drawing::Both(a, b) => a.content(width, height) + &b.content(width, height),
         }
     }

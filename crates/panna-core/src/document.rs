@@ -433,6 +433,16 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with everything inside the marked areas taken out for good and covered
+    /// with black boxes, as a new file. Each page's areas are in the same space as its text
+    /// boxes.
+    pub fn redacted(&self, areas: &[(usize, Vec<crate::TextBox>)]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::redact((&self.pdf, &self.bytes, &self.password), self.page_count(), areas)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The document with `mark` drawn on the pages at `pages`, as a new file.
     pub fn with_watermark(
         &self,

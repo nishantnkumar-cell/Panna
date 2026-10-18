@@ -19,6 +19,7 @@ mod measure;
 mod pages;
 mod print;
 mod protect;
+mod redact;
 mod selection;
 mod settings;
 mod shortcuts;
@@ -252,6 +253,7 @@ enum Message {
     Measure(measure::Event),
     /// Adding text, pictures and links to pages.
     Add(add::Event),
+    Redact(redact::Event),
     AddPictureChosen(Option<PathBuf>),
     AddPictureLoaded(Result<panna_core::StampImage, String>),
     /// Turn the snapshot tool on or off.
@@ -316,6 +318,7 @@ struct App {
     snapshot: Option<Snapshot>,
     measure: measure::Measure,
     adder: add::Adder,
+    redactor: redact::Redactor,
     annotate: annotate::Annotate,
     form: form::Form,
     /// Asking whether to reset the form.
@@ -656,6 +659,7 @@ impl App {
             snapshot: None,
             measure: measure::Measure::default(),
             adder: add::Adder::default(),
+            redactor: redact::Redactor::default(),
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -998,6 +1002,12 @@ impl App {
                 } else if self.snapping {
                     self.snapping = false;
                     self.snapshot = None;
+                } else if self.redactor.on {
+                    if self.redactor.busy() {
+                        self.redactor.cancel();
+                    } else {
+                        self.redactor.stop();
+                    }
                 } else if self.adder.on {
                     if self.adder.busy() {
                         self.adder.cancel();
@@ -1119,6 +1129,10 @@ impl App {
                     self.adder.hover(page, self.page_map(page).to_page(position));
                     return Task::none();
                 }
+                if self.redactor.on {
+                    self.redactor.hover(page, self.page_map(page).to_page(position));
+                    return Task::none();
+                }
                 if self.measure.on {
                     self.measure.hover(page, self.page_map(page).to_page(position));
                     return Task::none();
@@ -1143,6 +1157,12 @@ impl App {
             Message::PagePress(page) if self.adder.on => {
                 if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
                     self.adder.press(page, self.page_map(page).to_page(position));
+                }
+                Task::none()
+            }
+            Message::PagePress(page) if self.redactor.on => {
+                if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
+                    self.redactor.press(page, self.page_map(page).to_page(position));
                 }
                 Task::none()
             }
@@ -1427,6 +1447,7 @@ impl App {
                 let pages = self.doc.as_ref().map_or(0, |d| d.pages.len());
                 let outcome = self.adder.update(event, pages);
                 if self.adder.on {
+                    self.redactor.stop();
                     self.measure.on = false;
                     self.measure.clear();
                     self.snapping = false;
@@ -1437,6 +1458,33 @@ impl App {
                     }
                 }
                 self.after_adding(outcome)
+            }
+            Message::Redact(event) => {
+                if self.saving || self.doc.is_none() {
+                    return Task::none();
+                }
+                self.all_tools = false;
+                match self.redactor.update(event) {
+                    redact::Outcome::Nothing => {}
+                    redact::Outcome::MarkResults => self.mark_find_results(),
+                    redact::Outcome::Apply(areas) => {
+                        let show = areas.first().map_or(0, |(page, _)| *page);
+                        return self.edit_pages(PageEdit::Redact(areas), show, false);
+                    }
+                }
+                if self.redactor.on {
+                    self.adder.on = false;
+                    self.adder.cancel();
+                    self.measure.on = false;
+                    self.measure.clear();
+                    self.snapping = false;
+                    self.snapshot = None;
+                    self.selection = None;
+                    if self.annotate.open {
+                        self.annotate.update(annotate::Event::Toggle);
+                    }
+                }
+                Task::none()
             }
             Message::AddPictureChosen(None) => {
                 self.adder.cancel();
@@ -1470,6 +1518,7 @@ impl App {
             Message::Measure(event) => {
                 self.measure.update(event);
                 if self.measure.on {
+                    self.redactor.stop();
                     self.adder.on = false;
                     self.adder.cancel();
                     self.snapping = false;
@@ -1479,6 +1528,7 @@ impl App {
                 Task::none()
             }
             Message::ToggleSnapshot => {
+                self.redactor.stop();
                 self.adder.on = false;
                 self.adder.cancel();
                 self.measure.on = false;
@@ -1591,6 +1641,10 @@ impl App {
                 if self.adder.on {
                     let outcome = self.adder.release();
                     return self.after_adding(outcome);
+                }
+                if self.redactor.on {
+                    self.redactor.release();
+                    return Task::none();
                 }
                 if self.snapshot.is_some_and(|s| s.dragging) {
                     return self.take_snapshot();
@@ -2160,6 +2214,8 @@ impl App {
                 open.info = info;
                 self.selection = None;
                 self.hover = None;
+                // Marks to redact were for the pages as they were.
+                self.redactor.stop();
                 self.annotate.saved(&open.info.comments);
                 self.form.load(&open.info.fields);
                 self.find.rescan(&open.texts);
@@ -2533,8 +2589,26 @@ impl App {
         Task::none()
     }
 
-    /// Sends a page change to the worker, with unsaved comments and form entries first so
-    /// they go along.
+    /// Marks every match Find has found so far for redacting.
+    fn mark_find_results(&mut self) {
+        let Some(doc) = &self.doc else { return };
+        let (mut page, mut rects) = (None, Vec::new());
+        for hit in self.find.hits() {
+            if page != Some(hit.page) {
+                if let Some(p) = page {
+                    self.redactor.mark(p, std::mem::take(&mut rects));
+                }
+                page = Some(hit.page);
+            }
+            if let Some(text) = doc.texts.get(hit.page).and_then(|t| t.text.as_ref()) {
+                rects.extend(text.rects(hit.range.clone()));
+            }
+        }
+        if let Some(p) = page {
+            self.redactor.mark(p, rects);
+        }
+    }
+
     /// Carries out what adding to a page asked for: the change itself, a picture to choose,
     /// or the card's input to focus.
     fn after_adding(&mut self, outcome: add::Outcome) -> Task<Message> {
@@ -2562,6 +2636,8 @@ impl App {
         }
     }
 
+    /// Sends a page change to the worker, with unsaved comments and form entries first so
+    /// they go along.
     fn edit_pages(&mut self, edit: PageEdit, show: usize, undo: bool) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
         if self.dirty() {
@@ -3440,6 +3516,20 @@ impl App {
         if let Some(card) = self.adder.card() {
             layers.push(modal(card, Message::Add(add::Event::Cancel)));
         }
+        if self.redactor.on && self.doc.is_some() {
+            layers.push(
+                container(self.redactor.bar(!self.find.hits().is_empty()))
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(Center)
+                    .align_y(iced::Bottom)
+                    .into(),
+            );
+        }
+        if let Some(card) = self.redactor.card() {
+            layers.push(modal(card, Message::Redact(redact::Event::Cancel)));
+        }
         if self.measure.on && self.doc.is_some() {
             layers.push(
                 container(self.measure.bar())
@@ -3772,6 +3862,11 @@ impl App {
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                         );
                         let adding = self.adder.overlay(index, self.page_map(index));
+                        let redacting = if self.redactor.on {
+                            self.redactor.overlays(index, self.page_map(index))
+                        } else {
+                            Vec::new()
+                        };
                         let snapshot = self.snapshot.filter(|s| s.page == index).map(|s| {
                             let (x, y, w, h) = s.rect();
                             let zoom = self.zoom;
@@ -3813,6 +3908,7 @@ impl App {
                             && snapshot.is_none()
                             && measured.is_none()
                             && adding.is_none()
+                            && redacting.is_empty()
                         {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
@@ -3825,6 +3921,7 @@ impl App {
                             layers.extend(snapshot);
                             layers.extend(measured);
                             layers.extend(adding);
+                            layers.extend(redacting);
                             iced::widget::Stack::with_children(layers).into()
                         }
                     }
@@ -3872,7 +3969,7 @@ impl App {
                         } else {
                             mouse::Interaction::ResizingDiagonallyUp
                         }
-                    } else if self.snapping || self.measure.on || self.adder.on {
+                    } else if self.snapping || self.measure.on || self.adder.on || self.redactor.on {
                         mouse::Interaction::Crosshair
                     } else if over_link {
                         mouse::Interaction::Pointer
