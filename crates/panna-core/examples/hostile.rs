@@ -255,6 +255,24 @@ fn build(case: &str) -> Vec<u8> {
             pdf(&[s(CATALOG), s(PAGES), page(""), stream("", c.as_bytes())])
         }
         // A real file, to time the open-time checks on ordinary documents.
+        // A page showing a JPEG photo, to time how pictures are scaled.
+        path if path.starts_with("photo:") => {
+            let jpeg = std::fs::read(&path[6..]).unwrap_or_default();
+            let sof = jpeg
+                .windows(2)
+                .position(|w| w == [0xFF, 0xC0] || w == [0xFF, 0xC2])
+                .unwrap_or(0);
+            let be16 = |at: usize| {
+                let b = jpeg.get(at..at + 2).unwrap_or(&[0, 0]);
+                u16::from_be_bytes([b.first().copied().unwrap_or(0), b.get(1).copied().unwrap_or(0)])
+            };
+            let (h, w) = (be16(sof + 5), be16(sof + 7));
+            let mut objects = vec![s(CATALOG), s("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")];
+            objects.push(page("/Resources << /XObject << /I 5 0 R >> >>"));
+            objects.push(stream("", b"q 612 0 0 792 0 0 cm /I Do Q"));
+            objects.push(stream(&format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode"), &jpeg));
+            pdf(&objects)
+        }
         path if path.starts_with("file:") => std::fs::read(&path[5..]).unwrap_or_default(),
         _ => {
             eprintln!("unknown case");
@@ -286,6 +304,16 @@ fn main() {
     println!("open: {} ms", opened.elapsed().as_millis());
     step("info", t, || format!("{:?}", doc.info().map(|i| i.pages.len())));
     let cache = doc.new_cache();
+    if std::env::args().nth(2).as_deref() == Some("render-all") {
+        let r = Instant::now();
+        // A fresh cache for each page, so every picture is decoded and scaled again.
+        for i in 0..60 {
+            let fresh = doc.new_cache();
+            let _ = doc.render_page(&fresh, i % doc.page_count().max(1), 1.5);
+        }
+        println!("render 60 pages: {} ms", r.elapsed().as_millis());
+        return;
+    }
     for i in 0..doc.page_count().min(3) {
         step(&format!("render {i}"), t, || {
             format!("{:?}", doc.render_page(&cache, i, 1.0).map(|p| p.width))
