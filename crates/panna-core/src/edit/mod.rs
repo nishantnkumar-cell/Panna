@@ -575,6 +575,20 @@ pub enum NewFieldKind {
     CheckBox,
     /// A drop-down list of these choices.
     Dropdown(Vec<String>),
+    /// A list box showing these choices, one of which can be picked.
+    List(Vec<String>),
+    /// A group of radio buttons, one per choice, on the field's page; only one can be on.
+    /// The field's own `rect` isn't used.
+    Radio(Vec<RadioButton>),
+}
+
+/// One button of a new radio group.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RadioButton {
+    /// What the group's value is when this button is on.
+    pub choice: String,
+    /// Where it goes, in the same space as [`crate::TextBox`] page text.
+    pub rect: crate::TextBox,
 }
 
 /// `doc` with the fields in `add` added to the form, and the fields `drop` (with their

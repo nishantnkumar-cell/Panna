@@ -39,8 +39,8 @@ pub use compare::{Change, ChangeKind};
 pub use document::{Document, DocumentInfo, Leftovers, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{
     Addition, Annotation, Changes, Cleanup, Color, Corner, HeaderFooter, Kind, LINE_HEIGHT, MAX_PICTURES,
-    Margins, NOTE_SIZE, NewField, NewFieldKind, PageSource, PictureChange, Protection, STAMPS, SaveError,
-    SignOptions, StampImage, Visible, Watermark, fill_header_footer, pictures_to_pdf, stamp_label,
+    Margins, NOTE_SIZE, NewField, NewFieldKind, PageSource, PictureChange, Protection, RadioButton, STAMPS,
+    SaveError, SignOptions, StampImage, Visible, Watermark, fill_header_footer, pictures_to_pdf, stamp_label,
     text_width, today, wrap,
 };
 pub use export::{Export, ExportFormat};
