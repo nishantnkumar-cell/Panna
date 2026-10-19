@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use iced::widget::scrollable::Viewport;
 use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
-use iced::{Center, Element, Fill, Length, Theme};
+use iced::{Center, Element, Fill, Theme};
 use panna_core::{Annotation, Attachment, Comment, CommentId, Layer, OutlineItem, PageSize};
 
 use crate::Message;
@@ -207,6 +207,7 @@ pub struct ViewData<'a> {
     pub layout: &'a ThumbLayout,
     pub thumbs_images: &'a [crate::Thumb],
     pub outline: &'a [OutlineItem],
+    pub bookmarks: &'a crate::bookmarks::Editor,
     pub current: usize,
     pub find: &'a Find,
     pub texts: &'a [TextSlot],
@@ -326,7 +327,12 @@ impl Sidebar {
             Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes | Tab::Signatures => {
                 self.thumbnails(&data)
             }
-            Tab::Bookmarks => bookmarks(data.outline, data.find),
+            Tab::Bookmarks => data.bookmarks.view(
+                data.outline,
+                data.find,
+                |i| section(data.outline, i).is_some_and(|pages| data.find.count_in(pages) > 0),
+                data.pages_busy,
+            ),
             Tab::Results => data.find.results(data.texts),
             Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),
         };
@@ -433,53 +439,6 @@ fn section(outline: &[OutlineItem], i: usize) -> Option<std::ops::Range<usize>> 
     Some(start..end)
 }
 
-fn bookmarks<'a>(outline: &'a [OutlineItem], find: &Find) -> Element<'a, Message> {
-    if outline.is_empty() {
-        return container(
-            text("This document has no bookmarks.")
-                .size(13)
-                .style(text::secondary),
-        )
-        .padding(PAD)
-        .into();
-    }
-    let items = outline.iter().enumerate().map(|(i, item)| {
-        let title = if item.title.is_empty() {
-            "(untitled)"
-        } else {
-            item.title.as_str()
-        };
-        let indent = f32::from(item.depth.min(8)) * 12.0;
-        // Like Word's Headings tab, sections that contain search results are highlighted.
-        let found = find.active() && section(outline, i).is_some_and(|pages| find.count_in(pages) > 0);
-        let label = text(title).size(13).wrapping(text::Wrapping::WordOrGlyph);
-        row![
-            space().width(indent),
-            button(label)
-                .padding([3, 6])
-                .width(Length::Fill)
-                .style(move |theme: &Theme, status| {
-                    let mut style = button::text(theme, status);
-                    if found {
-                        let palette = theme.extended_palette();
-                        style.background = Some(palette.primary.weak.color.into());
-                        style.text_color = palette.primary.weak.text;
-                    }
-                    style
-                })
-                .on_press_maybe(item.page.map(Message::GoToPage)),
-        ]
-        .into()
-    });
-    scrollable(
-        Column::with_children(items)
-            .spacing(1)
-            .padding([4, 6])
-            .width(Fill),
-    )
-    .height(Fill)
-    .into()
-}
 /// Layers, each with a box to show or hide it. Hiding one changes only the view.
 fn layers<'a>(layers: &'a [Layer], shown: &[bool]) -> Element<'a, Message> {
     let items = layers.iter().enumerate().map(|(index, layer)| {
@@ -618,6 +577,7 @@ mod tests {
             title: String::new(),
             depth: 0,
             page,
+            id: None,
         };
         let outline = [
             item(Some(2)),

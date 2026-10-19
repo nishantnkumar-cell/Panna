@@ -172,3 +172,28 @@ fn old_protection_is_redone_with_aes_256_keeping_both_passwords() {
         assert_eq!(red_pixels(&again), red_pixels(&owner), "{name}");
     }
 }
+
+#[test]
+fn bookmarks_added_to_encrypted_files_read_back() {
+    for (name, bytes) in FIXTURES {
+        let doc = open(bytes, "secret");
+        let added = [panna_core::OutlineItem {
+            title: "Résumé".into(),
+            depth: 0,
+            page: Some(0),
+            id: None,
+        }];
+        let saved = doc.with_bookmarks(&added).unwrap();
+        let again = doc.reopen(saved.clone()).unwrap();
+        let outline = again.info().unwrap().outline;
+        assert_eq!(outline.len(), 1, "{name}");
+        assert_eq!(outline[0].title, "Résumé", "{name}");
+
+        // Renaming it again rewrites the same object, still encrypted.
+        let mut renamed = outline;
+        renamed[0].title = "Summary".into();
+        let saved = again.with_bookmarks(&renamed).unwrap();
+        let outline = again.reopen(saved).unwrap().info().unwrap().outline;
+        assert_eq!(outline[0].title, "Summary", "{name}");
+    }
+}

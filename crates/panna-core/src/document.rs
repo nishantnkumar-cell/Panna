@@ -978,6 +978,16 @@ impl Document {
         .unwrap_or_default()
     }
 
+    /// The document with its bookmarks replaced by `items`, in reading order, as an
+    /// incremental update. Bookmarks read from the file ([`DocumentInfo::outline`]) keep
+    /// their exact destination and style unless pointed at another page.
+    pub fn with_bookmarks(&self, items: &[crate::OutlineItem]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::with_outline(&self.pdf, &self.bytes, self.password.as_str(), items)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The document with `mark` drawn on the pages at `pages`, as a new file.
     pub fn with_watermark(
         &self,

@@ -7,6 +7,8 @@ mod field;
 pub(crate) mod lex;
 mod marks;
 mod new_field;
+mod outline;
+pub(crate) use outline::with_outline;
 mod pack;
 mod pdfa;
 mod picture;

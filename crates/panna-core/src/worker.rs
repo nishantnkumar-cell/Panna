@@ -58,6 +58,8 @@ pub enum PageEdit {
         pages: Vec<usize>,
         marks: crate::HeaderFooter,
     },
+    /// Replaces the bookmarks with these, in reading order.
+    Bookmarks(Vec<crate::OutlineItem>),
     /// Draws a watermark or background on these pages.
     Watermark {
         pages: Vec<usize>,

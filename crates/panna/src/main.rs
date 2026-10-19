@@ -6,6 +6,7 @@
 
 mod add;
 mod annotate;
+mod bookmarks;
 mod certstore;
 mod clipboard;
 mod colors;
@@ -239,6 +240,7 @@ enum Message {
     ToggleProperties,
     CloseOverlays,
     Sidebar(sidebar::Event),
+    Bookmarks(bookmarks::Event),
     GoToPage(usize),
     /// Scroll to a comment, from the comments list.
     /// Scrolls to a comment, and selects it when it can be changed.
@@ -492,6 +494,11 @@ struct App {
     page_edits: usize,
     /// A page change is being made; the tools wait for it.
     pages_busy: bool,
+    bookmarks: bookmarks::Editor,
+    /// The bookmark to select once a bookmark change is made.
+    bookmark_select: Option<usize>,
+    /// The change being made is to bookmarks only, so the pages stay as they are.
+    bookmarks_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -816,6 +823,9 @@ impl App {
             screen: Screen::Windowed,
             page_edits: 0,
             pages_busy: false,
+            bookmarks: bookmarks::Editor::default(),
+            bookmark_select: None,
+            bookmarks_only: false,
             show_properties: false,
             find: find::Find::default(),
             selection: None,
@@ -960,6 +970,7 @@ impl App {
                 let Some(doc) = self.doc.as_mut().filter(|d| d.id == id) else {
                     return Task::none();
                 };
+                self.bookmarks.reset();
                 match result {
                     Ok(info) => {
                         self.settings.add_recent(doc.path.clone());
@@ -1294,6 +1305,21 @@ impl App {
                     self.save_sidebar();
                 }
                 Task::batch([self.request_thumbnails(), self.request_comment_text()])
+            }
+            Message::Bookmarks(event) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = self.current_page();
+                match self.bookmarks.update(event, &doc.info.outline, page) {
+                    bookmarks::Outcome::None => Task::none(),
+                    bookmarks::Outcome::GoTo(page) => self.go_to_page(page),
+                    bookmarks::Outcome::Focus => operation::focus(bookmarks::name_id())
+                        .chain(operation::select_all(bookmarks::name_id())),
+                    bookmarks::Outcome::Save(list, select) => {
+                        self.bookmark_select = select;
+                        self.bookmarks_only = true;
+                        self.edit_pages(PageEdit::Bookmarks(list), page, false)
+                    }
+                }
             }
             Message::GoToPage(index) => match self.screen {
                 Screen::Present { .. } => self.present_page(index),
@@ -3031,9 +3057,33 @@ impl App {
             } => {
                 self.pages_busy = false;
                 let recognised = std::mem::take(&mut self.recognising);
+                let bookmarks_only = std::mem::take(&mut self.bookmarks_only);
+                let select = self.bookmark_select.take();
                 let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
                     return Task::none();
                 };
+                // Only the bookmarks changed: the pages on screen stay as they are.
+                if bookmarks_only {
+                    match result {
+                        Ok(info) if info.pages == open.info.pages => {
+                            self.bookmarks.reloaded(&info.outline, select);
+                            open.info = info;
+                            self.page_edits += 1;
+                            return if self.bookmarks.renaming() {
+                                operation::focus(bookmarks::name_id())
+                                    .chain(operation::select_all(bookmarks::name_id()))
+                            } else {
+                                Task::none()
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            self.bookmarks.reloaded(&open.info.outline, None);
+                            self.notice = Some(format!("The bookmarks couldn't be changed: {e}"));
+                            return Task::none();
+                        }
+                    }
+                }
                 let info = match result {
                     Ok(info) => info,
                     Err(e) if recognised => {
@@ -4379,6 +4429,7 @@ impl App {
 
     /// Shows a parked document again where it was left.
     fn unpark(&mut self, tab: Parked) -> Task<Message> {
+        self.bookmarks.reset();
         let mut doc = tab.doc;
         // Replies for it while it was out of view were dropped, so it asks again.
         for slot in &mut doc.pages {
@@ -5347,6 +5398,7 @@ impl App {
                 layout: &doc.thumb_layout,
                 thumbs_images: &doc.thumbs,
                 outline: &doc.info.outline,
+                bookmarks: &self.bookmarks,
                 current: self.current_page(),
                 find: &self.find,
                 texts: &doc.texts,

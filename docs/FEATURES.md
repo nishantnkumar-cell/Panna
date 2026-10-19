@@ -15,7 +15,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Zoom in/out, fit width, fit page, actual size | V1 | Done |
 | Rotate view | V1 | Done |
 | Page thumbnails sidebar | V1 | Done (F4); left or right edge, remembered |
-| Bookmarks / outline panel | V1 | Done; nested, click to jump |
+| Bookmarks / outline panel | V1 | Done; nested, click to jump. Editing done: in the Bookmarks tab, add one for the page on screen, rename, move up and down, in and out a level, and delete (with the ones under it); changes can be undone and are saved into the file |
 | Go to page, next/previous page | V1 | Done |
 | Text search (find, find next, match case, whole word) | V1 | Done: search panel in the sidebar listing every result in context, like Word (Ctrl+F, F3/Shift+F3); includes hidden OCR text |
 | Select and copy text | V1 | Done; drag or double-click, Ctrl+C; across pages; Linux middle-click paste |
@@ -134,7 +134,7 @@ work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-pr
 
 | Feature | Area | Notes |
 |---|---|---|
-| Add, rename, move and delete bookmarks | Navigation | Bookmarks can only be viewed today |
+| Add, rename, move and delete bookmarks | Navigation | Done (see section 1) |
 | Hand tool (drag to scroll) | Navigation | |
 | Marquee zoom (drag a box to zoom into it) | Navigation | |
 | Initial view: how a file opens (page, zoom, panels), saved into the PDF | Navigation | |

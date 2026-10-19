@@ -267,6 +267,7 @@ pub(crate) fn perform<'a>(
             PageEdit::Redact { areas, scrub } => revision(doc, doc.redacted(&areas, &scrub)),
             PageEdit::Add { page, additions } => revision(doc, doc.with_additions(page, &additions)),
             PageEdit::Recognise(pages) => revision(doc, doc.recognised(&pages).map(|(bytes, _, _)| bytes)),
+            PageEdit::Bookmarks(items) => revision(doc, doc.with_bookmarks(&items)),
             PageEdit::Watermark { pages, mark } => revision(doc, doc.with_watermark(&pages, &mark)),
         }),
     }

@@ -17,6 +17,9 @@ pub struct OutlineItem {
     pub depth: u16,
     /// Zero-based page the bookmark jumps to, when it points inside this document.
     pub page: Option<usize>,
+    /// The bookmark's object in the file; `None` for one not saved yet. Kept when bookmarks
+    /// are edited, so a bookmark keeps what it had (its exact destination, its style).
+    pub id: Option<crate::ObjRef>,
 }
 
 const MAX_ITEMS: usize = 20_000;
@@ -116,7 +119,15 @@ fn walk<'a>(ctx: &mut Ctx<'a>, first: Option<Dict<'a>>, depth: u16) {
             .map(|s| clean_title(&decode_text_string(s.as_bytes())))
             .unwrap_or_default();
         let page = destination(ctx, &item);
-        ctx.out.push(OutlineItem { title, depth, page });
+        let id = item
+            .obj_id()
+            .and_then(|id| crate::ObjRef::new(id.obj_number, id.gen_number));
+        ctx.out.push(OutlineItem {
+            title,
+            depth,
+            page,
+            id,
+        });
         walk(ctx, item.get::<Dict<'_>>(b"First"), depth + 1);
         node = item.get::<Dict<'_>>(b"Next");
     }
