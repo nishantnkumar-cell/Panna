@@ -58,6 +58,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("c") => Some(Message::Copy),
             Key::Character("s") => Some(Message::Save),
             Key::Character("p") => Some(Message::Print),
+            Key::Character(",") => Some(Message::Preferences(crate::preferences::Event::Open)),
             Key::Character("z") => Some(Message::Annotate(annotate::Event::Undo)),
             Key::Character("y") => Some(Message::Annotate(annotate::Event::Redo)),
             _ => None,

@@ -26,6 +26,7 @@ mod links;
 mod measure;
 mod pages;
 mod pictures;
+mod preferences;
 mod preflight;
 mod prepare;
 mod print;
@@ -96,6 +97,7 @@ fn main() -> iced::Result {
     iced::application(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
+        .theme(App::theme)
         .window(window_settings())
         .centered()
         .run()
@@ -243,6 +245,8 @@ enum Message {
     StampPictureLoaded(Result<(panna_core::StampImage, String), String>),
     /// Prints the document with its unsaved changes (Ctrl+P).
     Print,
+    /// The Preferences card (Ctrl+,).
+    Preferences(preferences::Event),
     /// Prints it with each page that has comments followed by a list of them.
     PrintWithComments,
     /// Asks where to save a list of the comments, by page, as a PDF.
@@ -525,6 +529,12 @@ struct App {
     pictures: Vec<PathBuf>,
     /// The New blank PDF card, while open.
     blank: Option<create::Blank>,
+    /// The Preferences card is open.
+    preferences: bool,
+    /// The account's name, shown in Preferences as the name used when none is set.
+    account: String,
+    /// What happened after asking to be the default PDF app, shown on the card.
+    default_app_note: Option<String>,
     /// A new PDF waiting for where to save it.
     new_pdf: Option<NewPdf>,
     /// The pages being extracted, while their file or folder is chosen.
@@ -908,6 +918,8 @@ fn password_id() -> iced::widget::Id {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
+        let unit = settings.unit;
+        let annotate = annotator(&settings);
         let mut app = Self {
             parked: Vec::new(),
             active_tab: 0,
@@ -943,7 +955,7 @@ impl App {
             selection: None,
             hover: None,
             selecting: false,
-            annotate: annotate::Annotate::new(),
+            annotate,
             form: form::Form::default(),
             confirm_reset: false,
             pending_link: None,
@@ -968,6 +980,9 @@ impl App {
             all_tools: false,
             pictures: Vec::new(),
             blank: None,
+            preferences: false,
+            account: preferences::account_name(),
+            default_app_note: None,
             new_pdf: None,
             extract_pages: Vec::new(),
             extract_split: pages::Split::One,
@@ -992,6 +1007,7 @@ impl App {
             preflight: None,
             comparison: None,
         };
+        app.measure.unit = unit;
         let scale = window::oldest()
             .and_then(window::scale_factor)
             .map(Message::ScaleFactor);
@@ -1006,6 +1022,11 @@ impl App {
             None => Task::none(),
         };
         (app, Task::batch([scale, open]))
+    }
+
+    /// Light or dark as chosen in Preferences; `None` follows the system.
+    fn theme(&self) -> Option<iced::Theme> {
+        self.settings.appearance.theme()
     }
 
     fn title(&self) -> String {
@@ -1081,6 +1102,7 @@ impl App {
             Message::FromPictures
                 | Message::FromClipboard
                 | Message::Blank(create::Event::Open)
+                | Message::Preferences(preferences::Event::Open)
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
                 | Message::Signing(signing::Event::Open)
@@ -1114,7 +1136,10 @@ impl App {
                         self.settings.add_recent(doc.path.clone());
                         self.settings.save();
                         self.rotation = 0;
-                        let view = info.initial_view;
+                        let mut view = info.initial_view;
+                        if view.zoom == panna_core::OpenZoom::Default {
+                            view.zoom = self.settings.open_zoom.zoom();
+                        }
                         doc.spread = match view.layout {
                             panna_core::OpenLayout::Default => None,
                             panna_core::OpenLayout::Single => Some(Spread::Single),
@@ -1474,6 +1499,8 @@ impl App {
                     self.flattening = None;
                 } else if self.blank.is_some() {
                     self.blank = None;
+                } else if self.preferences {
+                    self.preferences = false;
                 } else if self.replacing.is_some() {
                     self.replacing = None;
                 } else if self.labelling.is_some() {
@@ -2504,6 +2531,10 @@ impl App {
                 self.after_adding(outcome)
             }
             Message::Measure(event) => {
+                if let measure::Event::Unit(unit) = event {
+                    self.settings.unit = unit;
+                    self.settings.save();
+                }
                 self.measure.update(event);
                 if self.measure.on {
                     self.redactor.stop();
@@ -2998,6 +3029,35 @@ impl App {
                     }
                 ));
                 Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
+            }
+            Message::Preferences(event) => {
+                match event {
+                    preferences::Event::Open => {
+                        self.preferences = true;
+                        self.default_app_note = None;
+                    }
+                    preferences::Event::Close => self.preferences = false,
+                    preferences::Event::Author(name) => {
+                        self.settings.author = name.chars().filter(|c| !c.is_control()).take(200).collect();
+                        let author = annotator(&self.settings);
+                        let name = author.author().to_owned();
+                        self.annotate.set_author(name.clone());
+                        for parked in &mut self.parked {
+                            parked.annotate.set_author(name.clone());
+                        }
+                    }
+                    preferences::Event::Appearance(appearance) => self.settings.appearance = appearance,
+                    preferences::Event::Zoom(zoom) => self.settings.open_zoom = zoom,
+                    preferences::Event::Unit(unit) => {
+                        self.settings.unit = unit;
+                        self.measure.unit = unit;
+                    }
+                    preferences::Event::DefaultApp => {
+                        self.default_app_note = Some(preferences::make_default());
+                    }
+                }
+                self.settings.save();
+                Task::none()
             }
             Message::Blank(create::Event::Open) => {
                 self.blank = Some(create::Blank::default());
@@ -4906,7 +4966,7 @@ impl App {
             rotation: self.rotation,
             offset: (self.viewport.offset_x, self.viewport.offset_y),
             find: std::mem::take(&mut self.find),
-            annotate: std::mem::replace(&mut self.annotate, annotate::Annotate::new()),
+            annotate: std::mem::replace(&mut self.annotate, annotator(&self.settings)),
             form: std::mem::take(&mut self.form),
             comparison: self.comparison.take(),
             page_edits: std::mem::take(&mut self.page_edits),
@@ -4981,7 +5041,7 @@ impl App {
     fn close_tab(&mut self) -> Task<Message> {
         let _ = self.park();
         self.find = find::Find::default();
-        self.annotate = annotate::Annotate::new();
+        self.annotate = annotator(&self.settings);
         self.form = form::Form::default();
         self.comparison = None;
         self.page_edits = 0;
@@ -5817,6 +5877,19 @@ impl App {
         if let Some(state) = &self.blank {
             layers.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
         }
+        if self.preferences {
+            layers.push(modal(
+                preferences::card(preferences::View {
+                    author: &self.settings.author,
+                    account: &self.account,
+                    appearance: self.settings.appearance,
+                    zoom: self.settings.open_zoom,
+                    unit: self.settings.unit,
+                    note: self.default_app_note.as_deref(),
+                }),
+                Message::Preferences(preferences::Event::Close),
+            ));
+        }
         if let Some(state) = &self.labelling {
             layers.push(modal(labels::card(state), Message::Labels(labels::Event::Cancel)));
         }
@@ -6398,4 +6471,15 @@ fn rotated_sizes(pages: &[PageSize], rotation: u8) -> Vec<PageSize> {
             }
         })
         .collect()
+}
+
+/// Comment tools for a document, putting the name from Preferences (or the account's) on
+/// comments.
+fn annotator(settings: &Settings) -> annotate::Annotate {
+    let mut annotate = annotate::Annotate::new();
+    let name = settings.author.trim();
+    if !name.is_empty() {
+        annotate.set_author(name.to_owned());
+    }
+    annotate
 }

@@ -324,6 +324,15 @@ impl Annotate {
         }
     }
 
+    /// The name put on new comments and replies.
+    pub fn set_author(&mut self, name: String) {
+        self.author = name;
+    }
+
+    pub fn author(&self) -> &str {
+        &self.author
+    }
+
     pub fn color(&self) -> Color {
         self.colors
             .get(self.tool.index())

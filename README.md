@@ -31,6 +31,7 @@ with `libxkbcommon-x11`, which every desktop install already has.
 | Actual size | Ctrl+0 |
 | Fit width | Ctrl+2 |
 | Next / previous page | Page Down / Page Up |
+| Preferences | Ctrl+, |
 
 You can also drop a PDF onto the window to open it.
 

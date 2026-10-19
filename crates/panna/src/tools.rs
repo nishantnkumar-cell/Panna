@@ -165,6 +165,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             "Remove hidden information…",
             Message::Clean(protect::CleanEvent::Open),
         ),
+        tool(
+            Icon::Preferences,
+            "Preferences… (Ctrl+,)",
+            Message::Preferences(crate::preferences::Event::Open),
+        ),
     ]);
     // Two columns, so the card fits on a laptop screen.
     let half = tools.len().div_ceil(2);

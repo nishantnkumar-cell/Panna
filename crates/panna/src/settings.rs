@@ -7,12 +7,16 @@ use iced::Point;
 
 use crate::colors::PageColors;
 use crate::layout::Spread;
+use crate::measure::Unit;
+use crate::preferences::{Appearance, OpenZoom};
 use crate::sidebar::{Side, Tab};
 use crate::toolbar::Dock;
 
 /// Settings files bigger than this are ignored rather than parsed.
 const MAX_BYTES: u64 = 64 * 1024;
 const MAX_RECENT: usize = 10;
+/// Longest name kept for comments.
+const MAX_AUTHOR: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -23,6 +27,11 @@ pub struct Settings {
     pub sidebar_tab: Tab,
     pub spread: Spread,
     pub colors: PageColors,
+    /// The name put on comments; empty for the account's name.
+    pub author: String,
+    pub appearance: Appearance,
+    pub open_zoom: OpenZoom,
+    pub unit: Unit,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -37,6 +46,10 @@ impl Default for Settings {
             sidebar_tab: Tab::Thumbnails,
             spread: Spread::Single,
             colors: PageColors::Normal,
+            author: String::new(),
+            appearance: Appearance::System,
+            open_zoom: OpenZoom::ActualSize,
+            unit: Unit::default(),
             recent: Vec::new(),
         }
     }
@@ -95,6 +108,12 @@ impl Settings {
                 "sidebar.tab" => out.sidebar_tab = Tab::parse(value.trim()).unwrap_or(out.sidebar_tab),
                 "view.spread" => out.spread = Spread::parse(value.trim()).unwrap_or(out.spread),
                 "view.colors" => out.colors = PageColors::parse(value.trim()).unwrap_or(out.colors),
+                "view.appearance" => {
+                    out.appearance = Appearance::parse(value.trim()).unwrap_or(out.appearance);
+                }
+                "view.open_zoom" => out.open_zoom = OpenZoom::parse(value.trim()).unwrap_or(out.open_zoom),
+                "measure.unit" => out.unit = Unit::parse(value.trim()).unwrap_or(out.unit),
+                "comments.author" => out.author = value.trim().chars().take(MAX_AUTHOR).collect(),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
                     out.recent.push(PathBuf::from(value));
@@ -117,6 +136,16 @@ impl Settings {
             self.spread.as_str(),
             self.colors.as_str(),
         );
+        out.push_str(&format!(
+            "view.appearance={}\nview.open_zoom={}\nmeasure.unit={}\n",
+            self.appearance.as_str(),
+            self.open_zoom.as_str(),
+            self.unit.as_str()
+        ));
+        // A name with a line break can't be stored in this format.
+        if !self.author.contains(['\n', '\r']) {
+            out.push_str(&format!("comments.author={}\n", self.author));
+        }
         // Paths that aren't UTF-8 or contain line breaks can't be stored in this format.
         for path in &self.recent {
             if let Some(p) = path.to_str().filter(|p| !p.contains(['\n', '\r'])) {
@@ -169,6 +198,10 @@ mod tests {
             sidebar_tab: Tab::Bookmarks,
             spread: Spread::TwoCover,
             colors: PageColors::Sepia,
+            author: "Asha Rao".into(),
+            appearance: Appearance::Dark,
+            open_zoom: OpenZoom::FitWidth,
+            unit: Unit::Inches,
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
