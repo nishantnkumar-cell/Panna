@@ -76,6 +76,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                     Message::Preflight(crate::preflight::Event::Run)
                 ),
                 tool(
+                    Icon::Accessibility,
+                    "Check accessibility",
+                    Message::Preflight(crate::preflight::Event::RunAccessibility)
+                ),
+                tool(
                     Icon::Redact,
                     "Remove content for good (redact)",
                     Message::Redact(crate::redact::Event::Toggle)

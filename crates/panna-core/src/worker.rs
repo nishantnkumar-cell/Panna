@@ -21,6 +21,7 @@ type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), Stri
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
 type ArchiveReply = Box<dyn FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send>;
 type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
+type AccessReply = Box<dyn FnOnce(Vec<crate::AccessFinding>) + Send>;
 type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
 type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
 type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
@@ -121,6 +122,7 @@ enum Reply {
     DetectFields(DetectReply),
     /// What keeps the document from being PDF/A.
     Preflight(PreflightReply),
+    Accessibility(AccessReply),
     /// Writes a PDF/A copy.
     Archive(PathBuf, ArchiveReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
@@ -380,6 +382,16 @@ impl RenderWorker {
         });
     }
 
+    /// What makes the document, with unsaved changes, harder to use with assistive
+    /// technology (see [`Document::accessibility`]).
+    pub fn accessibility(&self, reply: impl FnOnce(Vec<crate::AccessFinding>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Accessibility(Box::new(reply)),
+        });
+    }
+
     /// Writes a PDF/A copy of the document (with the changes last given to it) to `path`,
     /// and replies with what still keeps the copy from being PDF/A.
     pub fn save_archived(
@@ -573,6 +585,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 Reply::Pictures(page, reply) => reply(current.pictures(page)),
                 Reply::DetectFields(reply) => reply(current.detect_fields()),
                 Reply::Preflight(reply) => reply(current.preflight()),
+                Reply::Accessibility(reply) => reply(current.accessibility()),
                 Reply::Archive(path, reply) => reply(current.archived().and_then(|bytes| {
                     let copy = current.reopen(bytes).map_err(|_| SaveError::Damaged)?;
                     write_atomically(&path, copy.bytes())?;

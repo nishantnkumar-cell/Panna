@@ -495,6 +495,53 @@ impl Document {
         .unwrap_or_default()
     }
 
+    /// What makes the document harder to use with screen readers and other assistive
+    /// technology: an empty list when the main checks pass.
+    pub fn accessibility(&self) -> Vec<crate::AccessFinding> {
+        let pages = self.pdf.pages().len();
+        // Pages that draw pictures and have no text are probably scanned.
+        let image_only: Vec<usize> = (0..pages.min(2_000))
+            .filter(|&p| {
+                self.page_text(p)
+                    .is_ok_and(|t| t.chars().iter().all(|c| c.is_whitespace()))
+                    && !self.pictures(p).is_empty()
+            })
+            .collect();
+        catch_unwind(AssertUnwindSafe(|| {
+            let meta = self.pdf.metadata();
+            let mut title = meta
+                .title
+                .as_deref()
+                .is_some_and(|t| !decode_text_string(t).trim().is_empty());
+            if !title {
+                let xref = self.pdf.xref();
+                let catalog = xref
+                    .get::<hayro::hayro_syntax::object::Dict<'_>>(xref.root_id())
+                    .unwrap_or_default();
+                title = catalog
+                    .get::<hayro::hayro_syntax::object::Stream<'_>>(b"Metadata")
+                    .and_then(|m| m.decoded().ok().map(|d| d.into_owned()))
+                    .is_some_and(|x| String::from_utf8_lossy(&x).contains("<dc:title>"));
+            }
+            let bookmarks = crate::outline::read(&self.pdf).len();
+            let undescribed: Vec<(String, usize)> = crate::forms::read(&self.pdf)
+                .into_iter()
+                .filter(|f| f.tooltip.trim().is_empty())
+                .filter_map(|f| Some((f.name, f.widgets.first()?.page)))
+                .collect();
+            crate::access::check(
+                &self.pdf,
+                &crate::access::Known {
+                    title,
+                    bookmarks,
+                    image_only: &image_only,
+                    undescribed: &undescribed,
+                },
+            )
+        }))
+        .unwrap_or_default()
+    }
+
     /// Where form fields could go on each page: blanks, empty boxes and lines to write on,
     /// and box characters, named after the words beside them. Places that already have a
     /// field are left out.

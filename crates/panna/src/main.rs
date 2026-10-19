@@ -266,6 +266,10 @@ enum Message {
         doc: u64,
         findings: Vec<panna_core::Finding>,
     },
+    AccessChecked {
+        doc: u64,
+        findings: Vec<panna_core::AccessFinding>,
+    },
     ArchiveTo(Option<PathBuf>),
     Archived {
         doc: u64,
@@ -1809,6 +1813,28 @@ impl App {
                     doc: id,
                     findings: findings.unwrap_or_default(),
                 })
+            }
+            Message::Preflight(preflight::Event::RunAccessibility) => {
+                self.all_tools = false;
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.accessibility(move |findings| {
+                    let _ = tx.send(findings);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |findings| Message::AccessChecked {
+                    doc: id,
+                    findings: findings.unwrap_or_default(),
+                })
+            }
+            Message::AccessChecked { doc, findings } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    self.preflight = Some(preflight::Report::accessibility(findings));
+                }
+                Task::none()
             }
             Message::Preflighted { doc, findings } => {
                 if self.doc.as_ref().is_some_and(|d| d.id == doc) {

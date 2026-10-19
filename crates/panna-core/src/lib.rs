@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod attachments;
 mod calc;
 mod commentdata;
@@ -25,6 +26,7 @@ mod preflight;
 mod text;
 mod worker;
 
+pub use access::{AccessFinding, AccessRule};
 pub use attachments::Attachment;
 pub use calc::{CalcOp, Calculation, Expr, Formula, number as calc_number, value_text as calc_value_text};
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
