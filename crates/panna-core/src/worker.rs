@@ -151,7 +151,8 @@ enum Reply {
     SplitBySize(SizeSplit, SplitReply),
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
-    Print(PrintReply),
+    Print(bool, PrintReply),
+    CommentSummary(PathBuf, String, ExtractReply),
     /// Writes a smaller copy of the document.
     Compact(PathBuf, Option<u32>, CompactReply),
     /// Writes the document's comments to a comments file.
@@ -552,11 +553,31 @@ impl RenderWorker {
     }
 
     /// The whole document with unsaved changes, without password protection, for printing.
-    pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
+    /// With `comments`, each page that has comments is followed by pages listing them.
+    pub fn print_copy(
+        &self,
+        comments: bool,
+        reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static,
+    ) {
         let _ = self.jobs.send(Job {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
-            reply: Reply::Print(Box::new(reply)),
+            reply: Reply::Print(comments, Box::new(reply)),
+        });
+    }
+
+    /// Writes the document's comments, with unsaved changes, listed by page under a heading
+    /// naming it `title`, to `path` as a PDF.
+    pub fn comment_summary(
+        &self,
+        path: PathBuf,
+        title: String,
+        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::CommentSummary(path, title, Box::new(reply)),
         });
     }
 
@@ -770,7 +791,13 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         break Swap::Promote;
                     }
                 }
-                Reply::Print(reply) => reply(ask!(Op::PrintCopy, Bytes)),
+                Reply::Print(comments, reply) => reply(ask!(Op::PrintCopy(comments), Bytes)),
+                Reply::CommentSummary(path, title, reply) => {
+                    reply(
+                        ask!(Op::CommentSummary(title), Bytes)
+                            .and_then(|bytes| write_atomically(&path, &bytes)),
+                    );
+                }
                 Reply::ExportComments(path, format, name, reply) => {
                     reply(
                         ask!(Op::CommentsFile(format, name), Bytes)

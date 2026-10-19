@@ -128,6 +128,16 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                 "Save comments to a file…",
                 Message::ExportComments,
             ),
+            tool(
+                Icon::CommentSummary,
+                "Summarize comments (save as a PDF)…",
+                Message::SummarizeComments,
+            ),
+            tool(
+                Icon::PrintComments,
+                "Print with comments…",
+                Message::PrintWithComments,
+            ),
         ]);
     }
     if has_form {

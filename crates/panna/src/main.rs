@@ -239,6 +239,13 @@ enum Message {
     StampPictureLoaded(Result<(panna_core::StampImage, String), String>),
     /// Prints the document with its unsaved changes (Ctrl+P).
     Print,
+    /// Prints it with each page that has comments followed by a list of them.
+    PrintWithComments,
+    /// Asks where to save a list of the comments, by page, as a PDF.
+    SummarizeComments,
+    SummaryTo(Option<PathBuf>),
+    /// The summary was saved there, to open.
+    Summarized(Result<PathBuf, SaveError>),
     /// The copy to print is ready.
     PrintCopy(Result<Vec<u8>, SaveError>),
     Printed(Result<(), String>),
@@ -3377,7 +3384,8 @@ impl App {
             Message::StampPictureLoaded(Ok((image, name))) => {
                 self.update(Message::Annotate(annotate::Event::StampPicture(image, name)))
             }
-            Message::Print => {
+            Message::Print | Message::PrintWithComments => {
+                self.all_tools = false;
                 let Some(doc) = &self.doc else { return Task::none() };
                 if self.printing {
                     return Task::none();
@@ -3386,8 +3394,9 @@ impl App {
                 if self.dirty() {
                     doc.worker.set_changes(self.changes(), |_| {});
                 }
+                let comments = matches!(message, Message::PrintWithComments);
                 let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.print_copy(move |result| {
+                doc.worker.print_copy(comments, move |result| {
                     let _ = tx.send(result);
                 });
                 Task::perform(rx, |result| {
@@ -3406,6 +3415,50 @@ impl App {
                         Task::none()
                     }
                 }
+            }
+            Message::SummarizeComments => {
+                self.all_tools = false;
+                if self.doc.is_none() {
+                    return Task::none();
+                }
+                let name = format!("{} comments.pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save the comment summary as")
+                            .add_filter("PDF documents", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::SummaryTo,
+                )
+            }
+            Message::SummaryTo(None) => Task::none(),
+            Message::SummaryTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let title = doc
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| self.file_stem());
+                let (tx, rx) = futures_channel::oneshot::channel();
+                let saved = path.clone();
+                doc.worker.comment_summary(path, title, move |result| {
+                    let _ = tx.send(result.map(|()| saved));
+                });
+                Task::perform(rx, |result| {
+                    Message::Summarized(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::Summarized(Ok(path)) => self.update(Message::FileChosen(Some(path))),
+            Message::Summarized(Err(e)) => {
+                self.notice = Some(e.to_string());
+                Task::none()
             }
             Message::Printed(result) => {
                 if let Err(e) = result {

@@ -1177,6 +1177,74 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// Like [`print_copy`](Self::print_copy), with each page that has comments followed by
+    /// pages listing them.
+    pub fn print_with_comments(&self) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let (sizes, labels) = self.sizes_and_labels();
+            crate::edit::print_with_comments(
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                self.page_count(),
+                &self.quoted_comments(),
+                &sizes,
+                &labels,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document's comments listed by page, under a heading naming it `title`, as a PDF of
+    /// their own.
+    pub fn comment_summary(&self, title: &str) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let (sizes, labels) = self.sizes_and_labels();
+            crate::edit::comment_summary(&self.quoted_comments(), &sizes, &labels, title)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)
+    }
+
+    /// The comments, with the words a highlight, underline or strikethrough marks quoted
+    /// before its text.
+    fn quoted_comments(&self) -> Vec<crate::Comment> {
+        const LONGEST: usize = 300;
+        let mut texts: std::collections::HashMap<usize, Option<crate::PageText>> =
+            std::collections::HashMap::new();
+        let mut comments = crate::comments::read(&self.pdf);
+        for c in &mut comments {
+            if c.marked.is_empty() {
+                continue;
+            }
+            let text = texts.entry(c.page).or_insert_with(|| self.page_text(c.page).ok());
+            let Some(text) = text else { continue };
+            let quote = text.text_in(&c.marked);
+            let quote = quote.split_whitespace().collect::<Vec<_>>().join(" ");
+            if quote.is_empty() {
+                continue;
+            }
+            let mut quote: String = quote.chars().take(LONGEST).collect();
+            if quote.chars().count() == LONGEST {
+                quote.push('…');
+            }
+            c.contents = if c.contents.trim().is_empty() {
+                format!("“{quote}”")
+            } else {
+                format!("“{quote}”\n{}", c.contents)
+            };
+        }
+        comments
+    }
+
+    /// Each page's size as shown, and its label.
+    fn sizes_and_labels(&self) -> (Vec<(f32, f32)>, Vec<String>) {
+        let ranges = crate::labels::read(&self.pdf);
+        self.pdf
+            .pages()
+            .iter()
+            .enumerate()
+            .map(|(i, page)| (page.render_dimensions(), crate::labels::page_label(&ranges, i)))
+            .unzip()
+    }
+
     /// The comments in the document, as listed in [`DocumentInfo::comments`].
     pub fn comments(&self) -> Vec<crate::Comment> {
         catch_unwind(AssertUnwindSafe(|| crate::comments::read(&self.pdf))).unwrap_or_default()

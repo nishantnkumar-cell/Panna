@@ -280,7 +280,7 @@ fn the_worker_changes_pages_with_undo_and_saves() {
     assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()));
     // The copy to print has the unsaved comment.
     let (tx, rx) = mpsc::channel();
-    worker.print_copy(move |r| {
+    worker.print_copy(false, move |r| {
         let _ = tx.send(r);
     });
     let printed = open(rx.recv_timeout(wait).unwrap().unwrap(), None);

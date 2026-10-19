@@ -175,7 +175,7 @@ fn pages_of(pictures: Vec<Picture>) -> Vec<u8> {
 }
 
 /// A PDF file of numbered objects (from 1), the first being the catalog.
-fn file_of(objects: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn file_of(objects: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets = Vec::with_capacity(objects.len());
     for (i, body) in objects.iter().enumerate() {

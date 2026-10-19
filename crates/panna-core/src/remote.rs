@@ -61,8 +61,11 @@ pub(crate) enum Op {
     /// Of the document as shown (with layers hidden).
     Text(usize),
     Comments,
-    PrintCopy,
+    /// For printing, with each commented page followed by its comments if set.
+    PrintCopy(bool),
     CommentsFile(DataFormat, String),
+    /// The comments listed by page, under a heading naming the document.
+    CommentSummary(String),
     Compacted(Option<u32>),
     Pictures(usize),
     Leftovers(Vec<(usize, Vec<TextBox>)>),
@@ -146,8 +149,9 @@ impl Op {
             })),
             Self::Text(_) => Answer::Text(Err(render)),
             Self::Comments => Answer::Comments(Vec::new()),
-            Self::PrintCopy
+            Self::PrintCopy(_)
             | Self::CommentsFile(..)
+            | Self::CommentSummary(_)
             | Self::Compacted(_)
             | Self::Attachment(_)
             | Self::Rearranged(_) => Answer::Bytes(Err(save)),
@@ -218,7 +222,9 @@ pub(crate) fn perform<'a>(
         Op::Info => Answer::Info(doc.info()),
         Op::Text(index) => Answer::Text(view.page_text(index)),
         Op::Comments => Answer::Comments(doc.comments()),
-        Op::PrintCopy => Answer::Bytes(doc.print_copy()),
+        Op::PrintCopy(false) => Answer::Bytes(doc.print_copy()),
+        Op::PrintCopy(true) => Answer::Bytes(doc.print_with_comments()),
+        Op::CommentSummary(title) => Answer::Bytes(doc.comment_summary(&title)),
         Op::CommentsFile(format, name) => Answer::Bytes(Ok(doc.comments_file(format, &name))),
         Op::Compacted(pictures) => Answer::Bytes(doc.compacted(pictures)),
         Op::Pictures(page) => Answer::Boxes(doc.pictures(page)),

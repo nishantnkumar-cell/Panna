@@ -20,6 +20,7 @@ mod rebuild;
 mod redact;
 pub(crate) mod scrub;
 mod sign;
+mod summary;
 mod tag;
 mod update;
 
@@ -827,6 +828,55 @@ pub(crate) fn redact(
 /// system, if the file's permissions allow printing.
 pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveError> {
     rebuild_from(&[doc], &every_page(pages), &[], Output::Print, Cleanup::default())
+}
+
+/// The comments of a document with pages of `sizes` and page `labels`, listed by page under
+/// a heading naming it `title`, as a file of their own.
+pub(crate) fn comment_summary(
+    comments: &[crate::Comment],
+    sizes: &[(f32, f32)],
+    labels: &[String],
+    title: &str,
+) -> Vec<u8> {
+    summary::summary(comments, sizes, labels, summary::Layout::Whole { title }).file
+}
+
+/// Like [`print_copy`], with each page that has comments followed by pages listing them.
+pub(crate) fn print_with_comments(
+    doc: Input<'_>,
+    pages: usize,
+    comments: &[crate::Comment],
+    sizes: &[(f32, f32)],
+    labels: &[String],
+) -> Result<Vec<u8>, SaveError> {
+    let lists = summary::summary(comments, sizes, labels, summary::Layout::EachPage);
+    if lists.lists.is_empty() {
+        return print_copy(doc, pages);
+    }
+    let file = std::sync::Arc::new(lists.file);
+    let parsed = Pdf::new_with_password(std::sync::Arc::clone(&file), "").map_err(|_| SaveError::Damaged)?;
+    let mut plan = Vec::with_capacity(pages + lists.lists.len());
+    for index in 0..pages {
+        plan.push(PageSource::Page {
+            doc: 0,
+            index,
+            turns: 0,
+        });
+        for (sheet, _) in lists.lists.iter().enumerate().filter(|(_, p)| **p == index) {
+            plan.push(PageSource::Page {
+                doc: 1,
+                index: sheet,
+                turns: 0,
+            });
+        }
+    }
+    rebuild_from(
+        &[doc, (&parsed, file.as_slice(), "")],
+        &plan,
+        &[],
+        Output::Print,
+        Cleanup::default(),
+    )
 }
 
 /// What password protection a rebuilt file gets.
