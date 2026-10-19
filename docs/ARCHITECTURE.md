@@ -47,7 +47,7 @@ without iced.
 
 ## Security model
 
-See [SECURITY.md](../SECURITY.md) for the policy. The technical controls are:
+See [SECURITY.md](../SECURITY.md) for the policy and [THREAT_MODEL.md](THREAT_MODEL.md) for the full\nthreat model. The technical controls are:
 
 1. `#![forbid(unsafe_code)]` in every crate we write, except `panna-print`, which calls the
    Windows and macOS print dialogs. It never sees the original file, only the password-free
