@@ -3313,10 +3313,16 @@ impl App {
                 let format = state.format;
                 let stem = self.file_stem();
                 return if format.one_file() {
-                    let (title, kind, ext) = if format == panna_core::ExportFormat::Word {
-                        ("Export as a Word document", "Word documents", "docx")
-                    } else {
-                        ("Export text as", "Text files", "txt")
+                    let (title, kind, ext) = match format {
+                        panna_core::ExportFormat::Word => {
+                            ("Export as a Word document", "Word documents", "docx")
+                        }
+                        panna_core::ExportFormat::PowerPoint => (
+                            "Export as a PowerPoint presentation",
+                            "PowerPoint presentations",
+                            "pptx",
+                        ),
+                        _ => ("Export text as", "Text files", "txt"),
                     };
                     Task::perform(
                         async move {

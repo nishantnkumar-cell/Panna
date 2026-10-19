@@ -457,6 +457,14 @@ fn pages_are_exported_as_text_and_pictures() {
     })
     .unwrap();
     assert!(std::fs::read(&docx).unwrap().starts_with(b"PK\x03\x04"));
+    let pptx = dir.join("out.pptx");
+    run(Export {
+        format: ExportFormat::PowerPoint,
+        dpi: 72.0,
+        pages: vec![(1, pptx.clone()), (2, pptx.clone())],
+    })
+    .unwrap();
+    assert!(std::fs::read(&pptx).unwrap().starts_with(b"PK\x03\x04"));
     let (png, jpg) = (dir.join("p.png"), dir.join("p.jpg"));
     run(Export {
         format: ExportFormat::Png,

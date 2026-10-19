@@ -15,12 +15,25 @@ pub enum ExportFormat {
     Jpeg,
     /// One Word document (.docx): the text, in paragraphs and headings.
     Word,
+    /// One PowerPoint presentation (.pptx): a picture of each page as a slide.
+    PowerPoint,
 }
 
 impl ExportFormat {
     /// Whether every page goes into one file, rather than a file each.
     pub fn one_file(self) -> bool {
-        matches!(self, ExportFormat::Text | ExportFormat::Word)
+        matches!(
+            self,
+            ExportFormat::Text | ExportFormat::Word | ExportFormat::PowerPoint
+        )
+    }
+
+    /// Whether pages are drawn as pictures, at a resolution.
+    pub fn pictures(self) -> bool {
+        matches!(
+            self,
+            ExportFormat::Png | ExportFormat::Jpeg | ExportFormat::PowerPoint
+        )
     }
 }
 

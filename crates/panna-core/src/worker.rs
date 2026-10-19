@@ -520,6 +520,21 @@ fn export_pages<'a>(
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
             write_atomically(path, &crate::office::docx(doc, &pages)?)
         }
+        ExportFormat::PowerPoint => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(());
+            };
+            let mut slides = Vec::with_capacity(export.pages.len());
+            for (index, _) in &export.pages {
+                let page = doc
+                    .render_page(cache, *index, export.dpi / 72.0)
+                    .map_err(|_| SaveError::NoSuchPage(*index))?;
+                let size = doc.page_size(*index).ok_or(SaveError::NoSuchPage(*index))?;
+                let png = crate::export::picture(&page, ExportFormat::Png)?;
+                slides.push((png, f64::from(size.width), f64::from(size.height)));
+            }
+            write_atomically(path, &crate::office::pptx(&slides)?)
+        }
         format => export.pages.iter().try_for_each(|(index, path)| {
             let page = doc
                 .render_page(cache, *index, export.dpi / 72.0)

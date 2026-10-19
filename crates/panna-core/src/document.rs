@@ -257,6 +257,13 @@ impl Document {
         self.pdf.pages().len()
     }
 
+    /// The size of page `index` as shown, in points, or `None` past the last page.
+    pub fn page_size(&self, index: usize) -> Option<PageSize> {
+        let pages = self.pdf.pages();
+        let (width, height) = pages.get(index)?.render_dimensions();
+        Some(PageSize { width, height })
+    }
+
     /// Page sizes and metadata for layout.
     pub fn info(&self) -> Result<DocumentInfo, OpenError> {
         catch_unwind(AssertUnwindSafe(|| {

@@ -1,5 +1,7 @@
-//! Saving pages as a Word document (.docx): the text, in paragraphs, with headings where the
-//! type is larger, and a page break between pages. Layout, pictures and tables aren't kept.
+//! Saving pages as Office files: a Word document (.docx) of the text, in paragraphs, with
+//! headings where the type is larger and a page break between pages (layout, pictures and
+//! tables aren't kept); or a PowerPoint presentation (.pptx) with a picture of each page as
+//! a slide.
 
 use std::io::Write;
 
@@ -262,6 +264,181 @@ pub(crate) fn docx(doc: &Document, pages: &[usize]) -> Result<Vec<u8>, SaveError
         ("word/_rels/document.xml.rels", DOCUMENT_RELS.as_bytes()),
         ("word/styles.xml", STYLES.as_bytes()),
     ])
+}
+
+const NS: &str = "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" \
+xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
+xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"";
+
+const XML_HEAD: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+
+/// An empty shape tree, which every slide, layout and master starts with.
+const SP_TREE_START: &str = "<p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/>\
+</p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" \
+y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr>";
+
+fn relationships(rels: &[(&str, &str, String)]) -> String {
+    let mut out = format!(
+        "{XML_HEAD}<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+    );
+    for (id, kind, target) in rels {
+        out.push_str(&format!(
+            "<Relationship Id=\"{id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}\" Target=\"{target}\"/>"
+        ));
+    }
+    out.push_str("</Relationships>");
+    out
+}
+
+fn theme() -> String {
+    let colors = [
+        ("dk2", "1F2937"),
+        ("lt2", "E5E7EB"),
+        ("accent1", "4F46E5"),
+        ("accent2", "DB2777"),
+        ("accent3", "059669"),
+        ("accent4", "D97706"),
+        ("accent5", "0284C7"),
+        ("accent6", "7C3AED"),
+        ("hlink", "2563EB"),
+        ("folHlink", "7C3AED"),
+    ];
+    let mut scheme = String::from(
+        "<a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1><a:lt1><a:sysClr \
+         val=\"window\" lastClr=\"FFFFFF\"/></a:lt1>",
+    );
+    for (name, rgb) in colors {
+        scheme.push_str(&format!("<a:{name}><a:srgbClr val=\"{rgb}\"/></a:{name}>"));
+    }
+    let font = "<a:latin typeface=\"Calibri\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/>";
+    let fill = "<a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill>";
+    let line = format!("<a:ln w=\"9525\">{fill}</a:ln>");
+    let effect = "<a:effectStyle><a:effectLst/></a:effectStyle>";
+    format!(
+        "{XML_HEAD}<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" \
+         name=\"Panna\"><a:themeElements><a:clrScheme name=\"Panna\">{scheme}</a:clrScheme><a:fontScheme \
+         name=\"Panna\"><a:majorFont>{font}</a:majorFont><a:minorFont>{font}</a:minorFont></a:fontScheme>\
+         <a:fmtScheme name=\"Panna\"><a:fillStyleLst>{fill}{fill}{fill}</a:fillStyleLst><a:lnStyleLst>{line}\
+         {line}{line}</a:lnStyleLst><a:effectStyleLst>{effect}{effect}{effect}</a:effectStyleLst>\
+         <a:bgFillStyleLst>{fill}{fill}{fill}</a:bgFillStyleLst></a:fmtScheme></a:themeElements>\
+         <a:objectDefaults/><a:extraClrSchemeLst/></a:theme>"
+    )
+}
+
+/// Points to English Metric Units, PowerPoint's unit.
+fn emu(points: f64) -> i64 {
+    (points * 12_700.0).round() as i64
+}
+
+/// A slide of each page: its picture as a PNG, and its size in points. The slides are the
+/// size of the first page; other pages are fitted inside, centred.
+pub(crate) fn pptx(slides: &[(Vec<u8>, f64, f64)]) -> Result<Vec<u8>, SaveError> {
+    // PowerPoint allows slides from 1 to 56 inches a side.
+    let (w, h) = slides.first().map_or((720.0, 540.0), |(_, w, h)| (*w, *h));
+    let fit = (4032.0 / w.max(h)).min(1.0).max(72.0 / w.min(h).max(1.0));
+    let (cx, cy) = (emu(w * fit), emu(h * fit));
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut types = format!(
+        "{XML_HEAD}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+         <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+         <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+         <Default Extension=\"png\" ContentType=\"image/png\"/>\
+         <Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>\
+         <Override PartName=\"/ppt/slideMasters/slideMaster1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml\"/>\
+         <Override PartName=\"/ppt/slideLayouts/slideLayout1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml\"/>\
+         <Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>"
+    );
+    let mut ids = String::new();
+    let mut rels = vec![
+        ("rId1", "slideMaster", "slideMasters/slideMaster1.xml".to_owned()),
+        ("rId2", "theme", "theme/theme1.xml".to_owned()),
+    ];
+    let rel_ids: Vec<String> = (0..slides.len()).map(|i| format!("rId{}", i + 3)).collect();
+    for (i, (png, pw, ph)) in slides.iter().enumerate() {
+        let n = i + 1;
+        let scale = (cx as f64 / emu(*pw).max(1) as f64).min(cy as f64 / emu(*ph).max(1) as f64);
+        let (pcx, pcy) = (
+            (emu(*pw) as f64 * scale).round() as i64,
+            (emu(*ph) as f64 * scale).round() as i64,
+        );
+        let (x, y) = ((cx - pcx) / 2, (cy - pcy) / 2);
+        let slide = format!(
+            "{XML_HEAD}<p:sld {NS}><p:cSld>{SP_TREE_START}<p:pic><p:nvPicPr><p:cNvPr id=\"2\" \
+             name=\"Page {n}\"/><p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/>\
+             </p:nvPicPr><p:blipFill><a:blip r:embed=\"rId2\"/><a:stretch><a:fillRect/></a:stretch>\
+             </p:blipFill><p:spPr><a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{pcx}\" cy=\"{pcy}\"/>\
+             </a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:spTree>\
+             </p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"
+        );
+        files.push((format!("ppt/slides/slide{n}.xml"), slide.into_bytes()));
+        files.push((
+            format!("ppt/slides/_rels/slide{n}.xml.rels"),
+            relationships(&[
+                ("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml".into()),
+                ("rId2", "image", format!("../media/page{n}.png")),
+            ])
+            .into_bytes(),
+        ));
+        files.push((format!("ppt/media/page{n}.png"), png.clone()));
+        types.push_str(&format!(
+            "<Override PartName=\"/ppt/slides/slide{n}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        ));
+        ids.push_str(&format!(
+            "<p:sldId id=\"{}\" r:id=\"{}\"/>",
+            256 + i,
+            rel_ids.get(i).map_or("", String::as_str)
+        ));
+    }
+    for (i, id) in rel_ids.iter().enumerate() {
+        rels.push((id.as_str(), "slide", format!("slides/slide{}.xml", i + 1)));
+    }
+    types.push_str("</Types>");
+    let presentation = format!(
+        "{XML_HEAD}<p:presentation {NS}><p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" \
+         r:id=\"rId1\"/></p:sldMasterIdLst><p:sldIdLst>{ids}</p:sldIdLst><p:sldSz cx=\"{cx}\" \
+         cy=\"{cy}\"/><p:notesSz cx=\"6858000\" cy=\"9144000\"/></p:presentation>"
+    );
+    let color_map = "<p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" \
+                     accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" \
+                     accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/>";
+    let master = format!(
+        "{XML_HEAD}<p:sldMaster {NS}><p:cSld>{SP_TREE_START}</p:spTree></p:cSld>{color_map}\
+         <p:sldLayoutIdLst><p:sldLayoutId id=\"2147483649\" r:id=\"rId1\"/></p:sldLayoutIdLst></p:sldMaster>"
+    );
+    let layout = format!(
+        "{XML_HEAD}<p:sldLayout {NS} type=\"blank\" preserve=\"1\"><p:cSld name=\"Blank\">\
+         {SP_TREE_START}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>"
+    );
+    let mut all: Vec<(String, Vec<u8>)> = vec![
+        ("[Content_Types].xml".into(), types.into_bytes()),
+        (
+            "_rels/.rels".into(),
+            relationships(&[("rId1", "officeDocument", "ppt/presentation.xml".into())]).into_bytes(),
+        ),
+        ("ppt/presentation.xml".into(), presentation.into_bytes()),
+        (
+            "ppt/_rels/presentation.xml.rels".into(),
+            relationships(&rels).into_bytes(),
+        ),
+        ("ppt/slideMasters/slideMaster1.xml".into(), master.into_bytes()),
+        (
+            "ppt/slideMasters/_rels/slideMaster1.xml.rels".into(),
+            relationships(&[
+                ("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml".into()),
+                ("rId2", "theme", "../theme/theme1.xml".into()),
+            ])
+            .into_bytes(),
+        ),
+        ("ppt/slideLayouts/slideLayout1.xml".into(), layout.into_bytes()),
+        (
+            "ppt/slideLayouts/_rels/slideLayout1.xml.rels".into(),
+            relationships(&[("rId1", "slideMaster", "../slideMasters/slideMaster1.xml".into())]).into_bytes(),
+        ),
+        ("ppt/theme/theme1.xml".into(), theme().into_bytes()),
+    ];
+    all.extend(files);
+    let refs: Vec<(&str, &[u8])> = all.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    zip(&refs)
 }
 
 #[cfg(test)]
