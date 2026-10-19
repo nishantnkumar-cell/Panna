@@ -561,6 +561,8 @@ pub(crate) fn rebuild(
 ) -> Result<Vec<u8>, SaveError> {
     let first = sources.first().ok_or(SaveError::Damaged)?;
     let info = info.filter(|_| !clean.metadata && !clean.archive);
+    // Pictures already written, by StampImage::key.
+    let mut pictures_written: HashMap<usize, u32> = HashMap::new();
     let mut w = Writer {
         objects: Vec::new(),
         maps: vec![HashMap::new(); sources.len()],
@@ -852,22 +854,37 @@ pub(crate) fn rebuild(
                         format!("<< {dict}/Length {} >>\nstream\n{data}\nendstream", data.len()).into_bytes()
                     };
                     let mut forms = Vec::new();
-                    let draw = |w: &mut Writer,
-                                forms: &mut Vec<(String, u32)>,
-                                drawings: &[super::marks::Drawing]| {
+                    let mut draw = |w: &mut Writer,
+                                    forms: &mut Vec<(String, u32)>,
+                                    drawings: &[super::marks::Drawing]| {
                         let mut ops = String::new();
                         for drawing in drawings {
                             let resources = match drawing.picture() {
                                 Some(image) => {
-                                    let mask = image.has_mask().then(|| w.alloc());
-                                    let (body, mask_body) =
-                                        image.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
-                                    let num = w.alloc();
-                                    w.set(num, body);
-                                    if let (Some(m), Some(b)) = (mask, mask_body) {
-                                        w.set(m, b);
+                                    // A picture on many pages, such as a watermark, is written once.
+                                    let num = match pictures_written.get(&image.key()) {
+                                        Some(&num) => num,
+                                        None => {
+                                            let mask = image.has_mask().then(|| w.alloc());
+                                            let (body, mask_body) =
+                                                image.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
+                                            let num = w.alloc();
+                                            w.set(num, body);
+                                            if let (Some(m), Some(b)) = (mask, mask_body) {
+                                                w.set(m, b);
+                                            }
+                                            pictures_written.insert(image.key(), num);
+                                            num
+                                        }
+                                    };
+                                    match drawing.opacity() {
+                                        Some(a) => format!(
+                                            "<< /XObject << /PaIm {num} 0 R >> /ExtGState << /PaGS << /Type \
+                                             /ExtGState /CA {a} /ca {a} >> >> >>",
+                                            a = n(a)
+                                        ),
+                                        None => format!("<< /XObject << /PaIm {num} 0 R >> >>"),
                                     }
-                                    format!("<< /XObject << /PaIm {num} 0 R >> >>")
                                 }
                                 None => drawing.resources(),
                             };

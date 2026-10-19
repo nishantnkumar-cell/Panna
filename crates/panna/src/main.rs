@@ -2330,7 +2330,12 @@ impl App {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Make a PDF from pictures")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_files()
                         .await
                         .map(|files| files.iter().map(|f| f.path().to_path_buf()).collect())
@@ -2453,6 +2458,49 @@ impl App {
                     }
                     pages::WatermarkEvent::Paper(i) => state.paper = Some(i),
                     pages::WatermarkEvent::Range(v) => state.range = clean(v, 200),
+                    pages::WatermarkEvent::Scale(v) => state.scale = v,
+                    pages::WatermarkEvent::RemovePicture => state.picture = None,
+                    pages::WatermarkEvent::ChoosePicture => {
+                        return Task::perform(
+                            async {
+                                rfd::AsyncFileDialog::new()
+                                    .set_title("Choose a picture for the watermark")
+                                    .add_filter(
+                                        "Pictures",
+                                        &[
+                                            "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff",
+                                            "TIFF",
+                                        ],
+                                    )
+                                    .pick_file()
+                                    .await
+                                    .map(|f| f.path().to_path_buf())
+                            },
+                            |path| Message::Watermark(pages::WatermarkEvent::PictureChosen(path)),
+                        );
+                    }
+                    pages::WatermarkEvent::PictureChosen(None) => {}
+                    pages::WatermarkEvent::PictureChosen(Some(path)) => {
+                        let (tx, rx) = futures_channel::oneshot::channel();
+                        std::thread::spawn(move || {
+                            let name = path.file_name().map_or_else(
+                                || path.display().to_string(),
+                                |n| n.to_string_lossy().into_owned(),
+                            );
+                            let result = std::fs::read(&path)
+                                .map_err(|e| format!("Couldn't open the picture: {e}"))
+                                .and_then(|bytes| panna_core::StampImage::decode(&bytes))
+                                .map(|image| (name, image));
+                            let _ = tx.send(result);
+                        });
+                        return Task::perform(rx, |result| {
+                            Message::Watermark(pages::WatermarkEvent::PictureLoaded(
+                                result.unwrap_or_else(|_| Err("The picture couldn't be read.".into())),
+                            ))
+                        });
+                    }
+                    pages::WatermarkEvent::PictureLoaded(Ok(picture)) => state.picture = Some(picture),
+                    pages::WatermarkEvent::PictureLoaded(Err(e)) => self.notice = Some(e),
                     pages::WatermarkEvent::Cancel => self.watermarking = None,
                     pages::WatermarkEvent::Go => {
                         let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
@@ -2576,7 +2624,12 @@ impl App {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Stamp a picture")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())
@@ -3297,7 +3350,12 @@ impl App {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Add a picture")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())
@@ -3359,7 +3417,12 @@ impl App {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Replace the picture with")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())

@@ -51,7 +51,7 @@ fn jpeg_header(bytes: &[u8]) -> Option<(u32, u32, u8)> {
     (w > 0 && h > 0 && w <= 20_000 && h <= 20_000).then_some((w, h, info.components))
 }
 
-/// A new PDF with each of `pictures` (PNG or JPEG files' bytes) on a page of its own, fitted
+/// A new PDF with each of `pictures` (PNG, JPEG or TIFF files' bytes) on a page of its own, fitted
 /// to an A4 page turned to suit it. Fails with a message naming the first picture (counting
 /// from 1) that can't be read.
 pub fn pictures_to_pdf(pictures: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {

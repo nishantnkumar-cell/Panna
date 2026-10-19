@@ -386,6 +386,40 @@ fn watermarks_and_backgrounds_are_drawn() {
 }
 
 #[test]
+fn picture_watermarks_are_drawn_and_shared() {
+    use panna_core::{StampImage, Watermark};
+    let doc = open(three_pages(), None);
+    // A solid blue square.
+    let image = StampImage::from_rgba(4, 4, &[0, 0, 255, 255].repeat(16)).unwrap();
+    let mark = Watermark {
+        picture: Some(image),
+        picture_scale: 0.5,
+        angle: 0.0,
+        opacity: 1.0,
+        ..Watermark::default()
+    };
+    let bytes = doc.with_watermark(&[0, 1, 2], &mark).unwrap();
+    // One picture, drawn on every page.
+    let pictures = bytes
+        .windows(b"/Subtype /Image".len())
+        .filter(|w| *w == b"/Subtype /Image")
+        .count();
+    assert_eq!(pictures, 1);
+    let out = open(bytes, None);
+    let cache = out.new_cache();
+    for p in 0..3 {
+        let page = out.render_page(&cache, p, 1.0).unwrap();
+        let pixel = |x: u32, y: u32| {
+            let i = ((y * page.width + x) * 4) as usize;
+            page.rgba[i..i + 3].to_vec()
+        };
+        // Centred, half the page wide.
+        assert_eq!(pixel(page.width / 2, page.height / 2), [0, 0, 255]);
+        assert_eq!(pixel(page.width / 8, page.height / 2), [255, 255, 255]);
+    }
+}
+
+#[test]
 fn pages_are_exported_as_text_and_pictures() {
     use panna_core::{Export, ExportFormat, RenderWorker};
     let dir = std::env::temp_dir().join(format!("panna-export-{}", std::process::id()));

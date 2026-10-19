@@ -52,3 +52,23 @@ fn unreadable_pictures_are_named() {
     assert!(err.starts_with("Picture 2:"), "{err}");
     assert!(pictures_to_pdf(Vec::new()).is_err());
 }
+
+#[test]
+fn tiff_pictures_become_pages_too() {
+    let pixels: Vec<u8> = [0u8, 160, 0].repeat(40 * 20);
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    image::codecs::tiff::TiffEncoder::new(&mut tiff)
+        .write_image(&pixels, 40, 20, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    let pdf = pictures_to_pdf(vec![tiff.into_inner()]).unwrap();
+    let doc = Document::from_bytes(pdf, None, Limits::default()).unwrap();
+    let info = doc.info().unwrap();
+    assert_eq!((info.pages[0].width, info.pages[0].height), (30.0, 15.0));
+    let page = doc.render_page(&doc.new_cache(), 0, 1.0).unwrap();
+    let mid = ((page.height / 2 * page.width + page.width / 2) * 4) as usize;
+    assert!(
+        page.rgba[mid] < 30 && page.rgba[mid + 1] > 130,
+        "{:?}",
+        &page.rgba[mid..mid + 3]
+    );
+}

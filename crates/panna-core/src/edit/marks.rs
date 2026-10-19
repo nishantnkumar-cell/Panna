@@ -106,6 +106,10 @@ pub struct Watermark {
     pub behind: bool,
     /// A colour filling the page behind its content.
     pub background: Option<Color>,
+    /// A picture to draw instead of text, such as a logo.
+    pub picture: Option<super::picture::StampImage>,
+    /// How wide the picture is, as a share of the page's width.
+    pub picture_scale: f32,
 }
 
 impl Default for Watermark {
@@ -118,6 +122,8 @@ impl Default for Watermark {
             color: Color([0.5, 0.5, 0.5]),
             behind: false,
             background: None,
+            picture: None,
+            picture_scale: 0.5,
         }
     }
 }
@@ -125,7 +131,7 @@ impl Default for Watermark {
 impl Watermark {
     /// Whether there is nothing to draw.
     pub fn is_empty(&self) -> bool {
-        self.text.trim().is_empty() && self.background.is_none()
+        self.text.trim().is_empty() && self.background.is_none() && self.picture.is_none()
     }
 
     /// What to draw on one page, numbered `number` of `total`, on `date`: behind the page's
@@ -143,7 +149,15 @@ impl Watermark {
             opacity: f64::from(self.opacity.clamp(0.0, 1.0)),
             color: self.color,
         };
-        let text = (!self.text.trim().is_empty()).then_some(text);
+        let text = match &self.picture {
+            Some(image) => Some(Drawing::PictureMark {
+                image: image.clone(),
+                scale: f64::from(self.picture_scale.clamp(0.05, 1.0)),
+                angle: f64::from(self.angle),
+                opacity: f64::from(self.opacity.clamp(0.0, 1.0)),
+            }),
+            None => (!self.text.trim().is_empty()).then_some(text),
+        };
         let background = self.background.map(Drawing::Background);
         if self.behind {
             // The colour first, so the text shows on it.
@@ -171,6 +185,13 @@ pub(crate) enum Drawing {
         color: Color,
     },
     Background(Color),
+    /// A picture watermark: `scale` of the page's width, centred and turned by `angle`.
+    PictureMark {
+        image: super::picture::StampImage,
+        scale: f64,
+        angle: f64,
+        opacity: f64,
+    },
     /// Lines of text added to the page, the first line's top-left corner at `x`, `top`
     /// (from the top of the page as shown).
     Text {
@@ -221,14 +242,14 @@ impl Drawing {
     /// The picture it draws, which needs objects of its own.
     pub(crate) fn picture(&self) -> Option<&super::picture::StampImage> {
         match self {
-            Drawing::Picture { image, .. } => Some(image),
+            Drawing::Picture { image, .. } | Drawing::PictureMark { image, .. } => Some(image),
             _ => None,
         }
     }
 
-    fn opacity(&self) -> Option<f64> {
+    pub(crate) fn opacity(&self) -> Option<f64> {
         match self {
-            Drawing::Watermark { opacity, .. } => Some(*opacity),
+            Drawing::Watermark { opacity, .. } | Drawing::PictureMark { opacity, .. } => Some(*opacity),
             Drawing::Both(a, b) => a.opacity().or(b.opacity()),
             _ => None,
         }
@@ -313,6 +334,27 @@ impl Drawing {
                 n(*x0),
                 n(height - bottom)
             ),
+            Drawing::PictureMark {
+                image, scale, angle, ..
+            } => {
+                let w = width * scale;
+                let h = w * f64::from(image.height) / f64::from(image.width.max(1));
+                let (sin, cos) = angle.to_radians().sin_cos();
+                format!(
+                    "/Artifact << /Type /Pagination /Subtype /Watermark >> BDC q /PaGS gs {} {} {} {} {} {} cm \
+                     {} 0 0 {} {} {} cm /PaIm Do Q EMC\n",
+                    n(cos),
+                    n(sin),
+                    n(-sin),
+                    n(cos),
+                    n(width / 2.0),
+                    n(height / 2.0),
+                    n(w),
+                    n(h),
+                    n(-w / 2.0),
+                    n(-h / 2.0)
+                )
+            }
             Drawing::Boxes { rects, color } => {
                 let mut out = format!("q {} rg", rgb(*color));
                 for [x0, top, x1, bottom] in rects {

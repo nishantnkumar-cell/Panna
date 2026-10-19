@@ -79,7 +79,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Merge / combine files | Later | Done: insert another PDF's pages after the current page |
 | Crop pages | Later | Done: trim margins in millimetres from the edges as shown, on this page or all pages |
 | Headers, footers, page numbers, Bates numbering | Later | Done: left, centre and right text at the top and bottom, with {page}, {pages}, {page:6} for Bates numbers and {date}, on chosen pages. Drawn into the pages, so changing them later is Undo or adding new ones |
-| Watermarks and backgrounds | Later | Done: text watermark (colour, size or fit to page, angle, opacity, over or behind the content) and a page colour, on chosen pages. Picture watermarks not yet |
+| Watermarks and backgrounds | Later | Done: text watermark (colour, size or fit to page, angle, opacity, over or behind the content) and a page colour, on chosen pages. Picture watermarks too (PNG, JPEG or TIFF, such as a logo), sized as a share of the page width and written once however many pages show them |
 
 ## 5. Editing content
 
@@ -95,7 +95,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Images (PNG, JPEG, TIFF) → PDF | Later | Done for PNG and JPEG (JPEGs go in unchanged), a picture a page fitted to A4; TIFF not yet |
+| Images (PNG, JPEG, TIFF) → PDF | Later | Done for PNG, JPEG (which go in unchanged) and TIFF (its first page), a picture a page fitted to A4 |
 | PDF → images | Later | Done: PNG or JPEG per page at a chosen resolution |
 | PDF → plain text | Later | Done: chosen pages into one text file |
 | PDF → Word / Excel / PowerPoint | Later | Acrobat does this offline; quality is a large project |

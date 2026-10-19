@@ -600,6 +600,10 @@ pub struct Watermarking {
     /// Which of [`PAPERS`], if any.
     pub paper: Option<usize>,
     pub range: String,
+    /// A picture to use instead of text, with its file's name.
+    pub picture: Option<(String, panna_core::StampImage)>,
+    /// The picture's width, as a share of the page's.
+    pub scale: f32,
 }
 
 impl Watermarking {
@@ -613,6 +617,8 @@ impl Watermarking {
             behind: false,
             paper: None,
             range: format!("1-{count}"),
+            picture: None,
+            scale: 0.5,
         }
     }
 }
@@ -629,6 +635,11 @@ pub enum WatermarkEvent {
     UsePaper(bool),
     Paper(usize),
     Range(String),
+    ChoosePicture,
+    PictureChosen(Option<std::path::PathBuf>),
+    PictureLoaded(Result<(String, panna_core::StampImage), String>),
+    RemovePicture,
+    Scale(f32),
     Go,
     Cancel,
 }
@@ -671,9 +682,11 @@ pub fn watermark_settings(
         color: INKS.get(state.ink).copied().unwrap_or(INKS[0]),
         behind: state.behind,
         background: state.paper.and_then(|i| PAPERS.get(i).copied()),
+        picture: state.picture.as_ref().map(|(_, image)| image.clone()),
+        picture_scale: state.scale,
     };
     if mark.is_empty() {
-        return Err("Enter the watermark's text, or choose a page colour.".into());
+        return Err("Enter the watermark's text, choose a picture, or choose a page colour.".into());
     }
     Ok((pages, mark))
 }
@@ -714,7 +727,7 @@ fn swatches<'a>(
 pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Message> {
     let ev = Message::Watermark;
     let parsed = watermark_settings(state, count);
-    let untouched = state.text.trim().is_empty() && state.paper.is_none();
+    let untouched = state.text.trim().is_empty() && state.paper.is_none() && state.picture.is_none();
     let hint: Element<'a, Message> = match &parsed {
         Err(e) if !untouched => text(e.clone())
             .size(13)
@@ -741,13 +754,40 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
         .spacing(6)
         .align_y(iced::Center)
     };
-    container(
-        column![
-            text("Watermark and page colour").size(16),
-            text_input("Text, such as DRAFT or CONFIDENTIAL", &state.text)
-                .id(watermark_input_id())
-                .on_input(move |v| ev(WatermarkEvent::Text(v)))
-                .on_submit(ev(WatermarkEvent::Go)),
+    // A picture takes the place of the text, its colour and size.
+    let what: Element<'a, Message> = match &state.picture {
+        Some((name, _)) => column![
+            row![
+                text(format!("Picture: {name}")).size(13).width(iced::Fill),
+                button("Remove")
+                    .style(button::secondary)
+                    .on_press(ev(WatermarkEvent::RemovePicture)),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+            row![
+                text("Width").width(60),
+                slider(0.05..=1.0, state.scale, move |v| ev(WatermarkEvent::Scale(v))).step(0.05_f32),
+                text(format!("{}%", (state.scale * 100.0).round())).width(44),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            small("Angle", "0", &state.angle, "°", WatermarkEvent::Angle),
+        ]
+        .spacing(10)
+        .into(),
+        None => column![
+            row![
+                text_input("Text, such as DRAFT or CONFIDENTIAL", &state.text)
+                    .id(watermark_input_id())
+                    .on_input(move |v| ev(WatermarkEvent::Text(v)))
+                    .on_submit(ev(WatermarkEvent::Go)),
+                button("Picture…")
+                    .style(button::secondary)
+                    .on_press(ev(WatermarkEvent::ChoosePicture)),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
             row![
                 text("Colour").width(60),
                 swatches(&INKS, &INK_NAMES, Some(state.ink), move |i| ev(
@@ -761,6 +801,14 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
                 small("Angle", "0", &state.angle, "°", WatermarkEvent::Angle),
             ]
             .spacing(16),
+        ]
+        .spacing(10)
+        .into(),
+    };
+    container(
+        column![
+            text("Watermark and page colour").size(16),
+            what,
             row![
                 text("Opacity").width(60),
                 slider(0.05..=1.0, state.opacity, move |v| ev(WatermarkEvent::Opacity(v))).step(0.05_f32),
