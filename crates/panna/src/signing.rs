@@ -1,13 +1,14 @@
 //! The Sign with a certificate card: a certificate file (.p12 or .pfx) and its password, an
-//! optional reason and place, and whether to certify the document. The signed copy is saved
+//! optional reason and place, whether to show the signature in a corner of the page, and
+//! whether to certify the document. The signed copy is saved
 //! as a new file and opened.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iced::widget::{button, checkbox, column, row, space, text, text_input};
+use iced::widget::{button, checkbox, column, pick_list, row, space, text, text_input};
 use iced::{Element, Theme};
-use panna_core::SignOptions;
+use panna_core::{Corner, SignOptions, Visible};
 
 use crate::Message;
 
@@ -22,6 +23,10 @@ pub struct Signing {
     pub reason: String,
     pub location: String,
     pub certify: bool,
+    /// Show the signature in a corner of `page`, the page shown when the card opened.
+    pub shown: bool,
+    pub corner: Place,
+    pub page: usize,
     /// The document has no signatures yet, so it can be certified.
     pub can_certify: bool,
     pub error: Option<String>,
@@ -36,8 +41,34 @@ pub enum Event {
     Reason(String),
     Location(String),
     Certify(bool),
+    Shown(bool),
+    Corner(Place),
     Go,
     Cancel,
+}
+
+/// A corner, as the list names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Place(pub Corner);
+
+impl Place {
+    const ALL: [Place; 4] = [
+        Place(Corner::BottomRight),
+        Place(Corner::BottomLeft),
+        Place(Corner::TopRight),
+        Place(Corner::TopLeft),
+    ];
+}
+
+impl std::fmt::Display for Place {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            Corner::BottomRight => "bottom right",
+            Corner::BottomLeft => "bottom left",
+            Corner::TopRight => "top right",
+            Corner::TopLeft => "top left",
+        })
+    }
 }
 
 pub fn input_id() -> iced::widget::Id {
@@ -50,6 +81,10 @@ impl Signing {
             reason: self.reason.clone(),
             location: self.location.clone(),
             certify: self.certify && self.can_certify,
+            visible: self.shown.then_some(Visible {
+                page: self.page,
+                corner: self.corner.0,
+            }),
         }
     }
 }
@@ -65,8 +100,8 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
         text("Sign with a certificate").size(16),
         small(
             "Signs with a digital ID in a certificate file (.p12 or .pfx), and saves the signed \
-             copy as a new file. The signature can't be seen on the page; it's listed under \
-             Signatures in the sidebar."
+             copy as a new file. The signature is listed under Signatures in the sidebar, and \
+             can be shown on the page too."
         ),
         row![
             text(file_name).size(13).width(iced::Fill),
@@ -90,6 +125,16 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
         text_input("Place (optional)", &state.location)
             .on_input(move |v| ev(Event::Location(v)))
             .on_submit(ev(Event::Go)),
+        row![
+            checkbox(state.shown)
+                .label(format!("Show on page {}, at the", state.page + 1))
+                .on_toggle(move |v| ev(Event::Shown(v))),
+            pick_list(Place::ALL, Some(state.corner), move |v| ev(Event::Corner(v)))
+                .text_size(13)
+                .padding([2, 6]),
+        ]
+        .spacing(6)
+        .align_y(iced::Center),
     ]
     .spacing(10)
     .width(420);

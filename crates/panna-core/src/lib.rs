@@ -34,9 +34,10 @@ pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use compare::{Change, ChangeKind};
 pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{
-    Addition, Annotation, Changes, Cleanup, Color, HeaderFooter, Kind, LINE_HEIGHT, MAX_PICTURES, Margins,
-    NOTE_SIZE, NewField, NewFieldKind, PageSource, PictureChange, Protection, STAMPS, SaveError, SignOptions,
-    StampImage, Watermark, fill_header_footer, pictures_to_pdf, stamp_label, text_width, today, wrap,
+    Addition, Annotation, Changes, Cleanup, Color, Corner, HeaderFooter, Kind, LINE_HEIGHT, MAX_PICTURES,
+    Margins, NOTE_SIZE, NewField, NewFieldKind, PageSource, PictureChange, Protection, STAMPS, SaveError,
+    SignOptions, StampImage, Visible, Watermark, fill_header_footer, pictures_to_pdf, stamp_label,
+    text_width, today, wrap,
 };
 pub use export::{Export, ExportFormat};
 pub use formats::Format;

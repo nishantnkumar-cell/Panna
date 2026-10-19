@@ -53,9 +53,15 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 fn plain() -> Document {
-    let bytes = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages \
-/Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n";
-    let mut out = bytes.to_vec();
+    plain_turned(0)
+}
+
+fn plain_turned(rotate: u32) -> Document {
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages \
+/Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Rotate {rotate} >>\nendobj\n"
+    );
+    let mut out = bytes.into_bytes();
     let offsets: Vec<usize> = [b"1 0 obj", b"2 0 obj", b"3 0 obj"]
         .iter()
         .map(|n| out.windows(7).position(|w| w == *n).unwrap())
@@ -77,6 +83,7 @@ fn signing_with_a_certificate_file_makes_a_valid_signature() {
         reason: "Approved".into(),
         location: "Café".into(),
         certify: true,
+        visible: None,
     };
     for p12 in ["signer-rsa.p12", "signer-ec.p12"] {
         let doc = plain();
@@ -120,4 +127,38 @@ fn a_wrong_password_is_refused() {
         )
         .unwrap_err();
     assert!(matches!(err, panna_core::SaveError::Certificate(_)), "{err:?}");
+}
+
+#[test]
+fn a_shown_signature_is_drawn_in_the_corner_as_the_page_is_shown() {
+    for rotate in [0, 90, 180, 270] {
+        let options = panna_core::SignOptions {
+            reason: "Approved".into(),
+            visible: Some(panna_core::Visible {
+                page: 0,
+                corner: panna_core::Corner::BottomRight,
+            }),
+            ..panna_core::SignOptions::default()
+        };
+        let doc = plain_turned(rotate);
+        let signed = doc
+            .signed(&fixture("signer-rsa.p12"), "secret", &options)
+            .unwrap();
+        let doc = doc.reopen(signed).unwrap();
+        assert_eq!(doc.signatures()[0].status, SigStatus::Valid);
+        let cache = doc.new_cache();
+        let page = doc.render_page(&cache, 0, 1.0).unwrap();
+        let (w, h) = (page.width as usize, page.height as usize);
+        let white = |x: usize, y: usize| page.rgba[(y * w + x) * 4..][..3] == [255, 255, 255];
+        // On a 200-point page the box is 128 by 56, 20 from the edges.
+        let inside = (54..178)
+            .flat_map(|x| (126..178).map(move |y| (x, y)))
+            .filter(|&(x, y)| !white(x, y))
+            .count();
+        assert!(inside > 124 * 52 * 9 / 10, "rotate {rotate}: {inside}");
+        assert!(
+            white(30, 30) && white(30, h - 30) && white(w - 30, 30),
+            "rotate {rotate}"
+        );
+    }
 }

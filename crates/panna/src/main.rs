@@ -3086,9 +3086,11 @@ impl App {
     /// The Sign with a certificate card's events.
     fn signing(&mut self, event: signing::Event) -> Task<Message> {
         if let signing::Event::Open = event {
+            let page = self.current_page();
             let Some(doc) = &self.doc else { return Task::none() };
             self.signing = Some(signing::Signing {
                 can_certify: doc.info.signatures.is_empty(),
+                page,
                 ..signing::Signing::default()
             });
             return Task::none();
@@ -3149,6 +3151,14 @@ impl App {
             }
             signing::Event::Certify(v) => {
                 state.certify = v;
+                Task::none()
+            }
+            signing::Event::Shown(v) => {
+                state.shown = v;
+                Task::none()
+            }
+            signing::Event::Corner(v) => {
+                state.corner = v;
                 Task::none()
             }
             signing::Event::Cancel => {

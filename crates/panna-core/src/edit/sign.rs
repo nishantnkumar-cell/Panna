@@ -22,7 +22,30 @@ pub struct SignOptions {
     /// Certify the document: later changes other than filling in forms and signing make the
     /// certification fail. Only the first signature can certify.
     pub certify: bool,
+    /// Where the signature is shown on the page; it's invisible when `None`.
+    pub visible: Option<Visible>,
 }
+
+/// A signature shown in a corner of a page: who signed, when, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Visible {
+    pub page: usize,
+    pub corner: Corner,
+}
+
+/// A corner of the page as it's shown, whichever way the page is turned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
+/// The shown signature's size and its distance from the page's edges, in points.
+const BOX: (f64, f64) = (220.0, 56.0);
+const MARGIN: f64 = 36.0;
 
 /// A PDF string literal with `(`, `)` and `\` escaped, or a UTF-16 hex string when the text
 /// isn't plain ASCII.
@@ -72,6 +95,82 @@ fn array_with(existing: Option<Array<'_>>, extra: &str) -> Result<String, SaveEr
     Ok(out)
 }
 
+/// Where the box goes on a page with crop box `crop` turned by `rotate` degrees, in the
+/// page's own space, and the matrix that draws its appearance upright as the page is shown.
+fn placed(crop: [f64; 4], rotate: i64, corner: Corner) -> ([f64; 4], (f64, f64), &'static str) {
+    let [x0, y0, x1, y1] = crop;
+    let turned = rotate.rem_euclid(360);
+    let (shown_w, shown_h) = if turned % 180 == 0 {
+        (x1 - x0, y1 - y0)
+    } else {
+        (y1 - y0, x1 - x0)
+    };
+    // Smaller on small pages.
+    let w = BOX.0.min((shown_w - 2.0 * MARGIN).max(40.0));
+    let h = BOX.1.min((shown_h - 2.0 * MARGIN).max(14.0));
+    let margin = MARGIN.min(shown_w / 10.0).min(shown_h / 10.0);
+    let (u0, v0) = match corner {
+        Corner::TopLeft => (margin, shown_h - margin - h),
+        Corner::TopRight => (shown_w - margin - w, shown_h - margin - h),
+        Corner::BottomLeft => (margin, margin),
+        Corner::BottomRight => (shown_w - margin - w, margin),
+    };
+    // From where it's shown (u across, v up) back to the page's own space.
+    let to_page = |u: f64, v: f64| match turned {
+        90 => (x1 - v, y0 + u),
+        180 => (x1 - u, y1 - v),
+        270 => (x0 + v, y1 - u),
+        _ => (x0 + u, y0 + v),
+    };
+    let (a, b) = to_page(u0, v0);
+    let (c, d) = to_page(u0 + w, v0 + h);
+    let matrix = match turned {
+        90 => "0 1 -1 0 0 0",
+        180 => "-1 0 0 -1 0 0",
+        270 => "0 -1 1 0 0 0",
+        _ => "1 0 0 1 0 0",
+    };
+    ([a.min(c), b.min(d), a.max(c), b.max(d)], (w, h), matrix)
+}
+
+/// What the shown signature draws in a box `w` by `h`: its lines, each shrunk to fit.
+fn appearance(lines: &[String], (w, h): (f64, f64), matrix: &str) -> Vec<u8> {
+    let n = super::annot::n;
+    let mut data = format!(
+        "q 0.93 0.94 0.98 rg 0 0 {w} {h} re f 0.35 0.38 0.6 RG 0.75 w 0.375 0.375 {iw} {ih} re S Q\n",
+        w = n(w),
+        h = n(h),
+        iw = n(w - 0.75),
+        ih = n(h - 0.75)
+    );
+    let room = (w - 12.0).max(1.0);
+    let line_h = ((h - 8.0) / lines.len().max(1) as f64).min(14.0);
+    let mut y = h - 4.0;
+    for (i, line) in lines.iter().enumerate() {
+        let wanted: f64 = if i == 0 { 11.0 } else { 9.0 };
+        let size = wanted
+            .min(line_h * 0.85)
+            .min(room / super::annot::text_width(line).max(0.01))
+            .max(1.0);
+        y -= line_h;
+        data.push_str(&format!(
+            "BT /Helv {} Tf 0.12 0.15 0.35 rg 6 {} Td ({}) Tj ET\n",
+            n(size),
+            n(y + (line_h - size) / 2.0),
+            super::annot::literal(&super::annot::win_ansi(line))
+        ));
+    }
+    format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 {} {}] /Matrix [{matrix}] /Resources << /Font << \
+         /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> \
+         /Length {} >>\nstream\n{data}endstream",
+        n(w),
+        n(h),
+        data.len()
+    )
+    .into_bytes()
+}
+
 /// `original` with an update adding an unsigned signature, and where in the result the room
 /// for it is (the hex string, brackets included). Every byte outside that room is final.
 pub(crate) fn prepare(
@@ -92,7 +191,8 @@ pub(crate) fn prepare(
     let xref = pdf.xref();
     let catalog = xref.get::<Dict<'_>>(id_of(root)?).ok_or(SaveError::Damaged)?;
     let pages = pdf.pages();
-    let page = pages.first().ok_or(SaveError::NoSuchPage(0))?;
+    let on = options.visible.map_or(0, |v| v.page);
+    let page = pages.get(on).ok_or(SaveError::NoSuchPage(on))?;
     let page_raw = page.raw();
     let page_id = page_raw.obj_id().ok_or(SaveError::Damaged)?;
     let (page_num, page_gen) = (
@@ -126,10 +226,10 @@ pub(crate) fn prepare(
     } else {
         ""
     };
+    let date = pdf_date(std::time::SystemTime::now());
     let mut sig = format!(
         "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached\n/ByteRange [0 \
-         0000000000 0000000000 0000000000]\n/M ({})\n/Name {}\n{reference}",
-        pdf_date(std::time::SystemTime::now()),
+         0000000000 0000000000 0000000000]\n/M ({date})\n/Name {}\n{reference}",
         pdf_text(signer),
     );
     if !options.reason.trim().is_empty() {
@@ -142,12 +242,54 @@ pub(crate) fn prepare(
     sig.push_str(&"0".repeat(ROOM * 2));
     sig.push_str(">\n>>");
     out.put(sig_id, 0, sig.into_bytes())?;
+    // Shown: a box in a corner with who signed, when and why. Otherwise a widget with no
+    // size. Either way it prints and is locked (flags 132).
+    let (rect, ap) = match options.visible {
+        Some(visible) => {
+            let b = page.crop_box();
+            let rotate = match page.rotation() {
+                hayro::hayro_syntax::page::Rotation::None => 0,
+                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
+                hayro::hayro_syntax::page::Rotation::Flipped => 180,
+                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+            };
+            let (rect, size, matrix) = placed([b.x0, b.y0, b.x1, b.y1], rotate, visible.corner);
+            // "D:20261019120000Z" as "2026-10-19 12:00 UTC".
+            let d = date.get(2..).unwrap_or_default();
+            let part = |r: std::ops::Range<usize>| d.get(r).unwrap_or_default();
+            let mut lines = vec![
+                format!("Digitally signed by {signer}"),
+                format!(
+                    "Date: {}-{}-{} {}:{} UTC",
+                    part(0..4),
+                    part(4..6),
+                    part(6..8),
+                    part(8..10),
+                    part(10..12)
+                ),
+            ];
+            if !options.reason.trim().is_empty() {
+                lines.push(format!("Reason: {}", options.reason.trim()));
+            }
+            if !options.location.trim().is_empty() {
+                lines.push(format!("Place: {}", options.location.trim()));
+            }
+            let ap_id = out.alloc();
+            out.put(ap_id, 0, appearance(&lines, size, matrix))?;
+            let n = super::annot::n;
+            (
+                format!("[{} {} {} {}]", n(rect[0]), n(rect[1]), n(rect[2]), n(rect[3])),
+                format!("/AP << /N {ap_id} 0 R >> "),
+            )
+        }
+        None => ("[0 0 0 0]".to_owned(), String::new()),
+    };
     out.put(
         field_id,
         0,
         format!(
-            "<< /Type /Annot /Subtype /Widget /FT /Sig /T {} /F 132 /Rect [0 0 0 0] /P {page_num} \
-             {page_gen} R /V {sig_id} 0 R >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Sig /T {} /F 132 /Rect {rect} {ap}/P \
+             {page_num} {page_gen} R /V {sig_id} 0 R >>",
             pdf_text(&name)
         )
         .into_bytes(),

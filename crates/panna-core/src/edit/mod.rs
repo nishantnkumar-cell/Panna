@@ -30,8 +30,8 @@ pub use convert::{MAX_PICTURES, pictures_to_pdf};
 pub use crypt::Protection;
 pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
-pub use sign::SignOptions;
 pub(crate) use sign::prepare as prepare_signature;
+pub use sign::{Corner, SignOptions, Visible};
 
 use crate::{CommentId, FieldValue, ObjRef};
 
