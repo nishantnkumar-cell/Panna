@@ -39,6 +39,8 @@ pub(crate) struct Crypt {
     p: i32,
     /// Opened with the owner password, which lifts the permission flags.
     owner: bool,
+    /// For RC4 and AES-128, the user password, worked out from the owner password.
+    user_password: Option<zeroize::Zeroizing<Vec<u8>>>,
 }
 
 impl Crypt {
@@ -125,7 +127,8 @@ impl Crypt {
                     id,
                     encrypt_metadata: encrypt_metadata || r < 4,
                 };
-                let (key, owner) = legacy.key(password.as_bytes()).ok_or(SaveError::Encrypted)?;
+                let (key, owner, user_password) =
+                    legacy.key(password.as_bytes()).ok_or(SaveError::Encrypted)?;
                 let (strings, streams) = if v == 4 {
                     (filter(b"StrF")?, filter(b"StmF")?)
                 } else {
@@ -137,6 +140,7 @@ impl Crypt {
                     streams,
                     p,
                     owner,
+                    user_password,
                 })
             }
             5 if r == 5 || r == 6 => {
@@ -150,6 +154,7 @@ impl Crypt {
                     streams: filter(b"StmF")?,
                     p,
                     owner,
+                    user_password: None,
                 })
             }
             _ => Err(unsupported()),
@@ -258,6 +263,45 @@ impl Crypt {
                 cbc_encrypt(|b| cipher.encrypt_block(b), data)
             }
         }
+    }
+
+    /// The user password, when this was opened with the owner password of an RC4 or AES-128
+    /// file.
+    pub(crate) fn user_password(&self) -> Option<&[u8]> {
+        self.user_password.as_deref().map(Vec::as_slice)
+    }
+
+    /// The name of the encryption method, for the document's properties.
+    pub(crate) fn method_name(&self) -> &'static str {
+        match (&self.strings, &self.streams) {
+            (Method::Rc4, _) | (_, Method::Rc4) => "RC4",
+            (Method::Aes128, _) | (_, Method::Aes128) => "AES-128",
+            (Method::Aes256, _) | (_, Method::Aes256) => "AES-256",
+            _ => "none",
+        }
+    }
+
+    /// For a file protected with RC4 or AES-128 (which can be broken) and opened with the owner
+    /// password `owner`: the same passwords and permissions with AES-256. Permissions AES-256
+    /// files here can't express come out stricter, never looser.
+    pub(crate) fn upgrade(&self, owner: &str) -> Option<Protection> {
+        if !self.owner || !matches!(self.method_name(), "RC4" | "AES-128") {
+            return None;
+        }
+        let user = self.user_password.as_ref()?;
+        // Older files store passwords as single bytes; read them as Latin-1 unless they're UTF-8.
+        let open = match std::str::from_utf8(user) {
+            Ok(s) => s.to_owned(),
+            Err(_) => user.iter().map(|&b| char::from(b)).collect(),
+        };
+        let allowed = |n: u32| self.p as u32 & (1 << (n - 1)) != 0;
+        Some(Protection {
+            open_password: open.into(),
+            owner_password: owner.to_owned().into(),
+            allow_printing: allowed(3),
+            allow_changes: allowed(4) && allowed(6) && allowed(9) && allowed(11),
+            allow_copying: allowed(5),
+        })
     }
 
     /// Algorithm 1: the key for one object, from the file key and the object's number.
@@ -382,6 +426,7 @@ impl Protection {
             streams: Method::Aes256,
             p,
             owner: true,
+            user_password: None,
         };
         Ok((crypt, dict.into_bytes(), format!("[<{id}> <{id}>]").into_bytes()))
     }
@@ -399,12 +444,13 @@ struct Legacy<'a> {
 }
 
 impl Legacy<'_> {
-    /// The file key for a user password, or failing that an owner password, and whether it
-    /// was the owner's.
-    fn key(&self, password: &[u8]) -> Option<(Vec<u8>, bool)> {
+    /// The file key for a user password, or failing that an owner password, whether it was
+    /// the owner's, and then the user password.
+    #[allow(clippy::type_complexity)]
+    fn key(&self, password: &[u8]) -> Option<(Vec<u8>, bool, Option<zeroize::Zeroizing<Vec<u8>>>)> {
         let user = padded(password);
         if let Some(key) = self.user_key(&user) {
-            return Some((key, false));
+            return Some((key, false, None));
         }
         // Algorithm 7: the owner password decrypts /O to the user password.
         let mut digest = Md5::digest(user).to_vec();
@@ -423,7 +469,14 @@ impl Legacy<'_> {
                 recovered = rc4(&k, &recovered);
             }
         }
-        self.user_key(&padded(&recovered)).map(|key| (key, true))
+        let recovered = zeroize::Zeroizing::new(recovered);
+        let key = self.user_key(&padded(&recovered))?;
+        // The user password is followed by the start of the padding, to 32 bytes.
+        let len = (0..=32)
+            .find(|&n| recovered.get(n..) == PAD.get(..32 - n))
+            .unwrap_or(32);
+        let user = recovered.get(..len).unwrap_or_default().to_vec();
+        Some((key, true, Some(user.into())))
     }
 
     /// Algorithm 2, checked against /U with algorithm 4 or 5.

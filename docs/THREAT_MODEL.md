@@ -166,7 +166,12 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    and the text is blacked out in bookmark titles. Not searched: form field values,
    attached files, the document's title and metadata (Remove hidden information covers
    those), and text the page draws without a font Panna can read.
-5. Offer to upgrade old RC4 or AES-128 protection to AES-256 when saving changes.
+5. **Upgrading old RC4 or AES-128 protection: done.** A file with RC4 or AES-128 protection
+   that was opened with its owner password (which now works for those files too: the user
+   password is worked out from it) is offered AES-256 the first time it is saved, keeping
+   both passwords and the permissions (any that AES-256 files here can't express come out
+   stricter). The document's properties name the method. Opened with only the user
+   password, the owner password is unknown, so the offer isn't made.
 6. Larger fuzzing corpora: seed the fuzzers with real-world PDFs (pdf.js and PDFBox test
    suites) and keep crash inputs as regression tests.
 

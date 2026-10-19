@@ -390,6 +390,9 @@ enum Message {
     CloseTabAt(usize),
     Confirm(Choice),
     DismissNotice,
+    /// The answer to "Use stronger password protection?" before saving: AES-256 or not, or
+    /// `None` to not save.
+    Strengthen(Option<bool>),
     Ignore,
 }
 
@@ -478,6 +481,10 @@ struct App {
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
     after_save: Option<Pending>,
+    /// Where to save once asked about RC4 or AES-128 protection.
+    strengthen: Option<PathBuf>,
+    /// Where to save once the protection has been redone with AES-256.
+    save_after_pages: Option<PathBuf>,
     /// A problem to show the user, such as a failed save.
     notice: Option<String>,
     screen: Screen,
@@ -612,6 +619,8 @@ struct OpenDoc {
     id: u64,
     path: PathBuf,
     used_password: bool,
+    /// Asked already whether to save weak protection with AES-256.
+    strengthen_asked: bool,
     info: DocumentInfo,
     worker: RenderWorker,
     layout: PageLayout,
@@ -837,6 +846,8 @@ impl App {
             extract_pages: Vec::new(),
             confirm: None,
             after_save: None,
+            strengthen: None,
+            save_after_pages: None,
             notice: None,
             snapping: false,
             snapshot: None,
@@ -3029,6 +3040,13 @@ impl App {
                         self.notice = Some(e.to_string());
                         return Task::none();
                     }
+                    Err(e) if self.save_after_pages.take().is_some() => {
+                        self.after_save = None;
+                        self.notice = Some(format!(
+                            "The protection couldn't be changed, so nothing was saved: {e}"
+                        ));
+                        return Task::none();
+                    }
                     Err(e) => {
                         self.notice = Some(format!("The pages couldn't be changed: {e}"));
                         return Task::none();
@@ -3064,12 +3082,17 @@ impl App {
                 self.annotate.saved(&open.info.comments);
                 self.form.load(&open.info.fields);
                 self.find.rescan(&open.texts);
+                let save = match self.save_after_pages.take() {
+                    Some(path) => self.save_to(path),
+                    None => Task::none(),
+                };
                 Task::batch([
                     self.ask_pictures(show),
                     self.go_to_page(show),
                     self.request_thumbnails(),
                     self.request_search_text(),
                     self.request_comment_text(),
+                    save,
                 ])
             }
             Message::Save => {
@@ -3198,6 +3221,30 @@ impl App {
                     Choice::Save => {
                         self.after_save = Some(pending);
                         self.update(Message::Save)
+                    }
+                }
+            }
+            Message::Strengthen(choice) => {
+                let Some(path) = self.strengthen.take() else {
+                    return Task::none();
+                };
+                let Some(doc) = self.doc.as_mut() else {
+                    return Task::none();
+                };
+                match choice {
+                    None => {
+                        self.after_save = None;
+                        Task::none()
+                    }
+                    Some(false) => {
+                        doc.strengthen_asked = true;
+                        self.save_to(path)
+                    }
+                    Some(true) => {
+                        doc.strengthen_asked = true;
+                        self.save_after_pages = Some(path);
+                        let page = self.current_page();
+                        self.edit_pages(PageEdit::Strengthen, page, false)
                     }
                 }
             }
@@ -3940,6 +3987,10 @@ impl App {
         if self.saving {
             return Task::none();
         }
+        if doc.info.weak_protection && !doc.strengthen_asked {
+            self.strengthen = Some(path);
+            return Task::none();
+        }
         self.saving = true;
         // Field values reach the worker only now, since the inputs on the page already show
         // them; re-rendering every keystroke would be wasted work.
@@ -4508,6 +4559,7 @@ impl App {
             id,
             path,
             used_password,
+            strengthen_asked: false,
             info: DocumentInfo {
                 pages: Vec::new(),
                 title: None,
@@ -4517,6 +4569,7 @@ impl App {
                 fields: Vec::new(),
                 links: Vec::new(),
                 protected: false,
+                weak_protection: false,
                 attachments: Vec::new(),
                 layers: Vec::new(),
                 signatures: Vec::new(),
@@ -5127,6 +5180,9 @@ impl App {
         if self.confirm.is_some() {
             layers.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
         }
+        if self.strengthen.is_some() {
+            layers.push(modal(self.strengthen_view(), Message::Strengthen(None)));
+        }
         if let Some(notice) = &self.notice {
             layers.push(modal(
                 container(
@@ -5205,6 +5261,50 @@ impl App {
             ]
             .spacing(12)
             .width(400),
+        )
+        .padding(18)
+        .style(container::rounded_box)
+        .into()
+    }
+
+    /// Before saving a file with RC4 or AES-128 protection.
+    fn strengthen_view(&self) -> Element<'_, Message> {
+        // The method, as the document's properties name it: "Yes (RC4)".
+        let method = self
+            .doc
+            .as_ref()
+            .and_then(|d| {
+                d.info
+                    .properties
+                    .iter()
+                    .find(|(k, _)| *k == "Password protection")
+            })
+            .and_then(|(_, v)| v.strip_prefix("Yes (")?.strip_suffix(')'))
+            .unwrap_or("an older method")
+            .to_owned();
+        container(
+            column![
+                text("Use stronger password protection?").size(16),
+                text(format!(
+                    "This file is protected with {method}, an older method that can be broken. \
+                     Panna can save it with AES-256 instead, keeping the same passwords and \
+                     permissions."
+                )),
+                text("Some very old PDF readers can't open AES-256 files.").style(text::secondary),
+                row![
+                    button("Cancel")
+                        .style(button::secondary)
+                        .on_press(Message::Strengthen(None)),
+                    space::horizontal(),
+                    button(text(format!("Keep {method}")))
+                        .style(button::secondary)
+                        .on_press(Message::Strengthen(Some(false))),
+                    button("Use AES-256").on_press(Message::Strengthen(Some(true))),
+                ]
+                .spacing(8),
+            ]
+            .spacing(12)
+            .width(420),
         )
         .padding(18)
         .style(container::rounded_box)

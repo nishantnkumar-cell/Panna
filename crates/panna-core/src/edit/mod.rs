@@ -444,6 +444,15 @@ pub(crate) fn protected(bytes: &[u8]) -> bool {
     update::read_trailer(bytes).is_ok_and(|t| t.encrypt.is_some())
 }
 
+/// For a file protected with RC4 or AES-128 and opened with the owner password: the same
+/// protection with AES-256, and the encryption method's name for any protected file.
+pub(crate) fn protection_method(doc: Input<'_>) -> Option<(&'static str, Option<Protection>)> {
+    let (pdf, bytes, password) = doc;
+    let trailer = update::read_trailer(bytes).ok()?;
+    let crypt = encryption(pdf, trailer.encrypt.as_deref()?, trailer.id.as_deref(), password).ok()?;
+    Some((crypt.method_name(), crypt.upgrade(password)))
+}
+
 /// Every page of `doc` with new password protection, or none.
 pub(crate) fn protect(
     doc: Input<'_>,
@@ -926,6 +935,43 @@ fn fill_fields(
         out.put_copied(number, generation, rewrite(dict.data(), &set)?);
     }
     Ok(())
+}
+
+/// For an RC4 or AES-128 file and its owner password, the user password, which is what opens
+/// it for reading (the owner password is still what saving needs). Works on the raw bytes, as
+/// the file can't be parsed without it.
+pub(crate) fn user_password_for(bytes: &[u8], owner: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    let trailer = update::read_trailer(bytes).ok()?;
+    let raw = trailer.encrypt.as_deref()?.trim_ascii();
+    let dict = if raw.starts_with(b"<<") {
+        raw
+    } else {
+        // The encryption dictionary is never in an object stream, so it is "N G obj" in the
+        // file itself; the last one is the current one.
+        let r = lex::reference(raw)?;
+        let head = format!("{} {} obj", r.number, r.generation);
+        let at = bytes
+            .windows(head.len())
+            .enumerate()
+            .rev()
+            .find(|(i, w)| {
+                *w == head.as_bytes()
+                    && (*i == 0 || bytes.get(i - 1).is_some_and(|b| b.is_ascii_whitespace()))
+            })
+            .map(|(i, _)| i + head.len())?;
+        bytes.get(at..)?.trim_ascii_start()
+    };
+    let first_id = trailer
+        .id
+        .as_deref()
+        .and_then(|id| {
+            let inner = id.trim_ascii().strip_prefix(b"[")?.strip_suffix(b"]")?;
+            let items = lex::array_items(inner)?;
+            crypt::parse_string(inner.get(items.first()?.clone())?)
+        })
+        .unwrap_or_default();
+    let crypt = crypt::Crypt::new(dict, &first_id, owner).ok()?;
+    crypt.user_password().map(|p| p.to_vec().into())
 }
 
 /// The file key for an encrypted file, from its /Encrypt dictionary (inline or referenced),

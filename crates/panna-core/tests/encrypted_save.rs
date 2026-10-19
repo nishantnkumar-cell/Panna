@@ -136,3 +136,39 @@ fn the_worker_keeps_the_password_for_changes_and_saves() {
     assert_eq!(saved.comments().len(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn old_protection_is_redone_with_aes_256_keeping_both_passwords() {
+    for (name, bytes) in FIXTURES {
+        let user = open(bytes, "secret");
+        assert!(
+            !user.info().unwrap().weak_protection,
+            "{name}: opened without owner rights"
+        );
+        let owner = open(bytes, "owner");
+        let info = owner.info().unwrap();
+        let shown = info
+            .properties
+            .iter()
+            .find(|(k, _)| *k == "Password protection")
+            .unwrap();
+        assert_eq!(shown.1, format!("Yes ({name})"));
+        assert_eq!(info.weak_protection, name != "AES-256", "{name}");
+        if name == "AES-256" {
+            assert!(owner.strengthened().is_err());
+            continue;
+        }
+        let (bytes, password) = owner.strengthened().unwrap();
+        assert_eq!(*password, "owner");
+        // The same passwords open it, now with AES-256, and the text is still there.
+        let again = open(&bytes, "secret");
+        let shown = again.info().unwrap().properties;
+        assert!(
+            shown.contains(&("Password protection", "Yes (AES-256)".to_owned())),
+            "{name}"
+        );
+        assert!(open(&bytes, "owner").info().is_ok());
+        assert!(Document::from_bytes(bytes.clone(), Some("wrong"), Limits::default()).is_err());
+        assert_eq!(red_pixels(&again), red_pixels(&owner), "{name}");
+    }
+}

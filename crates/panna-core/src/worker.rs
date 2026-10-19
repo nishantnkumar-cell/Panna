@@ -89,6 +89,8 @@ pub enum PageEdit {
     Clean(crate::Cleanup),
     /// Gives the document new password protection, or removes it.
     Protect(Option<crate::Protection>),
+    /// Redoes RC4 or AES-128 protection with AES-256 (see [`Document::strengthened`]).
+    Strengthen,
     /// Draws comments, form fields or both into the pages.
     Flatten { comments: bool, fields: bool },
     /// Recognises the text on these pages (those without text of their own), and lays it over
@@ -814,6 +816,10 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                                     .map_err(|_| SaveError::Damaged)
                             })
                     }
+                    PageEdit::Strengthen => current.strengthened().and_then(|(bytes, password)| {
+                        Document::from_bytes(bytes, Some(&password), current.limits())
+                            .map_err(|_| SaveError::Damaged)
+                    }),
                     PageEdit::Clean(clean) => current
                         .cleaned(clean)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),

@@ -37,6 +37,9 @@ pub struct DocumentInfo {
     pub links: Vec<crate::Link>,
     /// Whether the file has password protection.
     pub protected: bool,
+    /// The protection is RC4 or AES-128, which can be broken, and the file was opened with
+    /// the owner password, so [`Document::strengthened`] can redo it with AES-256.
+    pub weak_protection: bool,
     /// Files attached to the document and its pages.
     pub attachments: Vec<crate::Attachment>,
     /// Layers that can be shown or hidden.
@@ -265,10 +268,26 @@ impl Document {
         let file_len = bytes.len() as u64;
         let password = password.unwrap_or("");
         let bytes = Arc::new(bytes);
-        let parsed = catch_unwind(AssertUnwindSafe(|| {
+        let mut parsed = catch_unwind(AssertUnwindSafe(|| {
             Pdf::new_with_password(Arc::clone(&bytes), password)
         }))
         .map_err(|_| OpenError::EngineCrashed)?;
+        // RC4 and AES-128 files open for reading with the user password only; an owner
+        // password gives it, and stays the password for saving, with full rights.
+        if !password.is_empty()
+            && matches!(parsed, Err(LoadPdfError::Decryption(_)))
+            && let Some(user) = catch_unwind(AssertUnwindSafe(|| {
+                crate::edit::user_password_for(&bytes, password)
+            }))
+            .ok()
+            .flatten()
+            && let Ok(user) = std::str::from_utf8(&user)
+        {
+            parsed = catch_unwind(AssertUnwindSafe(|| {
+                Pdf::new_with_password(Arc::clone(&bytes), user)
+            }))
+            .map_err(|_| OpenError::EngineCrashed)?;
+        }
         let pdf = parsed.map_err(|e| match e {
             LoadPdfError::Decryption(d) => decryption_error(d),
             LoadPdfError::Invalid => OpenError::Invalid,
@@ -363,10 +382,20 @@ impl Document {
             let fields = catch_unwind(AssertUnwindSafe(|| crate::forms::read(&self.pdf))).unwrap_or_default();
             let links = catch_unwind(AssertUnwindSafe(|| crate::links::read(&self.pdf))).unwrap_or_default();
             let protected = crate::edit::protected(&self.bytes);
+            let method = catch_unwind(AssertUnwindSafe(|| {
+                crate::edit::protection_method((&self.pdf, &self.bytes, self.password.as_str()))
+            }))
+            .ok()
+            .flatten();
             properties.push((
                 "Password protection",
-                if protected { "Yes" } else { "None" }.to_owned(),
+                match &method {
+                    Some((name, _)) => format!("Yes ({name})"),
+                    None if protected => "Yes".to_owned(),
+                    None => "None".to_owned(),
+                },
             ));
+            let weak_protection = method.is_some_and(|(_, upgrade)| upgrade.is_some());
             let attachments =
                 catch_unwind(AssertUnwindSafe(|| crate::attachments::read(&self.pdf))).unwrap_or_default();
             let layers =
@@ -377,6 +406,7 @@ impl Document {
                 fields,
                 links,
                 protected,
+                weak_protection,
                 attachments,
                 layers,
                 pages,
@@ -987,6 +1017,19 @@ impl Document {
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// For a file protected with RC4 or AES-128 and opened with the owner password (see
+    /// [`DocumentInfo::weak_protection`]): the same passwords and permissions with AES-256, as
+    /// a new file, and the password that opens it with full rights.
+    pub fn strengthened(&self) -> Result<(Vec<u8>, zeroize::Zeroizing<String>), crate::SaveError> {
+        let upgrade = catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::protection_method((&self.pdf, &self.bytes, self.password.as_str()))
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+        .and_then(|(_, upgrade)| upgrade)
+        .ok_or(crate::SaveError::ProtectionLocked)?;
+        self.protected(Some(&upgrade))
     }
 
     /// The document with new password protection, or none, as a new file, and the password
