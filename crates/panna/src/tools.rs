@@ -33,7 +33,7 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             ),
             tool(
                 Icon::Export,
-                "Export as text or pictures…",
+                "Export as text, Word or pictures…",
                 Message::Export(export::Event::Open)
             ),
         ]

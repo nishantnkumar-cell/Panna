@@ -449,6 +449,14 @@ fn pages_are_exported_as_text_and_pictures() {
         text.find("Page 3").unwrap() < text.find("Page 1").unwrap(),
         "{text}"
     );
+    let docx = dir.join("out.docx");
+    run(Export {
+        format: ExportFormat::Word,
+        dpi: 0.0,
+        pages: vec![(0, docx.clone()), (2, docx.clone())],
+    })
+    .unwrap();
+    assert!(std::fs::read(&docx).unwrap().starts_with(b"PK\x03\x04"));
     let (png, jpg) = (dir.join("p.png"), dir.join("p.jpg"));
     run(Export {
         format: ExportFormat::Png,

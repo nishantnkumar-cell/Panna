@@ -2422,7 +2422,7 @@ impl App {
                 let Ok((pages, dpi)) = export::settings(&state, count) else {
                     return Task::none();
                 };
-                let pages: Vec<(usize, PathBuf)> = if state.format == panna_core::ExportFormat::Text {
+                let pages: Vec<(usize, PathBuf)> = if state.format.one_file() {
                     pages.into_iter().map(|i| (i, target.clone())).collect()
                 } else {
                     let stem = self.file_stem();
@@ -3310,15 +3310,20 @@ impl App {
                 if export::settings(state, count).is_err() {
                     return Task::none();
                 }
-                let text = state.format == panna_core::ExportFormat::Text;
+                let format = state.format;
                 let stem = self.file_stem();
-                return if text {
+                return if format.one_file() {
+                    let (title, kind, ext) = if format == panna_core::ExportFormat::Word {
+                        ("Export as a Word document", "Word documents", "docx")
+                    } else {
+                        ("Export text as", "Text files", "txt")
+                    };
                     Task::perform(
                         async move {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Export text as")
-                                .add_filter("Text files", &["txt"])
-                                .set_file_name(format!("{stem}.txt"))
+                                .set_title(title)
+                                .add_filter(kind, &[ext])
+                                .set_file_name(format!("{stem}.{ext}"))
                                 .save_file()
                                 .await
                                 .map(|f| f.path().to_path_buf())

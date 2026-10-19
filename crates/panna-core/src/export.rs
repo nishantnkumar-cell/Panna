@@ -1,4 +1,4 @@
-//! Saving pages as plain text or as pictures.
+//! Saving pages as plain text, a Word document or pictures.
 
 use std::path::PathBuf;
 
@@ -13,6 +13,15 @@ pub enum ExportFormat {
     Png,
     /// A JPEG picture for each page.
     Jpeg,
+    /// One Word document (.docx): the text, in paragraphs and headings.
+    Word,
+}
+
+impl ExportFormat {
+    /// Whether every page goes into one file, rather than a file each.
+    pub fn one_file(self) -> bool {
+        matches!(self, ExportFormat::Text | ExportFormat::Word)
+    }
 }
 
 /// Pages to save and where.

@@ -513,6 +513,13 @@ fn export_pages<'a>(
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
             write_atomically(path, crate::export::text(doc, &pages)?.as_bytes())
         }
+        ExportFormat::Word => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(());
+            };
+            let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
+            write_atomically(path, &crate::office::docx(doc, &pages)?)
+        }
         format => export.pages.iter().try_for_each(|(index, path)| {
             let page = doc
                 .render_page(cache, *index, export.dpi / 72.0)

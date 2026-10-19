@@ -68,6 +68,17 @@ pub struct PageText {
     boxes: Vec<TextBox>,
 }
 
+/// A line of text: what it says, its left edge, its top and bottom (y down), and its font
+/// size, in points.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Line {
+    pub text: String,
+    pub x0: f32,
+    pub y0: f32,
+    pub y1: f32,
+    pub size: f32,
+}
+
 /// Options for [`PageText::find`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FindOptions {
@@ -212,6 +223,49 @@ impl PageText {
     }
 
     /// Whether `(x, y)` is on a character, so the pointer should show a text cursor.
+    /// The text's lines as drawn, each with the box around it and its glyphs' typical height
+    /// (the font size, give or take).
+    pub(crate) fn lines(&self) -> Vec<Line> {
+        let mut out = Vec::new();
+        let mut start = 0;
+        for end in (0..self.chars.len())
+            .filter(|&i| self.chars.get(i) == Some(&'\n'))
+            .chain([self.chars.len()])
+        {
+            let chars = self.chars.get(start..end).unwrap_or_default();
+            let boxes = self.boxes.get(start..end).unwrap_or_default();
+            start = end + 1;
+            let text: String = chars.iter().collect();
+            if text.trim().is_empty() {
+                continue;
+            }
+            let mut heights: Vec<f32> = chars
+                .iter()
+                .zip(boxes)
+                .filter(|(c, _)| !c.is_whitespace())
+                .map(|(_, b)| b.height())
+                .collect();
+            heights.sort_by(f32::total_cmp);
+            let drawn: Vec<&TextBox> = boxes
+                .iter()
+                .filter(|b| b.width() > 0.0 || b.height() > 0.0)
+                .collect();
+            let fold = |f: fn(&TextBox) -> f32, pick: fn(f32, f32) -> f32| {
+                drawn.iter().map(|b| f(b)).reduce(pick).unwrap_or(0.0)
+            };
+            out.push(Line {
+                text: text.trim().to_owned(),
+                x0: fold(|b| b.x0, f32::min),
+                y0: fold(|b| b.y0, f32::min),
+                y1: fold(|b| b.y1, f32::max),
+                // Boxes run from the descent to the ascent: 1000 units of a 1000-unit em.
+                size: heights.get(heights.len() / 2).copied().unwrap_or(0.0) * 1000.0
+                    / (ASCENT - DESCENT) as f32,
+            });
+        }
+        out
+    }
+
     pub fn hit(&self, x: f32, y: f32) -> bool {
         self.boxes.iter().any(|b| b.contains(x, y))
     }
