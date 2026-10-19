@@ -69,6 +69,7 @@ pub enum Icon {
     CommentSummary,
     PrintComments,
     Preferences,
+    Batch,
     PageExtract,
     MoveUp,
     MoveDown,
@@ -194,6 +195,7 @@ impl Icon {
             Icon::CommentSummary => include_bytes!("../icons/message-square-text.svg"),
             Icon::PrintComments => include_bytes!("../icons/printer-check.svg"),
             Icon::Preferences => include_bytes!("../icons/settings.svg"),
+            Icon::Batch => include_bytes!("../icons/folder-cog.svg"),
             Icon::PageExtract => include_bytes!("../icons/file-output.svg"),
             Icon::MoveUp => include_bytes!("../icons/arrow-up.svg"),
             Icon::MoveDown => include_bytes!("../icons/arrow-down.svg"),
@@ -347,7 +349,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 120] = [
+    const ALL: [Icon; 121] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -409,6 +411,7 @@ mod tests {
         Icon::CommentSummary,
         Icon::PrintComments,
         Icon::Preferences,
+        Icon::Batch,
         Icon::PageExtract,
         Icon::MoveUp,
         Icon::MoveDown,

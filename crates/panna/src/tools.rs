@@ -41,6 +41,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             Message::FromClipboard,
         ),
         tool(
+            Icon::Batch,
+            "Batch actions on a folder of PDFs…",
+            Message::Batch(crate::batch::Event::Open),
+        ),
+        tool(
             Icon::Scanner,
             "Scan pages from a scanner…",
             Message::Scan(crate::scan::Event::Open),

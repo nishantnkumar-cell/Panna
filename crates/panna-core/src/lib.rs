@@ -7,6 +7,7 @@
 
 mod access;
 mod attachments;
+pub mod batch;
 mod calc;
 mod commentdata;
 mod comments;

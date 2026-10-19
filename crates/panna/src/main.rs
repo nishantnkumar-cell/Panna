@@ -6,6 +6,7 @@
 
 mod add;
 mod annotate;
+mod batch;
 mod bookmarks;
 mod certstore;
 mod clipboard;
@@ -247,6 +248,8 @@ enum Message {
     Print,
     /// The Preferences card (Ctrl+,).
     Preferences(preferences::Event),
+    /// The Batch actions card.
+    Batch(batch::Event),
     /// Prints it with each page that has comments followed by a list of them.
     PrintWithComments,
     /// Asks where to save a list of the comments, by page, as a PDF.
@@ -531,6 +534,8 @@ struct App {
     blank: Option<create::Blank>,
     /// The Preferences card is open.
     preferences: bool,
+    /// The Batch actions card, while open.
+    batch: Option<batch::Batch>,
     /// The account's name, shown in Preferences as the name used when none is set.
     account: String,
     /// What happened after asking to be the default PDF app, shown on the card.
@@ -981,6 +986,7 @@ impl App {
             pictures: Vec::new(),
             blank: None,
             preferences: false,
+            batch: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -1103,6 +1109,7 @@ impl App {
                 | Message::FromClipboard
                 | Message::Blank(create::Event::Open)
                 | Message::Preferences(preferences::Event::Open)
+                | Message::Batch(batch::Event::Open)
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
                 | Message::Signing(signing::Event::Open)
@@ -1501,6 +1508,8 @@ impl App {
                     self.blank = None;
                 } else if self.preferences {
                     self.preferences = false;
+                } else if self.batch.as_ref().is_some_and(|b| !b.running()) {
+                    self.batch = None;
                 } else if self.replacing.is_some() {
                     self.replacing = None;
                 } else if self.labelling.is_some() {
@@ -3029,6 +3038,18 @@ impl App {
                     }
                 ));
                 Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
+            }
+            Message::Batch(batch::Event::Open) => {
+                self.batch.get_or_insert_with(batch::Batch::default);
+                Task::none()
+            }
+            Message::Batch(event) => {
+                let Some(state) = self.batch.take() else {
+                    return Task::none();
+                };
+                let (state, task) = state.update(event);
+                self.batch = state;
+                task
             }
             Message::Preferences(event) => {
                 match event {
@@ -5876,6 +5897,9 @@ impl App {
         }
         if let Some(state) = &self.blank {
             layers.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
+        }
+        if let Some(state) = &self.batch {
+            layers.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
         }
         if self.preferences {
             layers.push(modal(

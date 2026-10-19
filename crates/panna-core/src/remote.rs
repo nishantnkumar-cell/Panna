@@ -465,6 +465,35 @@ impl Isolated {
         self.engine.render(&self.doc, None, index, scale)
     }
 
+    /// Makes `edit`, and carries on with the new version.
+    pub fn edit(&mut self, edit: PageEdit) -> Result<DocumentInfo, SaveError> {
+        match self.call(Op::Edit(edit)) {
+            Answer::Revised(Ok(revision)) => {
+                self.doc = Doc::new(revision.bytes, revision.password, self.doc.limits);
+                Ok(revision.info)
+            }
+            Answer::Revised(Err(e)) => Err(e),
+            _ => Err(SaveError::EngineCrashed),
+        }
+    }
+
+    /// Makes the file smaller (see [`Document::compacted`]), and carries on with it.
+    pub fn compact(&mut self, pictures: Option<u32>) -> Result<(), SaveError> {
+        match self.call(Op::Compacted(pictures)) {
+            Answer::Bytes(Ok(bytes)) => {
+                self.doc = self.doc.revised(bytes);
+                Ok(())
+            }
+            Answer::Bytes(Err(e)) => Err(e),
+            _ => Err(SaveError::EngineCrashed),
+        }
+    }
+
+    /// The file as it now is.
+    pub fn bytes(&self) -> &[u8] {
+        &self.doc.bytes
+    }
+
     pub(crate) fn call(&mut self, op: Op) -> Answer {
         self.engine.call(&self.doc, None, op)
     }
