@@ -38,3 +38,7 @@ strip = true
 # Keep unwinding so engine panics on malformed PDFs can be caught instead of aborting.
 panic = "unwind"
 overflow-checks = true
+
+[patch.crates-io]
+# See vendor/README.md.
+hayro-syntax = { path = "vendor/hayro-syntax" }

@@ -164,6 +164,13 @@ impl fmt::Display for OpenError {
                 page + 1,
                 mb(limit)
             ),
+            Self::Hostile(Refusal::Forms { page, .. }) => write!(
+                f,
+                "This file wasn't opened: page {} repeats drawings inside drawings so many \
+                 times that it would never finish showing. Files built like this are used to \
+                 freeze PDF readers.",
+                page + 1
+            ),
             Self::Hostile(Refusal::Image { width, height, .. }) => write!(
                 f,
                 "This file wasn't opened: it has a picture that claims to be {width} × {height} \

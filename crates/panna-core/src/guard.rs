@@ -13,7 +13,7 @@ use std::io::Read;
 use flate2::read::{DeflateDecoder, ZlibDecoder};
 use hayro::hayro_syntax::Filter;
 use hayro::hayro_syntax::Pdf;
-use hayro::hayro_syntax::object::{Array, Name, Object, ObjectIdentifier, Stream};
+use hayro::hayro_syntax::object::{Array, Dict, Name, Object, ObjectIdentifier, Stream};
 
 use crate::Limits;
 
@@ -26,7 +26,16 @@ pub enum Refusal {
     Page { page: usize, bytes: u64, limit: u64 },
     /// An image claims more pixels than the limit.
     Image { width: u64, height: u64, limit: u64 },
+    /// Drawing a page would run forms (reusable drawings) more times than the limit, as in a
+    /// form that draws another form twice, which draws another twice, and so on.
+    Forms { page: usize, limit: u64 },
 }
+
+/// Most times drawing one page may run forms. The engine stops at 50 forms deep, but a form
+/// drawing two others reaches 2^50 runs well before that. Real documents run a few thousand.
+const MAX_FORM_RUNS: u64 = 200_000;
+/// The engine's own nesting limit for forms.
+const MAX_FORM_DEPTH: u32 = 50;
 
 /// Checks every stream and image in `pdf` against `limits`.
 pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
@@ -63,7 +72,119 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
             });
         }
     }
+    let mut runs = FormRuns::default();
+    for (index, page) in pdf.pages().iter().enumerate() {
+        let resources = page.raw().get::<Dict<'_>>(b"Resources");
+        let mut total = 0u64;
+        for content in page_contents(page.raw()) {
+            total = total.saturating_add(runs.of_content(&content, resources.as_ref(), MAX_FORM_DEPTH));
+        }
+        if total > MAX_FORM_RUNS {
+            return Err(Refusal::Forms {
+                page: index,
+                limit: MAX_FORM_RUNS,
+            });
+        }
+    }
     Ok(())
+}
+
+fn page_contents<'a>(page: &Dict<'a>) -> Vec<Stream<'a>> {
+    match page.get::<Array<'_>>(b"Contents") {
+        Some(list) => list.iter::<Stream<'_>>().take(10_000).collect(),
+        None => page.get::<Stream<'_>>(b"Contents").into_iter().collect(),
+    }
+}
+
+/// How many times forms run, counted as the engine would draw them.
+#[derive(Default)]
+struct FormRuns {
+    /// By form and the depth left when it runs.
+    known: HashMap<(ObjectIdentifier, u32), u64>,
+}
+
+impl FormRuns {
+    /// Form runs caused by `content`, drawn with `resources`, with `depth` levels left.
+    fn of_content(&mut self, content: &Stream<'_>, resources: Option<&Dict<'_>>, depth: u32) -> u64 {
+        if depth == 0 {
+            return 0;
+        }
+        let Ok(data) = content.decoded() else { return 0 };
+        let Some(xobjects) = resources.and_then(|r| r.get::<Dict<'_>>(b"XObject")) else {
+            return 0;
+        };
+        let mut total = 0u64;
+        for name in drawn_names(&data) {
+            let Some(form) = xobjects.get::<Stream<'_>>(name.as_slice()).filter(|s| {
+                s.dict()
+                    .get::<Name<'_>>(b"Subtype")
+                    .is_some_and(|n| n.as_str() == "Form")
+            }) else {
+                continue;
+            };
+            total = total.saturating_add(self.of_form(&form, resources, depth - 1));
+            if total > MAX_FORM_RUNS {
+                break;
+            }
+        }
+        total
+    }
+
+    /// Runs of `form` itself and the forms it draws, with `depth` levels left after it.
+    fn of_form(&mut self, form: &Stream<'_>, parent: Option<&Dict<'_>>, depth: u32) -> u64 {
+        let key = (form.obj_id(), depth);
+        if let Some(n) = self.known.get(&key) {
+            return *n;
+        }
+        // Stop a cycle being followed while it is worked out; the depth bounds it anyway.
+        self.known.insert(key, 1);
+        let own = form.dict().get::<Dict<'_>>(b"Resources");
+        let n = 1u64.saturating_add(self.of_content(form, own.as_ref().or(parent), depth));
+        self.known.insert(key, n);
+        n
+    }
+}
+
+/// The names given to `Do` in content, in order.
+fn drawn_names(content: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut last_name: Option<&[u8]> = None;
+    let mut i = 0;
+    while let Some(&b) = content.get(i) {
+        if b == b'/' {
+            let start = i + 1;
+            let mut end = start;
+            while content
+                .get(end)
+                .is_some_and(|c| !c.is_ascii_whitespace() && !b"/[]<>(){}%".contains(c))
+            {
+                end += 1;
+            }
+            last_name = content.get(start..end);
+            i = end;
+            continue;
+        }
+        if b == b'D'
+            && content.get(i + 1) == Some(&b'o')
+            && content
+                .get(i + 2)
+                .is_none_or(|c| c.is_ascii_whitespace() || b"/[]<>(){}%".contains(c))
+            && i.checked_sub(1)
+                .and_then(|p| content.get(p))
+                .is_none_or(|c| c.is_ascii_whitespace())
+        {
+            if let Some(name) = last_name.take() {
+                out.push(name.to_vec());
+                if out.len() >= 100_000 {
+                    break;
+                }
+            }
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    out
 }
 
 /// How many bytes `stream` decodes to, counted without keeping them. Flate stages, the only

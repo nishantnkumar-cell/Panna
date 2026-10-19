@@ -31,3 +31,6 @@ path = "fuzz_targets/import_data.rs"
 test = false
 doc = false
 bench = false
+
+[patch.crates-io]
+hayro-syntax = { path = "../vendor/hayro-syntax" }
