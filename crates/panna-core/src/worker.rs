@@ -69,6 +69,8 @@ pub enum PageEdit {
     Bookmarks(Vec<crate::OutlineItem>),
     /// Sets how the document opens.
     InitialView(crate::InitialView),
+    /// Labels the pages with these ranges, by start page.
+    PageLabels(Vec<crate::LabelRange>),
     /// Draws a watermark or background on these pages.
     Watermark {
         pages: Vec<usize>,

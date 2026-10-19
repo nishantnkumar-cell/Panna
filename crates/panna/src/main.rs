@@ -18,6 +18,7 @@ mod find;
 mod form;
 mod icons;
 mod initial;
+mod labels;
 mod layout;
 mod links;
 mod measure;
@@ -191,6 +192,7 @@ enum Message {
     Flatten(pages::FlattenEvent),
     ReplaceFileChosen(Option<PathBuf>),
     Replace(pages::ReplaceEvent),
+    Labels(labels::Event),
     /// The Password protection card.
     Protect(protect::Event),
     /// The Remove hidden information card.
@@ -490,6 +492,7 @@ struct App {
     /// Choosing what to flatten.
     flattening: Option<pages::Flattening>,
     replacing: Option<pages::Replacing>,
+    labelling: Option<labels::Labelling>,
     /// Choosing password protection.
     protecting: Option<protect::Protecting>,
     signing: Option<signing::Signing>,
@@ -938,6 +941,7 @@ impl App {
             exporting: None,
             flattening: None,
             replacing: None,
+            labelling: None,
             protecting: None,
             signing: None,
             cleaning: None,
@@ -1280,15 +1284,12 @@ impl App {
                 Task::none()
             }
             Message::PageInput(value) => {
-                self.page_input = value.chars().filter(char::is_ascii_digit).take(6).collect();
+                // A page number, or a label such as "iv" when the pages have labels.
+                self.page_input = value.chars().filter(|c| !c.is_control()).take(24).collect();
                 Task::none()
             }
             Message::PageSubmit => {
-                let target = self
-                    .page_input
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|n| n.checked_sub(1));
+                let target = self.typed_page();
                 self.page_input.clear();
                 // Hand the keyboard back to the page, so Home, End and the tool keys work again.
                 // Focusing the (unfocusable) page view takes focus off the box.
@@ -1455,6 +1456,8 @@ impl App {
                     self.blank = None;
                 } else if self.replacing.is_some() {
                     self.replacing = None;
+                } else if self.labelling.is_some() {
+                    self.labelling = None;
                 } else if self.protecting.is_some() {
                     self.protecting = None;
                 } else if self.signing.is_some() {
@@ -2864,6 +2867,28 @@ impl App {
                 operation::focus(pages::replace_input_id())
                     .chain(operation::select_all(pages::replace_input_id()))
             }
+            Message::Labels(event) => {
+                let current = self.current_page();
+                let Some(state) = &mut self.labelling else {
+                    return Task::none();
+                };
+                match event {
+                    labels::Event::Cancel => self.labelling = None,
+                    labels::Event::Go => {
+                        let Some(ranges) = state.ranges() else {
+                            return Task::none();
+                        };
+                        self.labelling = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        self.pages_kept = true;
+                        return self.edit_pages(PageEdit::PageLabels(ranges), current, false);
+                    }
+                    event => state.update(event, current),
+                }
+                Task::none()
+            }
             Message::Replace(event) => {
                 let Some(state) = &mut self.replacing else {
                     return Task::none();
@@ -3644,6 +3669,10 @@ impl App {
                 },
                 Message::InsertFileChosen,
             ),
+            pages::Op::Labels => {
+                self.labelling = Some(labels::Labelling::new(&doc.info.page_labels, doc.pages.len()));
+                Task::none()
+            }
             pages::Op::Replace => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -4950,6 +4979,7 @@ impl App {
                 layers: Vec::new(),
                 signatures: Vec::new(),
                 initial_view: panna_core::InitialView::default(),
+                page_labels: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -5124,6 +5154,24 @@ impl App {
         ])
     }
 
+    /// The page typed in the page box, from 0: a label the pages have, or else a number.
+    fn typed_page(&self) -> Option<usize> {
+        let typed = self.page_input.trim();
+        let doc = self.doc.as_ref()?;
+        let labels = &doc.info.page_labels;
+        if !labels.is_empty() {
+            let count = doc.pages.len().min(100_000);
+            let all: Vec<String> = (0..count).map(|i| panna_core::page_label(labels, i)).collect();
+            if let Some(i) = all.iter().position(|l| l == typed) {
+                return Some(i);
+            }
+            if let Some(i) = all.iter().position(|l| l.eq_ignore_ascii_case(typed)) {
+                return Some(i);
+            }
+        }
+        typed.parse::<usize>().ok().and_then(|n| n.checked_sub(1))
+    }
+
     fn current_page(&self) -> usize {
         self.doc.as_ref().map_or(0, |d| {
             d.layout
@@ -5263,8 +5311,13 @@ impl App {
         let page_count = self.doc.as_ref().map_or(0, |d| d.pages.len());
         let has_doc = page_count > 0;
         let current = self.current_page() + 1;
+        let labels = self
+            .doc
+            .as_ref()
+            .map_or(&[][..], |d| d.info.page_labels.as_slice());
+        let current_label = panna_core::page_label(labels, current - 1);
 
-        let page_box = text_input(&current.to_string(), &self.page_input)
+        let page_box = text_input(&current_label, &self.page_input)
             .id(page_box_id())
             .on_input(Message::PageInput)
             .on_submit(Message::PageSubmit)
@@ -5303,7 +5356,12 @@ impl App {
             gap(),
             icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
             icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
-            text(format!("of {page_count}")).into(),
+            text(if current_label == current.to_string() {
+                format!("of {page_count}")
+            } else {
+                format!("({current} of {page_count})")
+            })
+            .into(),
             icons::button(Icon::NextPage, "Next page (Page Down)", on(Message::NextPage)),
             gap(),
             icons::button(
@@ -5622,6 +5680,9 @@ impl App {
         if let Some(state) = &self.blank {
             layers.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
         }
+        if let Some(state) = &self.labelling {
+            layers.push(modal(labels::card(state), Message::Labels(labels::Event::Cancel)));
+        }
         if let Some(state) = &self.replacing {
             layers.push(modal(
                 pages::replace_card(state),
@@ -5822,6 +5883,7 @@ impl App {
                 layout: &doc.thumb_layout,
                 thumbs_images: &doc.thumbs,
                 outline: &doc.info.outline,
+                page_labels: &doc.info.page_labels,
                 bookmarks: &self.bookmarks,
                 current: self.current_page(),
                 find: &self.find,

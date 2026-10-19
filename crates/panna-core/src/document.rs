@@ -48,6 +48,8 @@ pub struct DocumentInfo {
     pub signatures: Vec<crate::Signature>,
     /// How the document asks to be shown when it opens.
     pub initial_view: crate::InitialView,
+    /// How the pages are labelled, by start page; empty when they're just numbered.
+    pub page_labels: Vec<crate::LabelRange>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -418,6 +420,7 @@ impl Document {
             DocumentInfo {
                 signatures,
                 initial_view: crate::InitialView::read(&self.pdf),
+                page_labels: crate::labels::read(&self.pdf),
                 fields,
                 links,
                 protected,
@@ -1011,6 +1014,14 @@ impl Document {
     /// The document with its bookmarks replaced by `items`, in reading order, as an
     /// incremental update. Bookmarks read from the file ([`DocumentInfo::outline`]) keep
     /// their exact destination and style unless pointed at another page.
+    /// The file's bytes with its pages labelled by `ranges`, as an incremental update.
+    pub fn with_page_labels(&self, ranges: &[crate::LabelRange]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::with_page_labels(&self.pdf, &self.bytes, self.password.as_str(), ranges)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     pub fn with_bookmarks(&self, items: &[crate::OutlineItem]) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::with_outline(&self.pdf, &self.bytes, self.password.as_str(), items)

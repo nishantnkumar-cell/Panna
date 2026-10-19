@@ -288,6 +288,7 @@ pub(crate) fn perform<'a>(
             PageEdit::Recognise(pages) => revision(doc, doc.recognised(&pages).map(|(bytes, _, _)| bytes)),
             PageEdit::Bookmarks(items) => revision(doc, doc.with_bookmarks(&items)),
             PageEdit::InitialView(view) => revision(doc, doc.with_initial_view(&view)),
+            PageEdit::PageLabels(ranges) => revision(doc, doc.with_page_labels(&ranges)),
             PageEdit::Watermark { pages, mark } => revision(doc, doc.with_watermark(&pages, &mark)),
         }),
     }

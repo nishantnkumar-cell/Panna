@@ -163,6 +163,46 @@ fn pages_are_replaced_and_bookmarks_follow_their_replacement() {
 }
 
 #[test]
+fn page_labels_are_read_changed_and_removed() {
+    use panna_core::{LabelRange, LabelStyle, page_label};
+    let doc = open(three_pages(), None);
+    let labels = doc.info().unwrap().page_labels;
+    assert_eq!(
+        labels,
+        [LabelRange {
+            start: 0,
+            style: LabelStyle::LowerRoman,
+            prefix: String::new(),
+            first: 1
+        }]
+    );
+    assert_eq!(page_label(&labels, 2), "iii");
+    let ranges = vec![
+        LabelRange {
+            start: 0,
+            style: LabelStyle::UpperRoman,
+            prefix: String::new(),
+            first: 1,
+        },
+        LabelRange {
+            start: 1,
+            style: LabelStyle::Decimal,
+            prefix: "p. ".into(),
+            first: 1,
+        },
+    ];
+    let changed = open(doc.with_page_labels(&ranges).unwrap(), None);
+    let labels = changed.info().unwrap().page_labels;
+    assert_eq!(labels, ranges);
+    let shown: Vec<String> = (0..3).map(|i| page_label(&labels, i)).collect();
+    assert_eq!(shown, ["I", "p. 1", "p. 2"]);
+    // Plain numbers take the labels out.
+    let plain = open(changed.with_page_labels(&[]).unwrap(), None);
+    assert!(plain.info().unwrap().page_labels.is_empty());
+    assert_eq!(plain.page_count(), 3);
+}
+
+#[test]
 fn password_protection_is_kept() {
     for (name, bytes) in [
         ("RC4", &include_bytes!("fixtures/encrypted-rc4.pdf")[..]),

@@ -22,6 +22,8 @@ pub enum Op {
     InsertFile,
     /// Asks for a PDF and which pages of it replace which pages here.
     Replace,
+    /// Asks how the pages are numbered (i, ii, iii then 1, 2, 3).
+    Labels,
     /// Asks which pages to save as new files.
     Extract,
     /// Asks how much to trim from the page edges.
@@ -118,6 +120,11 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             ev(Op::Extract, true)
         ),
         icons::button(Icon::Crop, "Crop pages", ev(Op::Crop, true)),
+        icons::button(
+            Icon::PageLabels,
+            "Page labels (i, ii, iii then 1, 2, 3)",
+            ev(Op::Labels, true)
+        ),
         icons::button(
             Icon::PageNumbers,
             "Add page numbers, headers and footers",

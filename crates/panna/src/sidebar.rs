@@ -207,6 +207,8 @@ pub struct ViewData<'a> {
     pub layout: &'a ThumbLayout,
     pub thumbs_images: &'a [crate::Thumb],
     pub outline: &'a [OutlineItem],
+    /// How pages are labelled, for the thumbnails.
+    pub page_labels: &'a [panna_core::LabelRange],
     pub bookmarks: &'a crate::bookmarks::Editor,
     pub current: usize,
     pub find: &'a Find,
@@ -377,9 +379,10 @@ impl Sidebar {
             } else {
                 0
             };
+            let page_label = panna_core::page_label(data.page_labels, index);
             let label: Element<'a, Message> = if found > 0 {
                 row![
-                    text((index + 1).to_string()).size(12),
+                    text(page_label).size(12),
                     container(text(found.to_string()).size(10))
                         .padding([0, 5])
                         .style(|theme: &Theme| {
@@ -395,7 +398,7 @@ impl Sidebar {
                 .height(LABEL_H)
                 .into()
             } else {
-                text((index + 1).to_string()).size(12).height(LABEL_H).into()
+                text(page_label).size(12).height(LABEL_H).into()
             };
             let entry = column![frame, label].align_x(Center).spacing(2);
             button(entry)

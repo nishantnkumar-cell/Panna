@@ -197,3 +197,20 @@ fn bookmarks_added_to_encrypted_files_read_back() {
         assert_eq!(outline[0].title, "Summary", "{name}");
     }
 }
+
+#[test]
+fn page_labels_in_encrypted_files_read_back() {
+    for (name, bytes) in FIXTURES {
+        let doc = open(bytes, "secret");
+        let ranges = [panna_core::LabelRange {
+            start: 0,
+            style: panna_core::LabelStyle::Decimal,
+            prefix: "Annexe-".into(),
+            first: 3,
+        }];
+        let saved = doc.with_page_labels(&ranges).unwrap();
+        let labels = doc.reopen(saved).unwrap().info().unwrap().page_labels;
+        assert_eq!(labels, ranges, "{name}");
+        assert_eq!(panna_core::page_label(&labels, 0), "Annexe-3", "{name}");
+    }
+}
