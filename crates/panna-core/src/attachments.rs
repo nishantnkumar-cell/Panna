@@ -138,12 +138,15 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<Attachment> {
         .collect()
 }
 
-/// The contents of the attached file at `index` in [`read`]'s list.
-pub(crate) fn data(pdf: &Pdf, index: usize) -> Option<Vec<u8>> {
+/// The contents of the attached file at `index` in [`read`]'s list, if it unpacks to no more
+/// than `limit` bytes (measured first, so a decompression bomb is never unpacked).
+pub(crate) fn data(pdf: &Pdf, index: usize, limit: u64) -> Option<Vec<u8>> {
     let spec = specs(pdf)
         .into_iter()
         .filter(|(spec, _)| file(spec).is_some())
         .nth(index)?
         .0;
-    file(&spec)?.decoded().ok().map(|d| d.into_owned())
+    let stream = file(&spec)?;
+    crate::guard::decoded_size(&stream, limit).ok()?;
+    stream.decoded().ok().map(|d| d.into_owned())
 }

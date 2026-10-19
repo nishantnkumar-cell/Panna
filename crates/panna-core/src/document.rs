@@ -126,17 +126,45 @@ impl fmt::Debug for RenderedPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenError {
     Io(String),
-    TooLarge { bytes: u64, limit: u64 },
-    TooManyPages { pages: usize, limit: usize },
+    TooLarge {
+        bytes: u64,
+        limit: u64,
+    },
+    TooManyPages {
+        pages: usize,
+        limit: usize,
+    },
     PasswordRequired,
     UnsupportedEncryption,
     Invalid,
     EngineCrashed,
+    /// The file holds data built to exhaust memory when decoded.
+    Hostile(crate::guard::Refusal),
 }
 
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use crate::guard::Refusal;
+        let mb = |b: &u64| b / 1_000_000;
         match self {
+            Self::Hostile(Refusal::Stream { limit, .. }) => write!(
+                f,
+                "This file wasn't opened: part of it expands to more than {} MB when unpacked. \
+                 Files built like this are used to crash PDF readers.",
+                mb(limit)
+            ),
+            Self::Hostile(Refusal::Page { page, limit, .. }) => write!(
+                f,
+                "This file wasn't opened: page {} expands to more than {} MB when unpacked. \
+                 Files built like this are used to crash PDF readers.",
+                page + 1,
+                mb(limit)
+            ),
+            Self::Hostile(Refusal::Image { width, height, .. }) => write!(
+                f,
+                "This file wasn't opened: it has a picture that claims to be {width} × {height} \
+                 pixels, too large to show safely."
+            ),
             Self::Io(e) => write!(f, "Couldn't read the file: {e}"),
             Self::TooLarge { bytes, limit } => write!(
                 f,
@@ -243,6 +271,9 @@ impl Document {
                 limit: limits.max_pages,
             });
         }
+        catch_unwind(AssertUnwindSafe(|| crate::guard::check(&pdf, &limits)))
+            .map_err(|_| OpenError::EngineCrashed)?
+            .map_err(OpenError::Hostile)?;
         Ok(Self {
             pdf,
             bytes,
@@ -933,9 +964,13 @@ impl Document {
 
     /// The contents of attached file `index` (in [`DocumentInfo::attachments`]).
     pub fn attachment(&self, index: usize) -> Option<Vec<u8>> {
-        catch_unwind(AssertUnwindSafe(|| crate::attachments::data(&self.pdf, index)))
-            .ok()
-            .flatten()
+        // An attachment may be as large as a file Panna would open, but no larger.
+        let limit = self.limits.max_file_bytes;
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::attachments::data(&self.pdf, index, limit)
+        }))
+        .ok()
+        .flatten()
     }
 
     /// The whole document, without password protection, for the printing system. Fails when
