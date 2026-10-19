@@ -9,7 +9,7 @@ use crate::{Message, export, protect};
 
 /// The All tools card. Each tool closes the card and opens its own.
 pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
-    let tool = |icon: Icon, label: &'static str, message: Message| {
+    let tool = |icon: Icon, label: &'static str, message: Message| -> Element<'a, Message> {
         button(
             row![icons::glyph(icon, true), text(label)]
                 .spacing(10)
@@ -22,134 +22,146 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             _ => button::text(theme, status),
         })
         .on_press(message)
+        .into()
+    };
+    let mut tools: Vec<Element<'a, Message>> = vec![
+        tool(
+            Icon::FromPictures,
+            "Make a PDF from pictures…",
+            Message::FromPictures,
+        ),
+        tool(
+            Icon::Export,
+            "Export as text, Office files or pictures…",
+            Message::Export(export::Event::Open),
+        ),
+    ];
+    if has_doc {
+        tools.extend([
+            tool(
+                Icon::Shrink,
+                "Save a smaller copy…",
+                Message::Shrink(crate::shrink::Event::Open),
+            ),
+            tool(
+                Icon::ScanText,
+                "Recognise text in scanned pages (OCR)",
+                Message::Recognise,
+            ),
+            tool(
+                Icon::ReadAloud,
+                "Read this page aloud",
+                Message::ReadAloud(crate::speech::Event::Page),
+            ),
+            tool(
+                Icon::ReadAloud,
+                "Read aloud to the end",
+                Message::ReadAloud(crate::speech::Event::ToEnd),
+            ),
+            tool(
+                Icon::EditPage,
+                "Add text, pictures or links to pages",
+                Message::Add(crate::add::Event::Toggle),
+            ),
+            tool(
+                Icon::EditPictures,
+                "Move, replace or delete pictures",
+                Message::EditPictures(crate::pictures::Event::Toggle),
+            ),
+            tool(
+                Icon::PrepareForm,
+                "Prepare a form (add or delete fields)",
+                Message::Prepare(crate::prepare::Event::Toggle),
+            ),
+            tool(
+                Icon::Compare,
+                "Compare with another file…",
+                Message::Compare(crate::compare::Event::Open),
+            ),
+            tool(
+                Icon::Preflight,
+                "Check for PDF/A (archiving)",
+                Message::Preflight(crate::preflight::Event::Run),
+            ),
+            tool(
+                Icon::Print,
+                "Check for PDF/X (printing)",
+                Message::Preflight(crate::preflight::Event::RunPrint),
+            ),
+            tool(
+                Icon::Signed,
+                "Sign with a certificate…",
+                Message::Signing(crate::signing::Event::Open),
+            ),
+            tool(
+                Icon::Accessibility,
+                "Check accessibility",
+                Message::Preflight(crate::preflight::Event::RunAccessibility),
+            ),
+            tool(
+                Icon::Redact,
+                "Remove content for good (redact)",
+                Message::Redact(crate::redact::Event::Toggle),
+            ),
+            tool(
+                Icon::CommentsImport,
+                "Add comments from a file…",
+                Message::ImportComments,
+            ),
+            tool(
+                Icon::CommentsExport,
+                "Save comments to a file…",
+                Message::ExportComments,
+            ),
+        ]);
+    }
+    if has_form {
+        tools.extend([
+            tool(
+                Icon::DataImport,
+                "Fill in the form from a data file…",
+                Message::ImportFormData,
+            ),
+            tool(
+                Icon::DataExport,
+                "Save form data (FDF, XFDF)…",
+                Message::ExportFormData,
+            ),
+        ]);
+    }
+    tools.extend([
+        tool(
+            Icon::Protect,
+            "Password protection…",
+            Message::Protect(protect::Event::Open),
+        ),
+        tool(
+            Icon::Clean,
+            "Remove hidden information…",
+            Message::Clean(protect::CleanEvent::Open),
+        ),
+    ]);
+    // Two columns, so the card fits on a laptop screen.
+    let half = tools.len().div_ceil(2);
+    let right = tools.split_off(half);
+    let side = |items: Vec<Element<'a, Message>>| {
+        items
+            .into_iter()
+            .fold(column![].spacing(4).width(340), iced::widget::Column::push)
     };
     container(
         column![
             text("All tools").size(16),
-            tool(
-                Icon::FromPictures,
-                "Make a PDF from pictures…",
-                Message::FromPictures
-            ),
-            tool(
-                Icon::Export,
-                "Export as text, Office files or pictures…",
-                Message::Export(export::Event::Open)
-            ),
+            row![side(tools), side(right)].spacing(12),
+            row![
+                space::horizontal(),
+                button("Close")
+                    .style(button::secondary)
+                    .on_press(Message::AllTools(false)),
+            ],
         ]
-        .push(has_doc.then(|| {
-            column![
-                tool(
-                    Icon::Shrink,
-                    "Save a smaller copy…",
-                    Message::Shrink(crate::shrink::Event::Open)
-                ),
-                tool(
-                    Icon::ReadAloud,
-                    "Read this page aloud",
-                    Message::ReadAloud(crate::speech::Event::Page)
-                ),
-                tool(
-                    Icon::ReadAloud,
-                    "Read aloud to the end",
-                    Message::ReadAloud(crate::speech::Event::ToEnd)
-                ),
-                tool(
-                    Icon::EditPage,
-                    "Add text, pictures or links to pages",
-                    Message::Add(crate::add::Event::Toggle)
-                ),
-                tool(
-                    Icon::EditPictures,
-                    "Move, replace or delete pictures",
-                    Message::EditPictures(crate::pictures::Event::Toggle)
-                ),
-                tool(
-                    Icon::PrepareForm,
-                    "Prepare a form (add or delete fields)",
-                    Message::Prepare(crate::prepare::Event::Toggle)
-                ),
-                tool(
-                    Icon::Compare,
-                    "Compare with another file…",
-                    Message::Compare(crate::compare::Event::Open)
-                ),
-                tool(
-                    Icon::Preflight,
-                    "Check for PDF/A (archiving)",
-                    Message::Preflight(crate::preflight::Event::Run)
-                ),
-                tool(
-                    Icon::Print,
-                    "Check for PDF/X (printing)",
-                    Message::Preflight(crate::preflight::Event::RunPrint)
-                ),
-                tool(
-                    Icon::Signed,
-                    "Sign with a certificate…",
-                    Message::Signing(crate::signing::Event::Open)
-                ),
-                tool(
-                    Icon::Accessibility,
-                    "Check accessibility",
-                    Message::Preflight(crate::preflight::Event::RunAccessibility)
-                ),
-                tool(
-                    Icon::Redact,
-                    "Remove content for good (redact)",
-                    Message::Redact(crate::redact::Event::Toggle)
-                ),
-                tool(
-                    Icon::CommentsImport,
-                    "Add comments from a file…",
-                    Message::ImportComments
-                ),
-                tool(
-                    Icon::CommentsExport,
-                    "Save comments to a file…",
-                    Message::ExportComments
-                ),
-            ]
-            .spacing(4)
-        }))
-        .push(has_form.then(|| {
-            column![
-                tool(
-                    Icon::DataImport,
-                    "Fill in the form from a data file…",
-                    Message::ImportFormData
-                ),
-                tool(
-                    Icon::DataExport,
-                    "Save form data (FDF, XFDF)…",
-                    Message::ExportFormData
-                ),
-            ]
-            .spacing(4)
-        }))
-        .push(
-            column![
-                tool(
-                    Icon::Protect,
-                    "Password protection…",
-                    Message::Protect(protect::Event::Open)
-                ),
-                tool(
-                    Icon::Clean,
-                    "Remove hidden information…",
-                    Message::Clean(protect::CleanEvent::Open)
-                ),
-                row![
-                    space::horizontal(),
-                    button("Close")
-                        .style(button::secondary)
-                        .on_press(Message::AllTools(false)),
-                ],
-            ]
-            .spacing(4),
-        )
-        .spacing(4)
-        .width(340),
+        .spacing(8)
+        .width(692),
     )
     .padding(16)
     .style(container::rounded_box)

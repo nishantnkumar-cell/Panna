@@ -246,6 +246,8 @@ enum Message {
     FormDataChosen(Option<PathBuf>),
     /// The Save a smaller copy card.
     Shrink(shrink::Event),
+    /// Recognise the text in pages without any (OCR).
+    Recognise,
     /// Where to save the smaller copy, and the resolution pictures may be scaled down to.
     CompactTo(Option<PathBuf>, Option<u32>),
     Compacted(Result<(u64, u64), SaveError>),
@@ -433,6 +435,8 @@ struct App {
     cleaning: Option<panna_core::Cleanup>,
     /// The Save a smaller copy card.
     shrinking: Option<shrink::Shrinking>,
+    /// Text is being recognised in the pages.
+    recognising: bool,
     /// The All tools card is showing.
     all_tools: bool,
     /// Pictures chosen for a new PDF, while asking where to save it.
@@ -769,6 +773,7 @@ impl App {
             signing: None,
             cleaning: None,
             shrinking: None,
+            recognising: false,
             all_tools: false,
             pictures: Vec::new(),
             extract_pages: Vec::new(),
@@ -811,6 +816,8 @@ impl App {
                     .clone()
                     .or_else(|| doc.path.file_name().map(|n| n.to_string_lossy().into_owned()))
                     .unwrap_or_default();
+                // Window titles can't hold control characters such as NUL.
+                let name: String = name.chars().filter(|c| !c.is_control()).collect();
                 format!("{name} — Panna")
             }
             None => "Panna".into(),
@@ -1438,6 +1445,18 @@ impl App {
                     Err(e) => self.notice = Some(format!("Couldn't read the form data: {e}")),
                 }
                 Task::none()
+            }
+            Message::Recognise => {
+                self.all_tools = false;
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.pages_busy || self.saving {
+                    return Task::none();
+                }
+                let pages = (0..doc.pages.len()).collect();
+                self.recognising = true;
+                self.notice = Some("Recognising text in pages without any…".into());
+                let current = self.current_page();
+                self.edit_pages(PageEdit::Recognise(pages), current, false)
             }
             Message::Shrink(event) => {
                 let state = self.shrinking.get_or_insert_default();
@@ -2834,16 +2853,26 @@ impl App {
                 result,
             } => {
                 self.pages_busy = false;
+                let recognised = std::mem::take(&mut self.recognising);
                 let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
                     return Task::none();
                 };
                 let info = match result {
                     Ok(info) => info,
+                    Err(e) if recognised => {
+                        self.notice = Some(e.to_string());
+                        return Task::none();
+                    }
                     Err(e) => {
                         self.notice = Some(format!("The pages couldn't be changed: {e}"));
                         return Task::none();
                     }
                 };
+                if recognised {
+                    self.notice = Some(
+                        "Text recognised. It can now be found, selected and copied; save to keep it.".into(),
+                    );
+                }
                 self.page_edits = if undo {
                     self.page_edits.saturating_sub(1)
                 } else {

@@ -85,6 +85,11 @@ pub enum SaveError {
     AlreadyTagged,
     /// No page has text to tag.
     NothingToTag,
+    /// Text recognition found no words on the pages that needed it; `true` when every page
+    /// asked about already has text.
+    NothingRecognised(bool),
+    /// The text recognition engine failed, and why.
+    Recognition(String),
 }
 
 impl fmt::Display for SaveError {
@@ -129,6 +134,12 @@ impl fmt::Display for SaveError {
                  from Password protection in All tools."
             ),
             Self::AlreadyTagged => write!(f, "This PDF has tags already."),
+            Self::NothingRecognised(true) => write!(
+                f,
+                "These pages have text already, so there's nothing to recognise."
+            ),
+            Self::NothingRecognised(false) => write!(f, "No text was found on these pages."),
+            Self::Recognition(why) => write!(f, "Text recognition failed: {why}"),
             Self::NothingToTag => write!(
                 f,
                 "This PDF has no text to tag. If it's scanned, its text needs recognising first."
@@ -383,6 +394,30 @@ pub(crate) fn header_footer(
                 .over
                 .push(marks::Drawing::Lines(marks.for_page(number, pages.len(), &date)));
         }
+    }
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+pub(crate) use marks::Words;
+
+/// Every page of `doc`, with the words recognised on some pages drawn invisibly over them
+/// (each word as text the size of its box, as page text boxes), so they can be found,
+/// selected and copied.
+pub(crate) fn with_hidden_text(
+    doc: Input<'_>,
+    count: usize,
+    words: &[(usize, Words)],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for (page, words) in words {
+        let extra = extras.get_mut(*page).ok_or(SaveError::NoSuchPage(*page))?;
+        extra.over.push(marks::Drawing::Hidden(words.clone()));
     }
     rebuild_from(
         &[doc],

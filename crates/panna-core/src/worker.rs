@@ -87,6 +87,9 @@ pub enum PageEdit {
     Protect(Option<crate::Protection>),
     /// Draws comments, form fields or both into the pages.
     Flatten { comments: bool, fields: bool },
+    /// Recognises the text on these pages (those without text of their own), and lays it over
+    /// them invisibly.
+    Recognise(Vec<usize>),
     /// Goes back to before the last page change.
     Undo,
 }
@@ -781,6 +784,9 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     PageEdit::Add { page, additions } => current
                         .with_additions(page, &additions)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::Recognise(pages) => current
+                        .recognised(&pages)
+                        .and_then(|(bytes, _, _)| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Watermark { pages, mark } => current
                         .with_watermark(&pages, &mark)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),

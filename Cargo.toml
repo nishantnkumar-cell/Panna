@@ -17,6 +17,20 @@ unwrap_used = "deny"
 expect_used = "warn"
 indexing_slicing = "warn"
 
+# Text recognition is far too slow unoptimised, even while developing.
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.ocrs]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

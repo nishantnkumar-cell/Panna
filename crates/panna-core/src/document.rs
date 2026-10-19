@@ -278,8 +278,15 @@ impl Document {
                 .collect();
             let meta = self.pdf.metadata();
             let text = |v: &Option<Vec<u8>>| {
+                // Control characters (such as a C string's closing NUL) are dropped.
                 v.as_deref()
-                    .map(|t| decode_text_string(t).trim().to_owned())
+                    .map(|t| {
+                        let t: String = decode_text_string(t)
+                            .chars()
+                            .filter(|c| !c.is_control())
+                            .collect();
+                        t.trim().to_owned()
+                    })
                     .filter(|t| !t.is_empty())
             };
             let title = text(&meta.title);
@@ -417,6 +424,68 @@ impl Document {
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with the text on `pages` recognised (OCR) and laid over them invisibly, so
+    /// it can be found, selected and copied. Pages that have text already are left alone.
+    /// Also gives how many pages got text, and how many words in all.
+    pub fn recognised(&self, pages: &[usize]) -> Result<(Vec<u8>, usize, usize), crate::SaveError> {
+        /// Pages are read at this resolution, in dots per inch...
+        const DPI: f32 = 200.0;
+        /// ...but no wider or taller than this, in pixels.
+        const MAX_SIDE: f32 = 5000.0;
+        let cache = self.new_cache();
+        let mut found = Vec::new();
+        let mut needed = false;
+        for &page in pages {
+            if self
+                .page_text(page)
+                .is_ok_and(|t| !t.slice(0..t.len()).trim().is_empty())
+            {
+                continue;
+            }
+            needed = true;
+            let size = self.page_size(page).ok_or(crate::SaveError::NoSuchPage(page))?;
+            let scale = (DPI / 72.0).min(MAX_SIDE / size.width.max(size.height).max(1.0));
+            let picture = self
+                .render_page(&cache, page, scale)
+                .map_err(|e| crate::SaveError::Recognition(e.to_string()))?;
+            let rgb: Vec<u8> = picture
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|[r, g, b, _]| [*r, *g, *b])
+                .collect();
+            let words = crate::ocr::recognise(&rgb, picture.width, picture.height)
+                .map_err(crate::SaveError::Recognition)?;
+            // From pixels to points, as shown.
+            let x = f64::from(size.width) / f64::from(picture.width.max(1));
+            let y = f64::from(size.height) / f64::from(picture.height.max(1));
+            let words: crate::edit::Words = words
+                .into_iter()
+                .map(|w| {
+                    let [x0, top, x1, bottom] = w.rect;
+                    (w.text, [x0 * x, top * y, x1 * x, bottom * y])
+                })
+                .collect();
+            if !words.is_empty() {
+                found.push((page, words));
+            }
+        }
+        if found.is_empty() {
+            return Err(crate::SaveError::NothingRecognised(!needed));
+        }
+        let count = found.iter().map(|(_, w)| w.len()).sum();
+        let bytes = catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::with_hidden_text(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                &found,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)??;
+        Ok((bytes, found.len(), count))
     }
 
     /// The document in as small a file as can be written without changing how it looks, or

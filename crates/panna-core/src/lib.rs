@@ -21,6 +21,7 @@ mod forms;
 mod layers;
 mod limits;
 mod links;
+mod ocr;
 mod office;
 mod outline;
 mod preflight;

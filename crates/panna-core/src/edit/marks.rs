@@ -213,9 +213,15 @@ pub(crate) enum Drawing {
         rects: Vec<[f64; 4]>,
         color: Color,
     },
+    /// Words that can't be seen, each stretched over its box (left, top, right, bottom from
+    /// the top-left corner of the page as shown): recognised text over a scanned page.
+    Hidden(Words),
     /// One, then the other.
     Both(Box<Drawing>, Box<Drawing>),
 }
+
+/// Words and their boxes on a page: left, top, right, bottom from its top-left corner as shown.
+pub(crate) type Words = Vec<(String, [f64; 4])>;
 
 /// The fonts and transparency the drawings use, as they're named in the forms' resources.
 pub(crate) const RESOURCES: &str = "<< /Font << \
@@ -368,6 +374,31 @@ impl Drawing {
                     );
                 }
                 out.push_str(" f Q\n");
+                out
+            }
+            Drawing::Hidden(words) => {
+                // Invisible text (render mode 3), each word scaled sideways to fill its box.
+                let mut out = "q BT 3 Tr".to_owned();
+                for (text, [x0, top, x1, bottom]) in words {
+                    let em = text_width(text);
+                    // Helvetica reaches 0.72 of its size above the baseline and 0.21 below.
+                    let size = ((bottom - top) / 0.93).max(1.0);
+                    if em <= 0.0 || x1 <= x0 {
+                        continue;
+                    }
+                    let stretch = 100.0 * (x1 - x0) / (em * size);
+                    let _ = write!(
+                        out,
+                        " /PaHe {} Tf {} Tz 1 0 0 1 {} {} Tm (",
+                        n(size),
+                        n(stretch),
+                        n(*x0),
+                        n(height - bottom + 0.21 * size)
+                    );
+                    out.push_str(&literal(&win_ansi(text)));
+                    out.push_str(") Tj");
+                }
+                out.push_str(" ET Q\n");
                 out
             }
             Drawing::Both(a, b) => a.content(width, height) + &b.content(width, height),
