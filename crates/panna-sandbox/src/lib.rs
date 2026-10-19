@@ -68,7 +68,7 @@ mod system {
     /// start programs, or reach into other processes.
     fn no_network_or_programs() -> Result<(), String> {
         use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
-        let mut denied = vec![
+        let denied = vec![
             libc::SYS_socket,
             libc::SYS_socketpair,
             libc::SYS_connect,
@@ -94,8 +94,10 @@ mod system {
             libc::SYS_perf_event_open,
             libc::SYS_userfaultfd,
         ];
+        // Elsewhere (aarch64) new processes come only from clone, which threads need too;
+        // execve stays refused, so a child could only be another copy of this one.
         #[cfg(target_arch = "x86_64")]
-        denied.extend([libc::SYS_fork, libc::SYS_vfork]);
+        let denied = [denied, vec![libc::SYS_fork, libc::SYS_vfork]].concat();
         let rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> =
             denied.into_iter().map(|call| (call, Vec::new())).collect();
         let arch = std::env::consts::ARCH
