@@ -506,6 +506,38 @@ impl Document {
         catch_unwind(AssertUnwindSafe(|| crate::sig::read(&self.pdf, &self.bytes))).unwrap_or_default()
     }
 
+    /// The document signed with the certificate and key in a PKCS #12 file (.p12 or .pfx),
+    /// as an incremental update, so earlier signatures stay valid. The signature is invisible
+    /// and listed on the first page.
+    pub fn signed(
+        &self,
+        pkcs12: &[u8],
+        password: &str,
+        options: &crate::SignOptions,
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        let signer =
+            crate::sig::Signer::from_pkcs12(pkcs12, password).map_err(crate::SaveError::Certificate)?;
+        let signed_before = !self.signatures().is_empty();
+        let (mut bytes, room) = catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::prepare_signature(&self.pdf, &self.bytes, &signer.name(), options, signed_before)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)??;
+        let (before, after) = bytes.split_at(room.start);
+        let after = after.get(room.len()..).unwrap_or_default();
+        let der = signer
+            .sign(&[before, after])
+            .map_err(crate::SaveError::Certificate)?;
+        let hex: String = der.iter().map(|b| format!("{b:02X}")).collect();
+        let slot = bytes
+            .get_mut(room.start + 1..room.start + 1 + hex.len())
+            .filter(|_| hex.len() + 2 <= room.len())
+            .ok_or_else(|| {
+                crate::SaveError::Certificate("The certificate chain is too large to fit.".into())
+            })?;
+        slot.copy_from_slice(hex.as_bytes());
+        Ok(bytes)
+    }
+
     /// What makes the document harder to use with screen readers and other assistive
     /// technology: an empty list when the main checks pass.
     pub fn accessibility(&self) -> Vec<crate::AccessFinding> {

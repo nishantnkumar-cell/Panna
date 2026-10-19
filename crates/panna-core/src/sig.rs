@@ -591,3 +591,176 @@ pub(crate) fn read(pdf: &Pdf, bytes: &[u8]) -> Vec<Signature> {
         })
         .collect()
 }
+
+/// A private key to sign with.
+pub(crate) enum Key {
+    Rsa(Box<rsa::RsaPrivateKey>),
+    P256(p256::ecdsa::SigningKey),
+    P384(p384::ecdsa::SigningKey),
+}
+
+/// The signer's key and certificates (their own first) from a PKCS #12 file.
+pub(crate) struct Signer {
+    key: Key,
+    chain: Vec<Certificate>,
+}
+
+impl Signer {
+    pub(crate) fn from_pkcs12(bytes: &[u8], password: &str) -> Result<Self, String> {
+        let store = p12_keystore::KeyStore::from_pkcs12(bytes, password).map_err(|_| {
+            "The password is wrong, or the file isn't a certificate file (.p12 or .pfx).".to_owned()
+        })?;
+        let (_, chain) = store
+            .private_key_chain()
+            .ok_or_else(|| "The certificate file has no private key to sign with.".to_owned())?;
+        let key_der = chain.key();
+        let key = {
+            use p256::pkcs8::DecodePrivateKey;
+            if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_der(key_der) {
+                Key::Rsa(Box::new(k))
+            } else if let Ok(k) = p256::ecdsa::SigningKey::from_pkcs8_der(key_der) {
+                Key::P256(k)
+            } else if let Ok(k) = p384::ecdsa::SigningKey::from_pkcs8_der(key_der) {
+                Key::P384(k)
+            } else {
+                return Err(
+                    "The certificate's kind of key isn't supported yet (RSA, P-256 and P-384 are).".into(),
+                );
+            }
+        };
+        let chain: Vec<Certificate> = chain
+            .chain()
+            .iter()
+            .filter_map(|c| Certificate::from_der(c.as_der()).ok())
+            .collect();
+        if chain.is_empty() {
+            return Err("The certificate file has no certificate for its key.".into());
+        }
+        Ok(Self { key, chain })
+    }
+
+    /// The name on the signer's certificate.
+    pub(crate) fn name(&self) -> String {
+        self.chain
+            .first()
+            .map(|c| common_name(&c.tbs_certificate.subject))
+            .unwrap_or_default()
+    }
+
+    /// A detached CMS signature (as `adbe.pkcs7.detached` wants) over `parts`, with SHA-256.
+    pub(crate) fn sign(&self, parts: &[&[u8]]) -> Result<Vec<u8>, String> {
+        use cms::content_info::CmsVersion;
+        use cms::signed_data::{CertificateSet, EncapsulatedContentInfo, SignerInfos};
+        use der::asn1::{Any, SetOfVec};
+        use spki::AlgorithmIdentifierOwned;
+        use x509_cert::attr::Attribute;
+
+        let fail = |e: der::Error| format!("The signature couldn't be made: {e}");
+        let oid = |s: &str| ObjectIdentifier::new(s).map_err(|e| format!("{e}"));
+        let cert = self.chain.first().ok_or("No certificate")?;
+        let digest = Hash::Sha256.digest(parts);
+        let attr = |id: &str, value: Any| -> Result<Attribute, String> {
+            let mut values = SetOfVec::new();
+            values.insert(value).map_err(fail)?;
+            Ok(Attribute {
+                oid: oid(id)?,
+                values,
+            })
+        };
+        let data_oid = oid("1.2.840.113549.1.7.1")?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?;
+        let time = x509_cert::time::Time::UtcTime(der::asn1::UtcTime::from_unix_duration(now).map_err(fail)?);
+        let mut attrs = SetOfVec::new();
+        attrs
+            .insert(attr(
+                "1.2.840.113549.1.9.3",
+                Any::encode_from(&data_oid).map_err(fail)?,
+            )?)
+            .map_err(fail)?;
+        attrs
+            .insert(attr(
+                "1.2.840.113549.1.9.5",
+                Any::encode_from(&time).map_err(fail)?,
+            )?)
+            .map_err(fail)?;
+        attrs
+            .insert(attr(
+                "1.2.840.113549.1.9.4",
+                Any::encode_from(&OctetString::new(digest).map_err(fail)?).map_err(fail)?,
+            )?)
+            .map_err(fail)?;
+        let signed = attrs.to_der().map_err(fail)?;
+        let message_digest = Hash::Sha256.digest(&[&signed]);
+        let (signature, algorithm) = match &self.key {
+            Key::Rsa(key) => {
+                let mut rng = rand_core::OsRng;
+                let sig = key
+                    .sign_with_rng(&mut rng, rsa::Pkcs1v15Sign::new::<Sha256>(), &message_digest)
+                    .map_err(|e| format!("The signature couldn't be made: {e}"))?;
+                (sig, "1.2.840.113549.1.1.11")
+            }
+            Key::P256(key) => {
+                use p256::ecdsa::signature::hazmat::PrehashSigner;
+                let sig: p256::ecdsa::Signature = key
+                    .sign_prehash(&message_digest)
+                    .map_err(|e| format!("The signature couldn't be made: {e}"))?;
+                (sig.to_der().as_bytes().to_vec(), "1.2.840.10045.4.3.2")
+            }
+            Key::P384(key) => {
+                use p384::ecdsa::signature::hazmat::PrehashSigner;
+                let sig: p384::ecdsa::Signature = key
+                    .sign_prehash(&message_digest)
+                    .map_err(|e| format!("The signature couldn't be made: {e}"))?;
+                (sig.to_der().as_bytes().to_vec(), "1.2.840.10045.4.3.2")
+            }
+        };
+        let sha256 = AlgorithmIdentifierOwned {
+            oid: oid("2.16.840.1.101.3.4.2.1")?,
+            parameters: None,
+        };
+        let info = SignerInfo {
+            version: CmsVersion::V1,
+            sid: SignerIdentifier::IssuerAndSerialNumber(cms::cert::IssuerAndSerialNumber {
+                issuer: cert.tbs_certificate.issuer.clone(),
+                serial_number: cert.tbs_certificate.serial_number.clone(),
+            }),
+            digest_alg: sha256.clone(),
+            signed_attrs: Some(attrs),
+            signature_algorithm: AlgorithmIdentifierOwned {
+                oid: oid(algorithm)?,
+                parameters: matches!(self.key, Key::Rsa(_)).then_some(Any::null()),
+            },
+            signature: OctetString::new(signature).map_err(fail)?,
+            unsigned_attrs: None,
+        };
+        let mut digests = SetOfVec::new();
+        digests.insert(sha256).map_err(fail)?;
+        let mut certs = SetOfVec::new();
+        for c in &self.chain {
+            certs
+                .insert(CertificateChoices::Certificate(c.clone()))
+                .map_err(fail)?;
+        }
+        let mut infos = SetOfVec::new();
+        infos.insert(info).map_err(fail)?;
+        let data = SignedData {
+            version: CmsVersion::V1,
+            digest_algorithms: digests,
+            encap_content_info: EncapsulatedContentInfo {
+                econtent_type: data_oid,
+                econtent: None,
+            },
+            certificates: Some(CertificateSet(certs)),
+            crls: None,
+            signer_infos: SignerInfos(infos),
+        };
+        ContentInfo {
+            content_type: oid("1.2.840.113549.1.7.2")?,
+            content: Any::encode_from(&data).map_err(fail)?,
+        }
+        .to_der()
+        .map_err(fail)
+    }
+}

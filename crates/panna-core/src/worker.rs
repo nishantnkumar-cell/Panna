@@ -20,6 +20,15 @@ type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
 type ArchiveReply = Box<dyn FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send>;
+/// What signing needs.
+pub(crate) struct SignJob {
+    path: PathBuf,
+    pkcs12: std::sync::Arc<Vec<u8>>,
+    password: String,
+    options: crate::SignOptions,
+}
+
+type SignReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
 type AccessReply = Box<dyn FnOnce(Vec<crate::AccessFinding>) + Send>;
 type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
@@ -125,6 +134,7 @@ enum Reply {
     Accessibility(AccessReply),
     /// Writes a PDF/A copy.
     Archive(PathBuf, ArchiveReply),
+    Sign(Box<SignJob>, SignReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
@@ -406,6 +416,31 @@ impl RenderWorker {
         });
     }
 
+    /// Signs the document, with unsaved changes, and writes the signed copy to `path` (see
+    /// [`Document::signed`]).
+    pub fn sign(
+        &self,
+        path: PathBuf,
+        pkcs12: std::sync::Arc<Vec<u8>>,
+        password: String,
+        options: crate::SignOptions,
+        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Sign(
+                Box::new(SignJob {
+                    path,
+                    pkcs12,
+                    password,
+                    options,
+                }),
+                Box::new(reply),
+            ),
+        });
+    }
+
     /// Where form fields could go (see [`Document::detect_fields`]).
     pub fn detect_fields(
         &self,
@@ -591,6 +626,11 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     write_atomically(&path, copy.bytes())?;
                     Ok(copy.preflight())
                 })),
+                Reply::Sign(job, reply) => reply(
+                    current
+                        .signed(&job.pkcs12, &job.password, &job.options)
+                        .and_then(|bytes| write_atomically(&job.path, &bytes)),
+                ),
                 Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
                 Reply::Compare(path, reply) => reply(match Document::open(&path, None, current.limits()) {
                     Ok(other) => current

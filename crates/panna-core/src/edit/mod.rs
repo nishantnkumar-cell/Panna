@@ -12,6 +12,7 @@ mod pdfa;
 mod picture;
 mod rebuild;
 mod redact;
+mod sign;
 mod update;
 
 use std::collections::{BTreeMap, HashSet};
@@ -29,6 +30,8 @@ pub use convert::{MAX_PICTURES, pictures_to_pdf};
 pub use crypt::Protection;
 pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
+pub use sign::SignOptions;
+pub(crate) use sign::prepare as prepare_signature;
 
 use crate::{CommentId, FieldValue, ObjRef};
 
@@ -68,6 +71,12 @@ pub enum SaveError {
     RedactsFormField,
     /// PDF/A files can't be password protected.
     ArchiveProtected,
+    /// Signing password-protected files isn't supported.
+    SigningProtected,
+    /// Only the first signature can certify a document.
+    CertifySigned,
+    /// The certificate file couldn't be used, and why.
+    Certificate(String),
 }
 
 impl fmt::Display for SaveError {
@@ -95,6 +104,17 @@ impl fmt::Display for SaveError {
                 "PDF/A files can't have password protection. Remove it first, from Password \
                  protection in All tools."
             ),
+            Self::SigningProtected => write!(
+                f,
+                "Password-protected PDFs can't be signed yet. Remove the protection first, from \
+                 Password protection in All tools."
+            ),
+            Self::CertifySigned => write!(
+                f,
+                "This PDF is already signed, so it can't be certified: only the first signature \
+                 can certify a document."
+            ),
+            Self::Certificate(why) => write!(f, "{why}"),
             Self::RedactsFormField => write!(
                 f,
                 "A marked area covers a form field. Flatten the form first (in the page tools), \

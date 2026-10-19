@@ -112,9 +112,9 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 |---|---|---|
 | Open encrypted PDFs | V1 | Done (see above); changes save back into them encrypted |
 | Encrypt with password, set permissions | Later | Done: AES-256 (revision 6) with an open password, a permissions password and print/change/copy limits; removing or changing it needs the owner password. Checked against poppler |
-| Digitally sign with a local certificate (PKCS#12 / OS store) | Later | |
+| Digitally sign with a local certificate (PKCS#12 / OS store) | Later | Done for certificate files: All tools › Sign with a certificate… signs with the digital ID in a .p12 or .pfx file (RSA, ECDSA P-256 or P-384; SHA-256), with an optional reason and place, and saves the signed copy as a new file, keeping earlier signatures valid. The signature is invisible. The operating system's certificate store and visible signatures not yet |
 | Validate signatures | Later | Done offline: signed documents open on a Signatures tab in the sidebar listing each signature, whether the signed bytes are unchanged and match the certificate (RSA and ECDSA P-256/P-384 with SHA-1 to SHA-512), whether the document changed afterwards, whether it certifies the document, and who issued the certificate. Trust lists and revocation checks (OCSP/CRL, which are online) not done; RSA-PSS not yet |
-| Certify document | Later | |
+| Certify document | Later | Done: the Certify option when signing a document that has no signatures yet (form filling and signing stay allowed) |
 | Adobe Sign, cloud ID | Skip | Online |
 
 ## 8. Accessibility

@@ -4,6 +4,8 @@ self-signed certificate for "Test Signer" made on the spot.
 - signed-rsa.pdf: RSA 2048 with SHA-256 (adbe.pkcs7.detached)
 - signed-ecdsa.pdf: ECDSA P-256 with SHA-256 (ETSI.CAdES.detached)
 - signed-then-changed.pdf: signed-rsa.pdf with an incremental update added after signing
+- signer-rsa.p12, signer-ec.p12: certificate files for "Pat Example" to sign with, password
+  "secret"
 
 The signatures are made by the openssl command-line tool.
 Run with: python make_signed.py
@@ -91,3 +93,23 @@ update += b"xref\n6 1\n%010d 00000 n \n" % offset
 update += b"trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R /Prev %d >>\nstartxref\n%d\n%%%%EOF\n" % (
     prev_xref, xref)
 (HERE / "signed-then-changed.pdf").write_bytes(update)
+
+# Certificate files to sign with, password "secret".
+for name, key_args in [
+    ("signer-rsa.p12", ["-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"]),
+    ("signer-ec.p12", ["-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"]),
+]:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        key, cert = tmp / "key.pem", tmp / "cert.pem"
+        subprocess.run(["openssl", "genpkey", *key_args, "-out", str(key)], check=True)
+        subprocess.run(
+            ["openssl", "req", "-new", "-x509", "-key", str(key), "-out", str(cert), "-days",
+             "3650", "-subj", "/CN=Pat Example/O=Panna tests", "-sha256"],
+            check=True,
+        )
+        subprocess.run(
+            ["openssl", "pkcs12", "-export", "-inkey", str(key), "-in", str(cert), "-out",
+             str(HERE / name), "-passout", "pass:secret"],
+            check=True,
+        )

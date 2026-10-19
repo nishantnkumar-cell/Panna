@@ -30,6 +30,7 @@ mod shortcuts;
 mod sidebar;
 mod sign;
 mod signatures;
+mod signing;
 mod speech;
 mod toolbar;
 mod tools;
@@ -272,6 +273,12 @@ enum Message {
         findings: Vec<panna_core::AccessFinding>,
     },
     ArchiveTo(Option<PathBuf>),
+    Signing(signing::Event),
+    SignTo(Option<PathBuf>),
+    SignSaved {
+        path: PathBuf,
+        result: Result<(), SaveError>,
+    },
     Archived {
         doc: u64,
         name: String,
@@ -409,6 +416,7 @@ struct App {
     flattening: Option<pages::Flattening>,
     /// Choosing password protection.
     protecting: Option<protect::Protecting>,
+    signing: Option<signing::Signing>,
     /// Choosing hidden information to remove.
     cleaning: Option<panna_core::Cleanup>,
     /// The All tools card is showing.
@@ -743,6 +751,7 @@ impl App {
             exporting: None,
             flattening: None,
             protecting: None,
+            signing: None,
             cleaning: None,
             all_tools: false,
             pictures: Vec::new(),
@@ -834,6 +843,7 @@ impl App {
             Message::FromPictures
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
+                | Message::Signing(signing::Event::Open)
                 | Message::Clean(protect::CleanEvent::Open)
         ) {
             self.all_tools = false;
@@ -1151,6 +1161,8 @@ impl App {
                     self.flattening = None;
                 } else if self.protecting.is_some() {
                     self.protecting = None;
+                } else if self.signing.is_some() {
+                    self.signing = None;
                 } else if self.cleaning.is_some() {
                     self.cleaning = None;
                 } else if self.all_tools {
@@ -2224,6 +2236,47 @@ impl App {
                 Task::none()
             }
             Message::Protect(event) => self.protect(event),
+            Message::Signing(event) => self.signing(event),
+            Message::SignTo(None) => Task::none(),
+            Message::SignTo(Some(path)) => {
+                let (Some(doc), Some(state)) = (&self.doc, &self.signing) else {
+                    return Task::none();
+                };
+                let Some((_, file)) = &state.file else {
+                    return Task::none();
+                };
+                // Unsaved changes are signed too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.sign(
+                    path.clone(),
+                    Arc::clone(file),
+                    state.password.clone(),
+                    state.options(),
+                    move |result| {
+                        let _ = tx.send(result);
+                    },
+                );
+                Task::perform(rx, move |result| Message::SignSaved {
+                    path: path.clone(),
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::SignSaved { path, result } => match result {
+                Ok(()) => {
+                    self.signing = None;
+                    self.open(path, None)
+                }
+                Err(e) => {
+                    match &mut self.signing {
+                        Some(state) => state.error = Some(e.to_string()),
+                        None => self.notice = Some(e.to_string()),
+                    }
+                    Task::none()
+                }
+            },
             Message::Clean(protect::CleanEvent::Open) => {
                 if self.doc.is_some() {
                     self.cleaning = Some(protect::default_cleanup());
@@ -2962,6 +3015,100 @@ impl App {
         Task::perform(rx, |result| {
             Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
         })
+    }
+
+    /// The Sign with a certificate card's events.
+    fn signing(&mut self, event: signing::Event) -> Task<Message> {
+        if let signing::Event::Open = event {
+            let Some(doc) = &self.doc else { return Task::none() };
+            self.signing = Some(signing::Signing {
+                can_certify: doc.info.signatures.is_empty(),
+                ..signing::Signing::default()
+            });
+            return Task::none();
+        }
+        let Some(state) = &mut self.signing else {
+            return Task::none();
+        };
+        let clean = |v: String| v.chars().filter(|c| !c.is_control()).take(200).collect();
+        match event {
+            signing::Event::Open => Task::none(),
+            signing::Event::Choose => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a certificate file")
+                        .add_filter("Certificate files", &["p12", "pfx", "P12", "PFX"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                |path| Message::Signing(signing::Event::Chosen(path)),
+            ),
+            signing::Event::Chosen(None) => Task::none(),
+            signing::Event::Chosen(Some(path)) => {
+                let read = std::fs::metadata(&path).map_err(|e| e.to_string()).and_then(|m| {
+                    if m.len() > signing::MAX_FILE {
+                        Err("That file is too large to be a certificate file.".into())
+                    } else {
+                        std::fs::read(&path).map_err(|e| e.to_string())
+                    }
+                });
+                match read {
+                    Ok(bytes) => {
+                        let name = path.file_name().map_or_else(
+                            || path.display().to_string(),
+                            |n| n.to_string_lossy().into_owned(),
+                        );
+                        state.file = Some((name, Arc::new(bytes)));
+                        state.error = None;
+                        iced::widget::operation::focus(signing::input_id())
+                    }
+                    Err(e) => {
+                        state.error = Some(format!("Couldn't read the certificate file: {e}"));
+                        Task::none()
+                    }
+                }
+            }
+            signing::Event::Password(v) => {
+                state.password = clean(v);
+                Task::none()
+            }
+            signing::Event::Reason(v) => {
+                state.reason = clean(v);
+                Task::none()
+            }
+            signing::Event::Location(v) => {
+                state.location = clean(v);
+                Task::none()
+            }
+            signing::Event::Certify(v) => {
+                state.certify = v;
+                Task::none()
+            }
+            signing::Event::Cancel => {
+                self.signing = None;
+                Task::none()
+            }
+            signing::Event::Go => {
+                if state.file.is_none() {
+                    return Task::none();
+                }
+                state.error = None;
+                let name = format!("{} (signed).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save the signed copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::SignTo,
+                )
+            }
+        }
     }
 
     /// The Password protection card's events.
@@ -4415,6 +4562,12 @@ impl App {
             layers.push(modal(
                 protect::card(state),
                 Message::Protect(protect::Event::Cancel),
+            ));
+        }
+        if let Some(state) = &self.signing {
+            layers.push(modal(
+                signing::card(state),
+                Message::Signing(signing::Event::Cancel),
             ));
         }
         if let Some(state) = self.flattening {
