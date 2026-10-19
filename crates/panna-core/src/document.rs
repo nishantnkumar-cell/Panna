@@ -516,11 +516,13 @@ impl Document {
                     text,
                     size,
                     color: None,
+                    leading,
                 } => crate::Addition::ReplaceText {
                     area: *area,
                     text: text.clone(),
                     size: *size,
                     color: self.text_color(page, *area),
+                    leading: *leading,
                 },
                 other => other.clone(),
             })

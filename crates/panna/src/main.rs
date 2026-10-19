@@ -3672,7 +3672,7 @@ impl App {
                     .as_ref()
                     .and_then(|d| d.texts.get(page))
                     .and_then(|slot| slot.text.as_ref())
-                    .and_then(|t| t.line_at(x, y));
+                    .and_then(|t| t.paragraph_at(x, y));
                 if line.is_none() {
                     self.notice = Some("There's no text there to change.".into());
                 }

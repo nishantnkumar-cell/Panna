@@ -82,6 +82,16 @@ pub(crate) struct Line {
     pub cells: Vec<(f32, String)>,
 }
 
+/// A paragraph of a page's text (see [`PageText::paragraph_at`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Paragraph {
+    pub text: String,
+    pub area: TextBox,
+    pub size: f32,
+    /// From one line's baseline to the next, when there's more than one line.
+    pub leading: Option<f32>,
+}
+
 /// Options for [`PageText::find`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FindOptions {
@@ -310,6 +320,91 @@ impl PageText {
                 };
                 (l.text, area, l.size)
             })
+    }
+
+    /// The paragraph at `x`, `y`: the line there and the lines above and below it set the
+    /// same way (the same size, overlapping, and a line apart), with its text, the box
+    /// around it, its font size, and the distance between its lines when it has more than
+    /// one. Words broken with a hyphen at a line's end are joined.
+    pub fn paragraph_at(&self, x: f32, y: f32) -> Option<Paragraph> {
+        const MAX_LINES: usize = 200;
+        let lines = self.lines();
+        let hit = |l: &Line| x >= l.x0 - 2.0 && x <= l.x1 + 2.0 && y >= l.y0 - 1.0 && y <= l.y1 + 1.0;
+        let middle = |l: &Line| (l.y0 + l.y1) / 2.0;
+        let start = (0..lines.len())
+            .filter(|&i| lines.get(i).is_some_and(hit))
+            .min_by(|&a, &b| {
+                let d = |i: usize| lines.get(i).map_or(f32::MAX, |l| (middle(l) - y).abs());
+                d(a).total_cmp(&d(b))
+            })?;
+        let first = lines.get(start)?;
+        let size = first.size.max(1.0);
+        // The nearest line just below (or above) `from` that belongs with it.
+        let next = |from: &Line, down: bool, taken: &[usize]| -> Option<usize> {
+            (0..lines.len())
+                .filter(|i| !taken.contains(i))
+                .filter_map(|i| Some((i, lines.get(i)?)))
+                .filter(|(_, l)| (l.size - from.size).abs() <= 0.15 * from.size.max(1.0))
+                .filter(|(_, l)| {
+                    let overlap = l.x1.min(from.x1) - l.x0.max(from.x0);
+                    overlap > 0.0
+                        && ((l.x0 - from.x0).abs() < 3.0 * size
+                            || overlap > 0.5 * (l.x1 - l.x0).min(from.x1 - from.x0))
+                })
+                .filter_map(|(i, l)| {
+                    let step = if down { l.y0 - from.y0 } else { from.y0 - l.y0 };
+                    let gap = if down { l.y0 - from.y1 } else { from.y0 - l.y1 };
+                    (step > 0.6 * size && gap < 0.8 * size).then_some((i, step))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        };
+        let mut order = vec![start];
+        for down in [false, true] {
+            let mut edge = start;
+            while order.len() < MAX_LINES {
+                let Some(i) = lines.get(edge).and_then(|l| next(l, down, &order)) else {
+                    break;
+                };
+                if down {
+                    order.push(i);
+                } else {
+                    order.insert(0, i);
+                }
+                edge = i;
+            }
+        }
+        let picked: Vec<&Line> = order.iter().filter_map(|&i| lines.get(i)).collect();
+        let mut text = String::new();
+        for line in &picked {
+            if text.ends_with('-') && line.text.starts_with(char::is_lowercase) {
+                text.pop();
+            } else if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(&line.text);
+        }
+        let fold = |f: fn(&Line) -> f32, pick: fn(f32, f32) -> f32| {
+            picked.iter().map(|l| f(l)).reduce(pick).unwrap_or(0.0)
+        };
+        let leading = (picked.len() > 1).then(|| {
+            let (top, bottom) = (
+                picked.first().map_or(0.0, |l| l.y1),
+                picked.last().map_or(0.0, |l| l.y1),
+            );
+            (bottom - top) / (picked.len() - 1) as f32
+        });
+        Some(Paragraph {
+            text,
+            area: TextBox {
+                x0: fold(|l| l.x0, f32::min),
+                y0: fold(|l| l.y0, f32::min),
+                x1: fold(|l| l.x1, f32::max),
+                y1: fold(|l| l.y1, f32::max),
+            },
+            size: first.size,
+            leading,
+        })
     }
 
     pub fn hit(&self, x: f32, y: f32) -> bool {

@@ -199,6 +199,8 @@ pub(crate) enum Drawing {
         top: f64,
         lines: Vec<String>,
         size: f64,
+        /// From one baseline to the next.
+        leading: f64,
         color: Color,
     },
     /// A picture added to the page, filling `rect` (left, top, right, bottom from the
@@ -325,14 +327,10 @@ impl Drawing {
                 top,
                 lines,
                 size,
+                leading,
                 color,
             } => {
-                let mut out = format!(
-                    "BT /PaHe {} Tf {} rg {} TL ",
-                    n(*size),
-                    rgb(*color),
-                    n(size * f64::from(super::annot::LINE_HEIGHT))
-                );
+                let mut out = format!("BT /PaHe {} Tf {} rg {} TL ", n(*size), rgb(*color), n(*leading));
                 // The first baseline sits an ascent below the top.
                 let _ = write!(out, "{} {} Td", n(*x), n(height - top - size * 0.77));
                 for (i, line) in lines.iter().enumerate() {

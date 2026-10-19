@@ -49,11 +49,13 @@ enum Details {
     Link(String),
     /// Waiting for a picture file to be chosen.
     Picture,
-    /// A line already on the page, its text as it'll be and its size.
+    /// A line or paragraph already on the page, its text as it'll be, its size, and for a
+    /// paragraph of more than one line the distance between them.
     Replace {
         content: text_editor::Content,
         was: String,
         size: f32,
+        leading: Option<f32>,
     },
 }
 
@@ -217,7 +219,12 @@ impl Adder {
                             return Outcome::Nothing;
                         }
                     },
-                    Details::Replace { content, was, size } => {
+                    Details::Replace {
+                        content,
+                        was,
+                        size,
+                        leading,
+                    } => {
                         let text = content.text();
                         let text = text.trim_end();
                         if text == was {
@@ -228,6 +235,7 @@ impl Adder {
                             text: text.to_owned(),
                             size,
                             color: None,
+                            leading,
                         }
                     }
                     Details::Picture => return Outcome::Nothing,
@@ -300,16 +308,17 @@ impl Adder {
         }
     }
 
-    /// Opens the card for changing `line` (its text, box and size) on page `page`.
-    pub fn edit_line(&mut self, page: usize, line: Option<(String, TextBox, f32)>) {
-        if let Some((was, rect, size)) = line {
+    /// Opens the card for changing a line or paragraph on page `page`.
+    pub fn edit_line(&mut self, page: usize, found: Option<panna_core::Paragraph>) {
+        if let Some(found) = found {
             self.pending = Some(Pending {
                 page,
-                rect,
+                rect: found.area,
                 details: Details::Replace {
-                    content: text_editor::Content::with_text(&was),
-                    was,
-                    size: size.clamp(1.0, 500.0),
+                    content: text_editor::Content::with_text(&found.text),
+                    was: found.text,
+                    size: found.size.clamp(1.0, 500.0),
+                    leading: found.leading,
                 },
             });
         }
@@ -459,18 +468,36 @@ impl Adder {
                 .spacing(10)
                 .into()
             }
-            Details::Replace { content, was, size } => column![
-                text("Change text").size(16),
+            Details::Replace {
+                content,
+                was,
+                size,
+                leading,
+            } => column![
+                text(if leading.is_some() {
+                    "Change a paragraph"
+                } else {
+                    "Change text"
+                })
+                .size(16),
                 text_editor(content)
                     .id(editor_id())
                     .on_action(move |a| ev(Event::Edit(a)))
-                    .height(80),
-                text(format!(
-                    "The old text is taken out, and the new text drawn in its place at {size:.0} \
-                     pt, in the old text's colour and font. If the font can't show the new \
-                     letters (fonts are often embedded with only the letters a page uses), or \
-                     the text runs to more lines, it's drawn in Helvetica."
-                ))
+                    .height(if leading.is_some() { 160 } else { 80 }),
+                text(if leading.is_some() {
+                    format!(
+                        "The old paragraph is taken out, and the new text drawn in its place at \
+                         {size:.0} pt in Helvetica, in the old text's colour, with its lines \
+                         wrapped to the paragraph's width. A new line starts a new paragraph."
+                    )
+                } else {
+                    format!(
+                        "The old text is taken out, and the new text drawn in its place at {size:.0} \
+                         pt, in the old text's colour and font. If the font can't show the new \
+                         letters (fonts are often embedded with only the letters a page uses), or \
+                         the text runs to more lines, it's drawn in Helvetica."
+                    )
+                })
                 .size(12),
                 buttons(content.text().trim_end() != was, "Change"),
             ]

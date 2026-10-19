@@ -11,6 +11,10 @@ fn page_with(font: &str, to_unicode: Option<&str>) -> Document {
     let content = "0.8 0.9 1 rg 10 100 180 40 re f\n\
                    BT /F1 12 Tf 0.6 0 0 rg 20 115 Td (Old words here) Tj ET\n\
                    BT /F1 12 Tf 0 0 0 rg 20 60 Td (Stays the same) Tj ET";
+    made(content, font, to_unicode)
+}
+
+fn made(content: &str, font: &str, to_unicode: Option<&str>) -> Document {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
@@ -61,6 +65,7 @@ fn replacing_text_keeps_what_is_behind_it() {
                 text: "New words".into(),
                 size: 12.0,
                 color: None,
+                leading: None,
             }],
         )
         .unwrap();
@@ -98,6 +103,7 @@ fn replace(doc: &Document, text: &str) -> Vec<u8> {
             text: text.into(),
             size: 12.0,
             color: None,
+            leading: None,
         }],
     )
     .unwrap()
@@ -137,4 +143,52 @@ fn subsets_keep_their_font_only_for_letters_the_page_has() {
     assert!(!uses_page_font(&bytes));
     let text = doc.reopen(bytes).unwrap().page_text(0).unwrap();
     assert!(text.slice(0..text.len()).contains("Zebra"));
+}
+
+#[test]
+fn a_paragraph_is_found_whole_and_rewrapped_to_its_width() {
+    // A heading, a paragraph of three lines (one word broken with a hyphen), and a line
+    // well below it.
+    let content = "BT /F1 18 Tf 20 170 Td (A heading) Tj ET\n\
+                   BT /F1 10 Tf 12 TL 20 140 Td (The first line of the para-) Tj T* \
+                   (graph runs on to a second) Tj T* (and ends on the third.) Tj ET\n\
+                   BT /F1 10 Tf 20 60 Td (Something else) Tj ET";
+    let doc = made(content, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", None);
+    let text = doc.page_text(0).unwrap();
+    // Clicked on the second line, as the page is shown (200 high, so y 60 to 64 or so).
+    let found = text.paragraph_at(60.0, 200.0 - 128.0 - 3.0).unwrap();
+    assert_eq!(
+        found.text,
+        "The first line of the paragraph runs on to a second and ends on the third."
+    );
+    assert!((found.leading.unwrap() - 12.0).abs() < 0.5, "{:?}", found.leading);
+    assert!((found.size - 10.0).abs() < 0.5);
+    // The heading and the line below are their own.
+    let heading = text.paragraph_at(30.0, 200.0 - 170.0 - 4.0).unwrap();
+    assert_eq!((heading.text.as_str(), heading.leading), ("A heading", None));
+
+    let longer = "The first line of the paragraph now says rather more, so that it needs \
+                  another line or two to fit in the same width as before.";
+    let edited = doc
+        .with_additions(
+            0,
+            &[Addition::ReplaceText {
+                area: found.area,
+                text: longer.into(),
+                size: found.size,
+                color: None,
+                leading: found.leading,
+            }],
+        )
+        .unwrap();
+    let doc = doc.reopen(edited).unwrap();
+    let text = doc.page_text(0).unwrap();
+    let again = text.paragraph_at(30.0, 200.0 - 140.0 - 3.0).unwrap();
+    assert_eq!(again.text, longer);
+    assert!(again.area.x1 <= found.area.x1 * 1.03 + 1.0, "{:?} {:?}", again.area, found.area);
+    assert!((again.leading.unwrap() - 12.0).abs() < 0.5);
+    assert!(again.area.y0 >= found.area.y0 - 1.0);
+    let all = text.slice(0..text.len());
+    assert!(all.contains("Something else") && all.contains("A heading"));
+    assert!(!all.contains("third"));
 }

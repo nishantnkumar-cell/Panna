@@ -620,12 +620,14 @@ pub enum Addition {
     },
     /// The text in `area` taken out (only the text: pictures and drawings stay) and `text`
     /// written in its place in Helvetica, at `size`, in `color` or the colour the old text
-    /// was drawn in.
+    /// was drawn in. With a `leading` (the distance between baselines), `area` is a
+    /// paragraph and the text is wrapped to its width.
     ReplaceText {
         area: crate::TextBox,
         text: String,
         size: f32,
         color: Option<Color>,
+        leading: Option<f32>,
     },
 }
 
@@ -656,6 +658,7 @@ pub(crate) fn add(
                     top: f64::from(at.1),
                     lines,
                     size: f64::from(size.clamp(1.0, 500.0)),
+                    leading: f64::from(size.clamp(1.0, 500.0) * annot::LINE_HEIGHT),
                     color: *color,
                 });
             }
@@ -669,11 +672,17 @@ pub(crate) fn add(
                 text,
                 size,
                 color,
+                leading,
             } => {
                 extra.redact.push(corners(area));
                 extra.text_only = true;
                 let size = f64::from(size.clamp(1.0, 500.0));
-                let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+                let paragraph = leading.map(|l| f64::from(l).clamp(size * 0.8, size * 4.0));
+                let lines: Vec<String> = match paragraph {
+                    // A little room, as the measured width is the longest line's.
+                    Some(_) => annot::wrap(text.trim_end(), f64::from(area.width()) * 1.02 / size),
+                    None => text.lines().map(str::to_owned).collect(),
+                };
                 let same = match lines.as_slice() {
                     [line] if !line.trim().is_empty() => rebuild::same_font(doc.0, page, corners(area), line),
                     _ => None,
@@ -686,11 +695,15 @@ pub(crate) fn add(
                 } else if lines.iter().any(|l| !l.trim().is_empty()) {
                     extra.over.push(marks::Drawing::Text {
                         x: f64::from(area.x0),
-                        // Page text boxes reach 0.8 of the size above the baseline; added
-                        // text's baseline is 0.77 below its top.
-                        top: f64::from(area.y1) - size * 0.97,
+                        // Page text boxes reach 0.8 of the size above the baseline and 0.2
+                        // below; added text's baseline is 0.77 below its top.
+                        top: match paragraph {
+                            Some(_) => f64::from(area.y0) + size * 0.03,
+                            None => f64::from(area.y1) - size * 0.97,
+                        },
                         lines,
                         size,
+                        leading: paragraph.unwrap_or(size * f64::from(annot::LINE_HEIGHT)),
                         color: color.unwrap_or(Color::BLACK),
                     });
                 }

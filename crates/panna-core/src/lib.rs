@@ -51,5 +51,5 @@ pub use links::{Link, LinkTarget, safe_uri};
 pub use outline::OutlineItem;
 pub use preflight::{Finding, Rule, Standard};
 pub use sig::{Cert, DigitalId, HeldKey, SigStatus, SignDigest, Signature, trusted_by};
-pub use text::{FindOptions, PageText, TextBox};
+pub use text::{FindOptions, PageText, Paragraph, TextBox};
 pub use worker::{PageEdit, RenderWorker};
