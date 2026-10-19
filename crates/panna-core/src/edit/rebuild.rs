@@ -813,11 +813,39 @@ pub(crate) fn rebuild(
                     let (matrix, _, height) = shown_space(shown, rotate);
                     let [a, b, c, d, e, f] = matrix;
                     let user = |x: f64, y: f64| (a * x + c * (height - y) + e, b * x + d * (height - y) + f);
-                    for field in &extra.fields {
-                        let r = field.rect;
+                    let placed = |r: crate::TextBox| {
                         let (ux0, uy0) = user(f64::from(r.x0), f64::from(r.y0));
                         let (ux1, uy1) = user(f64::from(r.x1), f64::from(r.y1));
-                        let rect = [ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)];
+                        [ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)]
+                    };
+                    for field in &extra.fields {
+                        if let super::NewFieldKind::Radio(buttons) = &field.kind {
+                            let group = w.alloc();
+                            let mut kids = Vec::new();
+                            for button in buttons {
+                                let mut store = |body: Vec<u8>| {
+                                    let at = w.alloc();
+                                    w.set(at, body);
+                                    at
+                                };
+                                let body = super::new_field::radio_widget(
+                                    button,
+                                    placed(button.rect),
+                                    group,
+                                    *num,
+                                    rotate,
+                                    &mut store,
+                                );
+                                let widget = w.alloc();
+                                w.set(widget, body);
+                                kids.push(widget);
+                                kept.push_str(&format!("{widget} 0 R "));
+                            }
+                            w.set(group, super::new_field::radio_group(field, &kids));
+                            new_fields.push(group);
+                            continue;
+                        }
+                        let rect = placed(field.rect);
                         let mut store = |body: Vec<u8>| {
                             let at = w.alloc();
                             w.set(at, body);

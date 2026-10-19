@@ -1,9 +1,9 @@
-//! Preparing a form: adding text fields, check boxes and drop-downs to pages, and deleting
-//! fields, each as a page change that can be undone from the page tools.
+//! Preparing a form: adding text fields, check boxes, drop-downs, list boxes and radio
+//! buttons to pages, and deleting fields, each as a page change that can be undone from the page tools.
 
 use iced::widget::{button, checkbox, column, container, pin, row, space, text, text_editor, text_input};
 use iced::{Center, Element, Theme};
-use panna_core::{Field, FieldKind, NewField, NewFieldKind, ObjRef, TextBox};
+use panna_core::{Field, FieldKind, NewField, NewFieldKind, ObjRef, RadioButton, TextBox};
 
 use crate::Message;
 use crate::icons::{self, Icon};
@@ -13,6 +13,11 @@ use crate::selection::PageMap;
 const CLICK_SLOP: f32 = 3.0;
 const MAX_NAME: usize = 200;
 const MAX_OPTIONS: usize = 500;
+/// A radio button's side, and the distance between clicked buttons' tops, in points.
+const RADIO_SIZE: f32 = 14.0;
+const RADIO_STEP: f32 = 22.0;
+/// The largest radio button a drag makes.
+const RADIO_MAX: f32 = 24.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tool {
@@ -20,6 +25,8 @@ pub enum Tool {
     Text,
     CheckBox,
     Dropdown,
+    List,
+    Radio,
 }
 
 impl Tool {
@@ -29,7 +36,14 @@ impl Tool {
             Tool::Text => (150.0, 20.0),
             Tool::CheckBox => (14.0, 14.0),
             Tool::Dropdown => (120.0, 20.0),
+            Tool::List => (120.0, 60.0),
+            Tool::Radio => (RADIO_SIZE, RADIO_SIZE),
         }
+    }
+
+    /// Whether the field is made from a list of choices.
+    fn has_choices(self) -> bool {
+        matches!(self, Tool::Dropdown | Tool::List | Tool::Radio)
     }
 
     fn base_name(self) -> &'static str {
@@ -37,6 +51,8 @@ impl Tool {
             Tool::Text => "Text",
             Tool::CheckBox => "Check box",
             Tool::Dropdown => "Choice",
+            Tool::List => "List",
+            Tool::Radio => "Group",
         }
     }
 }
@@ -60,6 +76,8 @@ enum Pending {
     New {
         page: usize,
         rect: TextBox,
+        /// Dragged out, rather than clicked.
+        dragged: bool,
         tool: Tool,
         name: String,
         tooltip: String,
@@ -131,6 +149,57 @@ fn options_of(content: &text_editor::Content) -> Vec<String> {
         .take(MAX_OPTIONS)
         .map(str::to_owned)
         .collect()
+}
+
+/// Where the `count` buttons of a radio group go: down from a clicked spot, or spread along
+/// the longer side of a dragged box.
+fn radio_layout(rect: TextBox, count: usize, dragged: bool) -> Vec<TextBox> {
+    let count = count.max(1);
+    let square = |x: f32, y: f32, side: f32| TextBox {
+        x0: x,
+        y0: y,
+        x1: x + side,
+        y1: y + side,
+    };
+    if !dragged {
+        return (0..count)
+            .map(|i| square(rect.x0, rect.y0 + i as f32 * RADIO_STEP, RADIO_SIZE))
+            .collect();
+    }
+    let across = rect.width() > rect.height();
+    let (long, short) = if across {
+        (rect.width(), rect.height())
+    } else {
+        (rect.height(), rect.width())
+    };
+    let side = short.clamp(8.0, RADIO_MAX);
+    let step = if count > 1 {
+        ((long - side) / (count - 1) as f32).max(side + 4.0)
+    } else {
+        0.0
+    };
+    let inset = (short - side) / 2.0;
+    (0..count)
+        .map(|i| {
+            let along = i as f32 * step;
+            if across {
+                square(rect.x0 + along, rect.y0 + inset, side)
+            } else {
+                square(rect.x0 + inset, rect.y0 + along, side)
+            }
+        })
+        .collect()
+}
+
+/// The box around `boxes`.
+fn around(boxes: &[TextBox]) -> Option<TextBox> {
+    let first = *boxes.first()?;
+    Some(boxes.iter().fold(first, |a, b| TextBox {
+        x0: a.x0.min(b.x0),
+        y0: a.y0.min(b.y0),
+        x1: a.x1.max(b.x1),
+        y1: a.y1.max(b.y1),
+    }))
 }
 
 impl Preparer {
@@ -207,6 +276,7 @@ impl Preparer {
                 let Some(Pending::New {
                     page,
                     rect,
+                    dragged,
                     tool,
                     name,
                     tooltip,
@@ -218,25 +288,36 @@ impl Preparer {
                     self.pending = None;
                     return Outcome::Nothing;
                 };
+                let list = options_of(&options);
+                if tool.has_choices() && list.is_empty() {
+                    self.pending = Some(Pending::New {
+                        page,
+                        rect,
+                        dragged,
+                        tool,
+                        name,
+                        tooltip,
+                        required,
+                        multiline,
+                        options,
+                    });
+                    return Outcome::Nothing;
+                }
+                let mut rect = rect;
                 let kind = match tool {
                     Tool::Text => NewFieldKind::Text { multiline },
                     Tool::CheckBox => NewFieldKind::CheckBox,
-                    Tool::Dropdown => {
-                        let list = options_of(&options);
-                        if list.is_empty() {
-                            self.pending = Some(Pending::New {
-                                page,
-                                rect,
-                                tool,
-                                name,
-                                tooltip,
-                                required,
-                                multiline,
-                                options,
-                            });
-                            return Outcome::Nothing;
-                        }
-                        NewFieldKind::Dropdown(list)
+                    Tool::Dropdown => NewFieldKind::Dropdown(list),
+                    Tool::List => NewFieldKind::List(list),
+                    Tool::Radio => {
+                        let boxes = radio_layout(rect, list.len(), dragged);
+                        rect = around(&boxes).unwrap_or(rect);
+                        NewFieldKind::Radio(
+                            list.into_iter()
+                                .zip(boxes)
+                                .map(|(choice, rect)| RadioButton { choice, rect })
+                                .collect(),
+                        )
                     }
                 };
                 let name = if name.trim().is_empty() {
@@ -324,6 +405,7 @@ impl Preparer {
         self.pending = Some(Pending::New {
             page: drag.page,
             rect,
+            dragged: is_drag,
             tool,
             name: format!("{} {number}", tool.base_name()),
             tooltip: String::new(),
@@ -381,6 +463,21 @@ impl Preparer {
             .collect();
         match (&self.drag, &self.pending) {
             (Some(d), _) if d.page == page => out.push(boxed(d.rect(), true, None)),
+            (
+                None,
+                Some(Pending::New {
+                    page: p,
+                    rect,
+                    dragged,
+                    tool: Tool::Radio,
+                    options,
+                    ..
+                }),
+            ) if *p == page => {
+                for button in radio_layout(*rect, options_of(options).len(), *dragged) {
+                    out.push(boxed(button, true, None));
+                }
+            }
             (None, Some(Pending::New { page: p, rect, .. })) if *p == page => {
                 out.push(boxed(*rect, true, None))
             }
@@ -399,6 +496,8 @@ impl Preparer {
             tool(Tool::Text, Icon::TextField, "Add a text field"),
             tool(Tool::CheckBox, Icon::CheckBoxField, "Add a check box"),
             tool(Tool::Dropdown, Icon::DropdownField, "Add a drop-down list"),
+            tool(Tool::List, Icon::ListField, "Add a list box"),
+            tool(Tool::Radio, Icon::RadioField, "Add radio buttons"),
             text("Click or drag to add a field. Click a field to delete it.")
                 .size(13)
                 .width(370),
@@ -442,8 +541,10 @@ impl Preparer {
                     Tool::Text => "Add a text field",
                     Tool::CheckBox => "Add a check box",
                     Tool::Dropdown => "Add a drop-down list",
+                    Tool::List => "Add a list box",
+                    Tool::Radio => "Add radio buttons",
                 };
-                let ready = *tool != Tool::Dropdown || !options_of(options).is_empty();
+                let ready = !tool.has_choices() || !options_of(options).is_empty();
                 let mut body = column![
                     text(title).size(16),
                     text("Name").size(12),
@@ -462,8 +563,13 @@ impl Preparer {
                             .on_toggle(move |v| ev(Event::Multiline(v))),
                     );
                 }
-                if *tool == Tool::Dropdown {
-                    body = body.push(text("Choices, one per line").size(12)).push(
+                if tool.has_choices() {
+                    let label = if *tool == Tool::Radio {
+                        "Choices, one per line, a button each"
+                    } else {
+                        "Choices, one per line"
+                    };
+                    body = body.push(text(label).size(12)).push(
                         text_editor(options)
                             .on_action(move |a| ev(Event::Options(a)))
                             .height(100),
@@ -630,5 +736,85 @@ mod tests {
         p.press(0, (5.0, 5.0));
         p.release(&[text_field("group.agree", at)]);
         assert!(matches!(p.update(Event::Delete), Outcome::Nothing));
+    }
+
+    fn type_choices(p: &mut Preparer, choices: &str) {
+        for c in choices.chars() {
+            p.update(Event::Options(text_editor::Action::Edit(
+                text_editor::Edit::Insert(c),
+            )));
+        }
+    }
+
+    #[test]
+    fn a_list_box_is_a_list_of_its_choices() {
+        let mut p = on();
+        p.update(Event::Tool(Tool::List));
+        p.press(0, (10.0, 40.0));
+        p.release(&[]);
+        type_choices(&mut p, "Small\nLarge");
+        let Outcome::Edit { add, .. } = p.update(Event::Done) else {
+            panic!("nothing added");
+        };
+        assert_eq!(add[0].name, "List 1");
+        assert_eq!(
+            add[0].kind,
+            NewFieldKind::List(vec!["Small".into(), "Large".into()])
+        );
+        assert_eq!((add[0].rect.y0, add[0].rect.y1), (10.0, 70.0));
+    }
+
+    #[test]
+    fn clicked_radio_buttons_go_down_from_the_click() {
+        let mut p = on();
+        p.update(Event::Tool(Tool::Radio));
+        p.press(0, (10.0, 50.0));
+        p.release(&[]);
+        assert!(matches!(p.update(Event::Done), Outcome::Nothing), "needs choices");
+        type_choices(&mut p, "Yes\nNo\nMaybe");
+        let Outcome::Edit { add, .. } = p.update(Event::Done) else {
+            panic!("nothing added");
+        };
+        let NewFieldKind::Radio(buttons) = &add[0].kind else {
+            panic!("not radio buttons");
+        };
+        let found: Vec<(&str, f32, f32)> = buttons
+            .iter()
+            .map(|b| (b.choice.as_str(), b.rect.x0, b.rect.y0))
+            .collect();
+        assert_eq!(
+            found,
+            [("Yes", 10.0, 43.0), ("No", 10.0, 65.0), ("Maybe", 10.0, 87.0)]
+        );
+        assert!(buttons.iter().all(|b| b.rect.width() == RADIO_SIZE));
+        assert_eq!((add[0].rect.y0, add[0].rect.y1), (43.0, 101.0));
+    }
+
+    #[test]
+    fn dragged_radio_buttons_spread_across_the_box() {
+        let boxes = radio_layout(
+            TextBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 116.0,
+                y1: 16.0,
+            },
+            3,
+            true,
+        );
+        let found: Vec<(f32, f32, f32)> = boxes.iter().map(|b| (b.x0, b.y0, b.x1)).collect();
+        assert_eq!(found, [(0.0, 0.0, 16.0), (50.0, 0.0, 66.0), (100.0, 0.0, 116.0)]);
+        // Tall boxes take them downwards, no bigger than the largest size.
+        let boxes = radio_layout(
+            TextBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 40.0,
+                y1: 100.0,
+            },
+            2,
+            true,
+        );
+        assert_eq!((boxes[0].x0, boxes[1].y0, boxes[1].y1), (8.0, 76.0, 100.0));
     }
 }
