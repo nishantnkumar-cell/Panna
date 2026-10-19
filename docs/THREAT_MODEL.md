@@ -159,8 +159,13 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    covered: the copies iced keeps inside a text box while it is on screen, the decoded key
    that `p12-keystore` holds briefly while reading a certificate file, and buffers the
    operating system keeps for pipes.
-4. Have redaction also search bookmarks and comments for the redacted text, and offer to
-   remove matches.
+4. **Redaction also searches bookmarks and comments: done.** Before redacting, Panna reads
+   the text under each marked area and counts the bookmarks and comments elsewhere in the
+   file that mention it (ignoring case and spacing). The question offers to remove those
+   too, ticked by default: matching comments are deleted with their pop-ups and replies,
+   and the text is blacked out in bookmark titles. Not searched: form field values,
+   attached files, the document's title and metadata (Remove hidden information covers
+   those), and text the page draws without a font Panna can read.
 5. Offer to upgrade old RC4 or AES-128 protection to AES-256 when saving changes.
 6. Larger fuzzing corpora: seed the fuzzers with real-world PDFs (pdf.js and PDFBox test
    suites) and keep crash inputs as regression tests.

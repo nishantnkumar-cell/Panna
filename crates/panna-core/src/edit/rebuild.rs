@@ -285,6 +285,10 @@ pub(crate) struct Extra {
     /// Pictures the page draws to move, replace or take out, by their place in
     /// [`page_pictures`].
     pub pictures: Vec<(usize, super::PictureChange)>,
+    /// Redacted phrases (see [`super::scrub`]) to take out of the whole document: comments
+    /// that mention one go, and they are blacked out in bookmark titles. Read from every
+    /// page's extra.
+    pub scrub: Vec<String>,
 }
 
 /// Hidden information to leave out of the new file.
@@ -589,6 +593,12 @@ pub(crate) fn rebuild(
 ) -> Result<Vec<u8>, SaveError> {
     let first = sources.first().ok_or(SaveError::Damaged)?;
     let info = info.filter(|_| !clean.metadata && !clean.archive);
+    let mut scrub: Vec<String> = Vec::new();
+    for phrase in extras.iter().flat_map(|e| &e.scrub) {
+        if !scrub.contains(phrase) {
+            scrub.push(phrase.clone());
+        }
+    }
     // Pictures already written, by StampImage::key.
     let mut pictures_written: HashMap<usize, u32> = HashMap::new();
     let mut w = Writer {
@@ -691,12 +701,16 @@ pub(crate) fn rebuild(
                     || !extra.links.is_empty()
                     || !extra.fields.is_empty()
                     || !extra.drop_annots.is_empty()
-                    || redacting;
-                let gone = if redacting && !extra.text_only {
-                    redacted_annotations(pdf, dict, &areas)?
+                    || redacting
+                    || !scrub.is_empty();
+                let mut gone = if redacting && !extra.text_only {
+                    redacted_annotations(dict, &areas)?
                 } else {
                     std::collections::HashSet::new()
                 };
+                if !scrub.is_empty() {
+                    gone.extend(mentioning_annotations(dict, &scrub));
+                }
                 if filtering
                     && let Some(annots) = dict.get::<hayro::hayro_syntax::object::Array<'_>>(b"Annots")
                 {
@@ -1211,6 +1225,9 @@ pub(crate) fn rebuild(
         }
         w.set(num, body);
     }
+    if !scrub.is_empty() {
+        retitle_bookmarks(&mut w, first.pdf, &scrub);
+    }
 
     if let Some(compact) = compact {
         if let Some(dpi) = compact.pictures {
@@ -1600,9 +1617,49 @@ fn flate_stream(dict: &str, data: &[u8]) -> Vec<u8> {
 /// The annotations on a page that touch one of `areas` (in the page's own space), with their
 /// pop-ups and replies. Fails on a form field, whose value lives on in the form.
 fn redacted_annotations(
-    pdf: &Pdf,
     page: &Dict<'_>,
     areas: &[[f64; 4]],
+) -> Result<std::collections::HashSet<ObjRef>, SaveError> {
+    use hayro::hayro_syntax::object::Array;
+    annotations_where(page, |annot, subtype| {
+        let Some(rect) = annot.get::<Array<'_>>(b"Rect") else {
+            return Ok(false);
+        };
+        let v: Vec<f64> = rect.iter::<f64>().take(4).collect();
+        let [x0, y0, x1, y1] = v[..] else { return Ok(false) };
+        let b = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        let hit = areas
+            .iter()
+            .any(|a| b[0] < a[2] && a[0] < b[2] && b[1] < a[3] && a[1] < b[3]);
+        if hit && subtype == Some("Widget") {
+            return Err(SaveError::RedactsFormField);
+        }
+        Ok(hit)
+    })
+}
+
+/// The comments on a page whose text mentions one of `phrases`, with their pop-ups and
+/// replies. Links and form fields aren't comments, and stay.
+fn mentioning_annotations(page: &Dict<'_>, phrases: &[String]) -> std::collections::HashSet<ObjRef> {
+    use hayro::hayro_syntax::object::String as PdfString;
+    annotations_where(page, |annot, subtype| {
+        if matches!(subtype, Some("Widget" | "Link")) {
+            return Ok(false);
+        }
+        Ok([b"Contents".as_slice(), b"Subj", b"RC"].iter().any(|key| {
+            annot.get::<PdfString<'_>>(key).is_some_and(|s| {
+                super::scrub::mentions(&crate::document::decode_text_string(s.as_bytes()), phrases)
+            })
+        }))
+    })
+    .unwrap_or_default()
+}
+
+/// The annotations on a page that `hit` picks (given each one and its subtype), with their
+/// pop-ups and replies.
+fn annotations_where(
+    page: &Dict<'_>,
+    hit: impl Fn(&Dict<'_>, Option<&str>) -> Result<bool, SaveError>,
 ) -> Result<std::collections::HashSet<ObjRef>, SaveError> {
     use hayro::hayro_syntax::object::{Array, Name};
     let mut gone = std::collections::HashSet::new();
@@ -1615,23 +1672,11 @@ fn redacted_annotations(
         .filter_map(|a| Some((a.obj_id().and_then(obj_ref)?, a)))
         .collect();
     for (r, annot) in &list {
-        let Some(rect) = annot.get::<Array<'_>>(b"Rect") else {
+        let subtype = annot.get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_owned());
+        if subtype.as_deref() == Some("Popup") {
             continue;
-        };
-        let v: Vec<f64> = rect.iter::<f64>().take(4).collect();
-        let [x0, y0, x1, y1] = v[..] else { continue };
-        let b = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
-        if areas
-            .iter()
-            .any(|a| b[0] < a[2] && a[0] < b[2] && b[1] < a[3] && a[1] < b[3])
-        {
-            let subtype = annot.get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_owned());
-            if subtype.as_deref() == Some("Widget") {
-                return Err(SaveError::RedactsFormField);
-            }
-            if subtype.as_deref() == Some("Popup") {
-                continue;
-            }
+        }
+        if hit(annot, subtype.as_deref())? {
             gone.insert(*r);
         }
     }
@@ -1651,7 +1696,6 @@ fn redacted_annotations(
             break;
         }
     }
-    let _ = pdf;
     Ok(gone)
 }
 
@@ -1877,6 +1921,48 @@ fn write_file(
     );
     out.extend_from_slice(xref.as_bytes());
     Ok(out)
+}
+
+/// Blacks out `phrases` in the titles of the copied bookmarks of the first source.
+fn retitle_bookmarks(w: &mut Writer, pdf: &Pdf, phrases: &[String]) {
+    for (oid, title) in crate::outline::titled(pdf) {
+        let Some(title) = super::scrub::black_out(&title, phrases) else {
+            continue;
+        };
+        let Some(Some(num)) = obj_ref(oid).and_then(|r| w.maps.first()?.get(&r).copied()) else {
+            continue;
+        };
+        let Some(slot) = w.objects.get_mut(num as usize - 1) else {
+            continue;
+        };
+        if let Some(body) = slot
+            .as_deref()
+            .and_then(|b| with_entry(b, b"Title", &super::annot::text_string(&title)))
+        {
+            *slot = Some(body);
+        }
+    }
+}
+
+/// The dictionary `body` with `key` set to `value`.
+fn with_entry(body: &[u8], key: &[u8], value: &str) -> Option<Vec<u8>> {
+    let mut out = b"<<".to_vec();
+    for (k, v) in lex::dict_entries(body)? {
+        if k == key {
+            continue;
+        }
+        out.push(b'/');
+        out.extend_from_slice(k);
+        out.push(b' ');
+        out.extend_from_slice(body.get(v)?);
+        out.push(b'\n');
+    }
+    out.push(b'/');
+    out.extend_from_slice(key);
+    out.push(b' ');
+    out.extend_from_slice(value.as_bytes());
+    out.extend_from_slice(b"\n>>");
+    Some(out)
 }
 
 #[cfg(test)]

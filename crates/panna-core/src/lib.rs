@@ -36,7 +36,7 @@ pub use attachments::Attachment;
 pub use calc::{CalcOp, Calculation, Expr, Formula, number as calc_number, value_text as calc_value_text};
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use compare::{Change, ChangeKind};
-pub use document::{Document, DocumentInfo, OpenError, PageSize, RenderError, RenderedPage};
+pub use document::{Document, DocumentInfo, Leftovers, OpenError, PageSize, RenderError, RenderedPage};
 pub use edit::{
     Addition, Annotation, Changes, Cleanup, Color, Corner, HeaderFooter, Kind, LINE_HEIGHT, MAX_PICTURES,
     Margins, NOTE_SIZE, NewField, NewFieldKind, PageSource, PictureChange, Protection, STAMPS, SaveError,

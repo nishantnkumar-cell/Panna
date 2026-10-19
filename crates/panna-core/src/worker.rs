@@ -33,6 +33,7 @@ type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
 type AccessReply = Box<dyn FnOnce(Vec<crate::AccessFinding>) + Send>;
 type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
 type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
+type LeftoversReply = Box<dyn FnOnce(crate::Leftovers) + Send>;
 type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 
@@ -73,8 +74,12 @@ pub enum PageEdit {
         changes: Vec<(usize, crate::PictureChange)>,
     },
     /// Takes everything inside these areas (as page text boxes, per page) out for good, and
-    /// covers them in black.
-    Redact(Vec<(usize, Vec<crate::TextBox>)>),
+    /// covers them in black; and the comments and bookmark titles that mention one of
+    /// `scrub` (see [`Document::leftovers`]).
+    Redact {
+        areas: Vec<(usize, Vec<crate::TextBox>)>,
+        scrub: Vec<String>,
+    },
     /// Adds new form fields and takes out these ones.
     FormFields {
         add: Vec<crate::NewField>,
@@ -130,6 +135,8 @@ enum Reply {
     Compare(PathBuf, CompareReply),
     /// Where the pictures on a page are.
     Pictures(usize, PicturesReply),
+    /// What redacting these areas would leave in bookmarks and comments.
+    Leftovers(Vec<(usize, Vec<crate::TextBox>)>, LeftoversReply),
     /// Where form fields could go.
     DetectFields(DetectReply),
     /// What keeps the document from being PDF/A.
@@ -477,6 +484,20 @@ impl RenderWorker {
         });
     }
 
+    /// What redacting `areas` would leave in bookmarks and comments (see
+    /// [`Document::leftovers`]).
+    pub fn leftovers(
+        &self,
+        areas: Vec<(usize, Vec<crate::TextBox>)>,
+        reply: impl FnOnce(crate::Leftovers) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Leftovers(areas, Box::new(reply)),
+        });
+    }
+
     /// The whole document with unsaved changes, without password protection, for printing.
     pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -699,6 +720,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     }))
                 }
                 Reply::Pictures(page, reply) => reply(current.pictures(page)),
+                Reply::Leftovers(areas, reply) => reply(current.leftovers(&areas)),
                 Reply::DetectFields(reply) => reply(current.detect_fields()),
                 Reply::Preflight(standard, reply) => reply(match standard {
                     crate::Standard::PdfA => current.preflight(),
@@ -804,8 +826,8 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     PageEdit::Pictures { page, changes } => current
                         .with_pictures_changed(page, &changes)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Redact(areas) => current
-                        .redacted(&areas)
+                    PageEdit::Redact { areas, scrub } => current
+                        .redacted(&areas, &scrub)
                         .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
                     PageEdit::Add { page, additions } => current
                         .with_additions(page, &additions)

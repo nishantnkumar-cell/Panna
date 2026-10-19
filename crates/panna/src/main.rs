@@ -2178,9 +2178,20 @@ impl App {
                 match self.redactor.update(event) {
                     redact::Outcome::Nothing => {}
                     redact::Outcome::MarkResults => self.mark_find_results(),
-                    redact::Outcome::Apply(areas) => {
+                    redact::Outcome::LookFor(areas) => {
+                        if let Some(doc) = &self.doc {
+                            let (tx, rx) = futures_channel::oneshot::channel();
+                            doc.worker.leftovers(areas, move |found| {
+                                let _ = tx.send(found);
+                            });
+                            return Task::perform(rx, |found| {
+                                Message::Redact(redact::Event::Found(found.unwrap_or_default()))
+                            });
+                        }
+                    }
+                    redact::Outcome::Apply(areas, scrub) => {
                         let show = areas.first().map_or(0, |(page, _)| *page);
-                        return self.edit_pages(PageEdit::Redact(areas), show, false);
+                        return self.edit_pages(PageEdit::Redact { areas, scrub }, show, false);
                     }
                 }
                 if self.redactor.on {

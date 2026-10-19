@@ -64,6 +64,38 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<OutlineItem> {
     ctx.out
 }
 
+/// Every bookmark that is an object of its own, with its title as written, for redacting.
+pub(crate) fn titled(pdf: &Pdf) -> Vec<(ObjectIdentifier, String)> {
+    let mut out = Vec::new();
+    let xref = pdf.xref();
+    let Some(root) = xref
+        .get::<Dict<'_>>(xref.root_id())
+        .and_then(|c| c.get::<Dict<'_>>(b"Outlines"))
+    else {
+        return out;
+    };
+    let mut seen = HashSet::new();
+    let mut lists = vec![(root.get::<Dict<'_>>(b"First"), 0u16)];
+    while let Some((mut node, depth)) = lists.pop() {
+        while let Some(item) = node {
+            if out.len() >= MAX_ITEMS || depth > MAX_DEPTH {
+                break;
+            }
+            let Some(id) = item.obj_id().filter(|id| seen.insert(*id)) else {
+                break;
+            };
+            let title = item
+                .get::<hayro::hayro_syntax::object::String<'_>>(b"Title")
+                .map(|s| decode_text_string(s.as_bytes()))
+                .unwrap_or_default();
+            out.push((id, title));
+            lists.push((item.get::<Dict<'_>>(b"First"), depth + 1));
+            node = item.get::<Dict<'_>>(b"Next");
+        }
+    }
+    out
+}
+
 fn walk<'a>(ctx: &mut Ctx<'a>, first: Option<Dict<'a>>, depth: u16) {
     if depth > MAX_DEPTH {
         return;

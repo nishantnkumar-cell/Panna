@@ -115,12 +115,12 @@ fn marked_text_pictures_forms_and_notes_are_gone() {
     }
 
     // One page alone: the other still shows everything.
-    let new = doc.reopen(doc.redacted(&marks[..1]).unwrap()).unwrap();
+    let new = doc.reopen(doc.redacted(&marks[..1], &[]).unwrap()).unwrap();
     assert!(!words(&new, 0).contains("Secret"));
     assert!(words(&new, 1).contains("Secret Public"));
 
     // Both pages: nothing marked is left anywhere in the file.
-    let bytes = doc.redacted(&marks).unwrap();
+    let bytes = doc.redacted(&marks, &[]).unwrap();
     for hidden in [b"Secret".as_slice(), b"SECRETIMG", b"Hidden note"] {
         assert!(!contains(&bytes, hidden), "{}", String::from_utf8_lossy(hidden));
     }
@@ -152,7 +152,9 @@ fn marked_areas_are_covered_in_black() {
         x1: 200.0,
         y1: 60.0,
     };
-    let new = doc.reopen(doc.redacted(&[(0, vec![area])]).unwrap()).unwrap();
+    let new = doc
+        .reopen(doc.redacted(&[(0, vec![area])], &[]).unwrap())
+        .unwrap();
     let cache = new.new_cache();
     let page = new.render_page(&cache, 0, 1.0).unwrap();
     let at = |x: u32, y: u32| {
@@ -179,7 +181,7 @@ fn form_fields_are_not_redacted() {
         y1: 200.0,
     };
     assert!(matches!(
-        doc.redacted(&[(0, vec![area])]),
+        doc.redacted(&[(0, vec![area])], &[]),
         Err(SaveError::RedactsFormField)
     ));
 }
@@ -194,9 +196,53 @@ fn encrypted_files_are_redacted() {
     for bytes in fixtures {
         let doc = Document::from_bytes(bytes.to_vec(), Some("secret"), Limits::default()).unwrap();
         let areas = boxes(&doc, 0, "secret");
-        let new = doc.reopen(doc.redacted(&[(0, areas)]).unwrap()).unwrap();
+        let new = doc.reopen(doc.redacted(&[(0, areas)], &[]).unwrap()).unwrap();
         let text = words(&new, 0);
         assert!(text.contains("Hello") && text.contains("world"), "{text:?}");
         assert!(!text.contains("secret"), "{text:?}");
     }
+}
+
+#[test]
+fn bookmarks_and_comments_that_mention_redacted_text_can_go_too() {
+    let bytes = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] /Contents 4 0 R \
+         /Resources << /Font << /F1 5 0 R >> >> /Annots [9 0 R 10 0 R 11 0 R] >>",
+        &stream("", "BT /F1 20 Tf 20 100 Td (Acme Ltd pays) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Outlines /First 7 0 R /Last 8 0 R /Count 2 >>",
+        "<< /Title (Payments to ACME  ltd) /Parent 6 0 R /Next 8 0 R /Dest [3 0 R /Fit] >>",
+        "<< /Title (Summary) /Parent 6 0 R /Prev 7 0 R /Dest [3 0 R /Fit] >>",
+        "<< /Type /Annot /Subtype /Text /Rect [370 170 390 190] /Contents (Ask acme ltd first) >>",
+        "<< /Type /Annot /Subtype /Text /Rect [370 10 390 30] /Contents (Kept note) >>",
+        "<< /Type /Annot /Subtype /Text /Rect [300 10 320 30] /Contents (Agreed) /IRT 9 0 R >>",
+    ]);
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    let text = doc.page_text(0).unwrap();
+    let found = text.find("Acme Ltd", FindOptions::default());
+    let areas = vec![(0, text.rects(found[0].clone()))];
+
+    let left = doc.leftovers(&areas);
+    assert_eq!(left.phrases, vec!["acme ltd".to_owned()]);
+    assert_eq!((left.bookmarks, left.comments), (1, 1));
+
+    // Without the phrases, both stay.
+    let kept = doc
+        .reopen(doc.redacted(&areas, &[]).unwrap())
+        .unwrap()
+        .info()
+        .unwrap();
+    assert_eq!(kept.comments.len(), 3);
+    assert_eq!(kept.outline[0].title, "Payments to ACME ltd");
+
+    let bytes = doc.redacted(&areas, &left.phrases).unwrap();
+    let info = doc.reopen(bytes.clone()).unwrap().info().unwrap();
+    let titles: Vec<&str> = info.outline.iter().map(|o| o.title.as_str()).collect();
+    assert_eq!(titles, ["Payments to ████ ███", "Summary"]);
+    // The comment that mentions it goes, with its reply; the other stays.
+    let notes: Vec<&str> = info.comments.iter().map(|c| c.contents.as_str()).collect();
+    assert_eq!(notes, ["Kept note"]);
+    assert!(!contains(&bytes.to_ascii_lowercase(), b"acme"));
 }

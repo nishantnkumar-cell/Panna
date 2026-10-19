@@ -208,6 +208,15 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
+/// Where text about to be redacted still appears outside the pages.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Leftovers {
+    /// The redacted text, one phrase per marked area, in lower case.
+    pub phrases: Vec<String>,
+    pub bookmarks: usize,
+    pub comments: usize,
+}
+
 /// A parsed PDF document. Not `Sync`-shared: each document lives on one worker thread.
 pub struct Document {
     pdf: Pdf,
@@ -860,15 +869,62 @@ impl Document {
     /// The document with everything inside the marked areas taken out for good and covered
     /// with black boxes, as a new file. Each page's areas are in the same space as its text
     /// boxes.
-    pub fn redacted(&self, areas: &[(usize, Vec<crate::TextBox>)]) -> Result<Vec<u8>, crate::SaveError> {
+    pub fn redacted(
+        &self,
+        areas: &[(usize, Vec<crate::TextBox>)],
+        scrub: &[String],
+    ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::redact(
                 (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 areas,
+                scrub,
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The text under the areas about to be redacted (as for [`Document::redacted`]), and how
+    /// many bookmarks and comments elsewhere still mention it, which redacting the areas alone
+    /// leaves in the file. Passing the phrases to `redacted` takes those out too.
+    pub fn leftovers(&self, areas: &[(usize, Vec<crate::TextBox>)]) -> Leftovers {
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut texts = Vec::new();
+            for (page, rects) in areas {
+                if let Ok(text) = self.page_text(*page) {
+                    texts.extend(rects.iter().map(|r| text.text_in(&[*r])));
+                }
+            }
+            let phrases = crate::edit::scrub::phrases(texts.iter().map(String::as_str));
+            if phrases.is_empty() {
+                return Leftovers::default();
+            }
+            let mentions = |text: &str| crate::edit::scrub::mentions(text, &phrases);
+            let bookmarks = crate::outline::titled(&self.pdf)
+                .iter()
+                .filter(|(_, title)| mentions(title))
+                .count();
+            // Comments in the areas go with them anyway.
+            let overlaps = |a: &crate::TextBox, b: &crate::TextBox| {
+                a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+            };
+            let comments = crate::comments::read(&self.pdf)
+                .iter()
+                .filter(|c| mentions(&c.contents))
+                .filter(|c| {
+                    !areas
+                        .iter()
+                        .any(|(page, rects)| *page == c.page && rects.iter().any(|r| overlaps(r, &c.at)))
+                })
+                .count();
+            Leftovers {
+                phrases,
+                bookmarks,
+                comments,
+            }
+        }))
+        .unwrap_or_default()
     }
 
     /// The document with `mark` drawn on the pages at `pages`, as a new file.

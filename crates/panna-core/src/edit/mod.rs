@@ -12,6 +12,7 @@ mod pdfa;
 mod picture;
 mod rebuild;
 mod redact;
+pub(crate) mod scrub;
 mod sign;
 mod tag;
 mod update;
@@ -726,8 +727,12 @@ pub(crate) fn redact(
     doc: Input<'_>,
     count: usize,
     areas: &[(usize, Vec<crate::TextBox>)],
+    scrub: &[String],
 ) -> Result<Vec<u8>, SaveError> {
     let mut extras = vec![rebuild::Extra::default(); count];
+    if let Some(first) = extras.first_mut() {
+        first.scrub = scrub::phrases(scrub.iter().map(String::as_str));
+    }
     for (page, boxes) in areas {
         let extra = extras.get_mut(*page).ok_or(SaveError::NoSuchPage(*page))?;
         let rects: Vec<[f64; 4]> = boxes
