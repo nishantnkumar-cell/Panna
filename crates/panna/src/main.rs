@@ -29,6 +29,7 @@ mod settings;
 mod shortcuts;
 mod sidebar;
 mod sign;
+mod signatures;
 mod speech;
 mod toolbar;
 mod tools;
@@ -866,6 +867,11 @@ impl App {
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
                         doc.texts = info.pages.iter().map(|_| TextSlot::default()).collect();
                         doc.layers_shown = info.layers.iter().map(|l| l.shown).collect();
+                        // Signed documents open on their signatures, as in Acrobat.
+                        if !info.signatures.is_empty() {
+                            self.sidebar.open = true;
+                            self.sidebar.tab = sidebar::Tab::Signatures;
+                        }
                         doc.info = info;
                         self.selection = None;
                         self.hover = None;
@@ -3848,6 +3854,7 @@ impl App {
                 protected: false,
                 attachments: Vec::new(),
                 layers: Vec::new(),
+                signatures: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -4570,6 +4577,7 @@ impl App {
                 unsaved: &self.annotate.items,
                 removed: &self.annotate.removed,
                 attachments: &doc.info.attachments,
+                signatures: &doc.info.signatures,
                 layers: &doc.info.layers,
                 layers_shown: &doc.layers_shown,
                 can_undo_pages: self.page_edits > 0,

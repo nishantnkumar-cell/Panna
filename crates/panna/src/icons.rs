@@ -78,6 +78,9 @@ pub enum Icon {
     Clean,
     AllTools,
     Paperclip,
+    Signed,
+    SignatureProblem,
+    SignatureUnknown,
     Camera,
     Layers,
     Ruler,
@@ -182,6 +185,9 @@ impl Icon {
             Icon::Clean => include_bytes!("../icons/shield-check.svg"),
             Icon::AllTools => include_bytes!("../icons/layout-grid.svg"),
             Icon::Paperclip => include_bytes!("../icons/paperclip.svg"),
+            Icon::Signed => include_bytes!("../icons/badge-check.svg"),
+            Icon::SignatureProblem => include_bytes!("../icons/shield-alert.svg"),
+            Icon::SignatureUnknown => include_bytes!("../icons/shield-question.svg"),
             Icon::Camera => include_bytes!("../icons/camera.svg"),
             Icon::Layers => include_bytes!("../icons/layers-2.svg"),
             Icon::Ruler => include_bytes!("../icons/ruler.svg"),
@@ -305,7 +311,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 99] = [
+    const ALL: [Icon; 102] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -376,6 +382,9 @@ mod tests {
         Icon::Clean,
         Icon::AllTools,
         Icon::Paperclip,
+        Icon::Signed,
+        Icon::SignatureProblem,
+        Icon::SignatureUnknown,
         Icon::Camera,
         Icon::Layers,
         Icon::Ruler,

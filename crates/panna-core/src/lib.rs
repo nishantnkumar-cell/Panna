@@ -23,6 +23,7 @@ mod limits;
 mod links;
 mod outline;
 mod preflight;
+mod sig;
 mod text;
 mod worker;
 
@@ -46,5 +47,6 @@ pub use limits::Limits;
 pub use links::{Link, LinkTarget, safe_uri};
 pub use outline::OutlineItem;
 pub use preflight::{Finding, Rule};
+pub use sig::{SigStatus, Signature};
 pub use text::{FindOptions, PageText, TextBox};
 pub use worker::{PageEdit, RenderWorker};

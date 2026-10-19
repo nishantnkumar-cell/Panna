@@ -1,0 +1,593 @@
+//! Checking digital signatures, offline: that the signed bytes haven't changed, that the
+//! signature was made with the key of the certificate it carries, and what that certificate
+//! says about the signer. Whether to trust the certificate can't be settled without a list
+//! of trusted certificates or a revocation check, so it's reported, not decided.
+
+use std::collections::HashMap;
+
+use cms::cert::CertificateChoices;
+use cms::content_info::ContentInfo;
+use cms::signed_data::{SignedData, SignerIdentifier, SignerInfo};
+use der::asn1::{ObjectIdentifier, OctetString, UintRef};
+use der::{Decode, Encode, Reader, SliceReader};
+use hayro::hayro_syntax::Pdf;
+use hayro::hayro_syntax::object::{Array, Dict, Name, Object};
+use num_bigint::BigUint;
+use sha1::Sha1;
+use sha2::{Digest, Sha256, Sha384, Sha512};
+use x509_cert::Certificate;
+use x509_cert::name::Name as X509Name;
+
+/// Signature fields looked at at most.
+const MAX_SIGNATURES: usize = 200;
+/// The largest signature read, in bytes.
+const MAX_SIGNATURE_LEN: usize = 1 << 20;
+/// How deep the form's field tree is followed.
+const MAX_DEPTH: u8 = 32;
+
+/// How a signature checks out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SigStatus {
+    /// The signed bytes are unchanged and the signature matches the certificate.
+    Valid,
+    /// It doesn't check out, and why.
+    Invalid(String),
+    /// It can't be checked here, and why.
+    Unsupported(String),
+}
+
+/// A signature in the document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature {
+    pub field: String,
+    pub page: Option<usize>,
+    /// Who signed: the certificate's name, or the name the signature gives.
+    pub signer: String,
+    /// Who issued the signer's certificate, or empty when the signer issued it themselves.
+    pub issuer: String,
+    /// When it was signed, as the signature says (not proved by a time stamp).
+    pub time: Option<String>,
+    pub reason: String,
+    pub location: String,
+    pub status: SigStatus,
+    /// Whether the document has been changed since it was signed (a later revision added).
+    pub changed_after: bool,
+    /// Whether the certificate wasn't valid at the time of signing.
+    pub outside_validity: bool,
+    /// Whether this signature certifies the document (and what it allows afterwards: 1 no
+    /// changes, 2 form filling and signing, 3 also comments).
+    pub certifies: Option<u8>,
+}
+
+struct Raw {
+    field: String,
+    page: Option<usize>,
+    name: String,
+    time: Option<String>,
+    reason: String,
+    location: String,
+    sub_filter: String,
+    byte_range: Vec<i64>,
+    certifies: Option<u8>,
+}
+
+/// The text of a PDF string entry.
+fn text(dict: &Dict<'_>, key: &[u8]) -> String {
+    match dict.get::<Object<'_>>(key) {
+        Some(Object::String(s)) => crate::document::decode_text_string(s.as_bytes())
+            .trim()
+            .to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// A PDF date such as D:20261019120000Z as 2026-10-19 12:00.
+fn pdf_date(s: &str) -> Option<String> {
+    let d = s.strip_prefix("D:").unwrap_or(s);
+    let digits: String = d.chars().take_while(char::is_ascii_digit).collect();
+    let part = |at: usize, len: usize| digits.get(at..at + len);
+    let year = part(0, 4)?;
+    let date = format!(
+        "{year}-{}-{}",
+        part(4, 2).unwrap_or("01"),
+        part(6, 2).unwrap_or("01")
+    );
+    Some(match (part(8, 2), part(10, 2)) {
+        (Some(h), Some(m)) => {
+            let zone = d.get(digits.len()..).unwrap_or("").replace('\'', "");
+            let zone = match zone.as_str() {
+                "" => String::new(),
+                "Z" => " UTC".into(),
+                z => format!(" {z}"),
+            };
+            format!("{date} {h}:{m}{zone}")
+        }
+        _ => date,
+    })
+}
+
+/// What the field walk gathers, the page of each widget, and the certifying signature.
+type Walk<'a> = (Vec<Raw>, &'a HashMap<(i32, i32), usize>, Option<(i32, i32)>);
+
+fn read_fields(pdf: &Pdf) -> Vec<Raw> {
+    let xref = pdf.xref();
+    let catalog = xref.get::<Dict<'_>>(xref.root_id()).unwrap_or_default();
+    // Which page each widget is on.
+    let mut pages = HashMap::new();
+    for (index, page) in pdf.pages().iter().enumerate() {
+        if let Some(annots) = page.raw().get::<Array<'_>>(b"Annots") {
+            for a in annots.iter::<Dict<'_>>().take(4_000) {
+                if let Some(id) = a.obj_id() {
+                    pages.insert((id.obj_number, id.gen_number), index);
+                }
+            }
+        }
+    }
+    let certifying = catalog
+        .get::<Dict<'_>>(b"Perms")
+        .and_then(|p| p.get_ref(b"DocMDP"))
+        .map(|r| (r.obj_number, r.gen_number));
+    let mut out = Vec::new();
+    let Some(fields) = catalog
+        .get::<Dict<'_>>(b"AcroForm")
+        .and_then(|f| f.get::<Array<'_>>(b"Fields"))
+    else {
+        return out;
+    };
+    fn walk(field: &Dict<'_>, parent: &str, sig: bool, depth: u8, ctx: &mut Walk<'_>) {
+        if depth > MAX_DEPTH || ctx.0.len() >= MAX_SIGNATURES {
+            return;
+        }
+        let own = text(field, b"T");
+        let name = match (parent.is_empty(), own.is_empty()) {
+            (_, true) => parent.to_owned(),
+            (true, false) => own,
+            (false, false) => format!("{parent}.{own}"),
+        };
+        let sig = field.get::<Name<'_>>(b"FT").map_or(sig, |t| t.as_str() == "Sig");
+        if let Some(kids) = field.get::<Array<'_>>(b"Kids") {
+            for kid in kids.iter::<Dict<'_>>() {
+                walk(&kid, &name, sig, depth + 1, ctx);
+            }
+        }
+        if !sig {
+            return;
+        }
+        let Some(value) = field.get::<Dict<'_>>(b"V") else {
+            return;
+        };
+        let page = field
+            .obj_id()
+            .and_then(|id| ctx.1.get(&(id.obj_number, id.gen_number)).copied())
+            .or_else(|| {
+                let kid = field.get::<Array<'_>>(b"Kids")?.iter::<Dict<'_>>().next()?;
+                let id = kid.obj_id()?;
+                ctx.1.get(&(id.obj_number, id.gen_number)).copied()
+            });
+        let certifies = field.get_ref(b"V").and_then(|r| {
+            (Some((r.obj_number, r.gen_number)) == ctx.2).then(|| {
+                value
+                    .get::<Array<'_>>(b"Reference")
+                    .and_then(|refs| refs.iter::<Dict<'_>>().next())
+                    .and_then(|r| r.get::<Dict<'_>>(b"TransformParams"))
+                    .and_then(|t| t.get::<i64>(b"P"))
+                    .map_or(2, |p| p.clamp(1, 3) as u8)
+            })
+        });
+        ctx.0.push(Raw {
+            field: name,
+            page,
+            name: text(&value, b"Name"),
+            time: pdf_date(&text(&value, b"M")),
+            reason: text(&value, b"Reason"),
+            location: text(&value, b"Location"),
+            sub_filter: value
+                .get::<Name<'_>>(b"SubFilter")
+                .map(|n| n.as_str().to_owned())
+                .unwrap_or_default(),
+            byte_range: value
+                .get::<Array<'_>>(b"ByteRange")
+                .map(|a| a.iter::<i64>().take(8).collect())
+                .unwrap_or_default(),
+            certifies,
+        });
+    }
+    let mut ctx = (Vec::new(), &pages, certifying);
+    for f in fields.iter::<Dict<'_>>() {
+        walk(&f, "", false, 0, &mut ctx);
+    }
+    out.append(&mut ctx.0);
+    out
+}
+
+#[derive(Clone, Copy)]
+enum Hash {
+    Sha1,
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+impl Hash {
+    fn from_oid(oid: &ObjectIdentifier) -> Option<Self> {
+        Some(match oid.to_string().as_str() {
+            "1.3.14.3.2.26" => Hash::Sha1,
+            "2.16.840.1.101.3.4.2.1" => Hash::Sha256,
+            "2.16.840.1.101.3.4.2.2" => Hash::Sha384,
+            "2.16.840.1.101.3.4.2.3" => Hash::Sha512,
+            _ => return None,
+        })
+    }
+
+    fn digest(self, parts: &[&[u8]]) -> Vec<u8> {
+        fn run<D: Digest>(parts: &[&[u8]]) -> Vec<u8> {
+            let mut d = D::new();
+            for p in parts {
+                d.update(p);
+            }
+            d.finalize().to_vec()
+        }
+        match self {
+            Hash::Sha1 => run::<Sha1>(parts),
+            Hash::Sha256 => run::<Sha256>(parts),
+            Hash::Sha384 => run::<Sha384>(parts),
+            Hash::Sha512 => run::<Sha512>(parts),
+        }
+    }
+
+    /// The DER DigestInfo that comes before the hash in an RSA PKCS #1 v1.5 signature.
+    fn digest_info(self) -> &'static [u8] {
+        match self {
+            Hash::Sha1 => &[
+                0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
+            ],
+            Hash::Sha256 => &[
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+                0x05, 0x00, 0x04, 0x20,
+            ],
+            Hash::Sha384 => &[
+                0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+                0x05, 0x00, 0x04, 0x30,
+            ],
+            Hash::Sha512 => &[
+                0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03,
+                0x05, 0x00, 0x04, 0x40,
+            ],
+        }
+    }
+}
+
+/// A name's common name, or the whole name when it has none.
+fn common_name(name: &X509Name) -> String {
+    for rdn in name.0.iter() {
+        for atv in rdn.0.iter() {
+            if atv.oid.to_string() == "2.5.4.3" {
+                return String::from_utf8_lossy(atv.value.value()).into_owned();
+            }
+        }
+    }
+    name.to_string()
+}
+
+fn unix_date(t: x509_cert::time::Time) -> String {
+    let d = t.to_date_time();
+    format!(
+        "{}-{:02}-{:02} {:02}:{:02} UTC",
+        d.year(),
+        d.month(),
+        d.day(),
+        d.hour(),
+        d.minutes()
+    )
+}
+
+/// RSA PKCS #1 v1.5: whether `sig` is `hash` signed with the key `(n, e)`.
+fn rsa_verifies(n: &[u8], e: &[u8], sig: &[u8], hash: Hash, digest: &[u8]) -> bool {
+    let n = BigUint::from_bytes_be(n);
+    let e = BigUint::from_bytes_be(e);
+    let k = n.to_bytes_be().len();
+    let s = BigUint::from_bytes_be(sig);
+    if sig.len() != k || s >= n || !(64..=2048).contains(&k) {
+        return false;
+    }
+    let m = s.modpow(&e, &n).to_bytes_be();
+    let mut em = vec![0u8; k - m.len()];
+    em.extend(m);
+    let info = hash.digest_info();
+    let t_len = info.len() + digest.len();
+    if k < t_len + 11 {
+        return false;
+    }
+    let mut expected = vec![0x00, 0x01];
+    expected.extend(std::iter::repeat_n(0xff, k - t_len - 3));
+    expected.push(0x00);
+    expected.extend(info);
+    expected.extend(digest);
+    em == expected
+}
+
+/// Whether `sig` over `message` was made with the certificate's key.
+fn verifies(
+    cert: &Certificate,
+    info: &SignerInfo,
+    digest_hash: Hash,
+    message: &[u8],
+) -> Result<bool, String> {
+    let spki = &cert.tbs_certificate.subject_public_key_info;
+    let key = spki.subject_public_key.raw_bytes();
+    let sig = info.signature.as_bytes();
+    let alg = info.signature_algorithm.oid.to_string();
+    // The hash the signature algorithm names, when it names one.
+    let named = match alg.as_str() {
+        "1.2.840.113549.1.1.5" | "1.2.840.10045.4.1" => Some(Hash::Sha1),
+        "1.2.840.113549.1.1.11" | "1.2.840.10045.4.3.2" => Some(Hash::Sha256),
+        "1.2.840.113549.1.1.12" | "1.2.840.10045.4.3.3" => Some(Hash::Sha384),
+        "1.2.840.113549.1.1.13" | "1.2.840.10045.4.3.4" => Some(Hash::Sha512),
+        _ => None,
+    };
+    let hash = named.unwrap_or(digest_hash);
+    let digest = hash.digest(&[message]);
+    match spki.algorithm.oid.to_string().as_str() {
+        "1.2.840.113549.1.1.1" => {
+            if alg == "1.2.840.113549.1.1.10" {
+                return Err("RSA-PSS signatures aren't supported yet".into());
+            }
+            let mut reader = SliceReader::new(key).map_err(|e| e.to_string())?;
+            let (n, e) = reader
+                .sequence(|r| Ok((UintRef::decode(r)?, UintRef::decode(r)?)))
+                .map_err(|_| "The certificate's RSA key can't be read".to_owned())?;
+            Ok(rsa_verifies(n.as_bytes(), e.as_bytes(), sig, hash, &digest))
+        }
+        "1.2.840.10045.2.1" => {
+            use p256::ecdsa::signature::hazmat::PrehashVerifier;
+            let curve = spki
+                .algorithm
+                .parameters
+                .as_ref()
+                .and_then(|p| p.decode_as::<ObjectIdentifier>().ok())
+                .map(|o| o.to_string())
+                .unwrap_or_default();
+            match curve.as_str() {
+                "1.2.840.10045.3.1.7" => {
+                    let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(key)
+                        .map_err(|_| "The certificate's key can't be read".to_owned())?;
+                    let Ok(sig) = p256::ecdsa::Signature::from_der(sig) else {
+                        return Ok(false);
+                    };
+                    Ok(key.verify_prehash(&digest, &sig).is_ok())
+                }
+                "1.3.132.0.34" => {
+                    let key = p384::ecdsa::VerifyingKey::from_sec1_bytes(key)
+                        .map_err(|_| "The certificate's key can't be read".to_owned())?;
+                    let Ok(sig) = p384::ecdsa::Signature::from_der(sig) else {
+                        return Ok(false);
+                    };
+                    Ok(key.verify_prehash(&digest, &sig).is_ok())
+                }
+                _ => Err("This kind of elliptic curve isn't supported yet".into()),
+            }
+        }
+        _ => Err("This kind of key isn't supported yet".into()),
+    }
+}
+
+/// What a signature's CMS data says: who signed, when the signer says it was, how it checks
+/// out, and whether the certificate was valid then.
+struct Checked {
+    signer: Option<String>,
+    issuer: String,
+    time: Option<String>,
+    status: SigStatus,
+    outside_validity: bool,
+}
+
+fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
+    let mut out = Checked {
+        signer: None,
+        issuer: String::new(),
+        time: None,
+        status: SigStatus::Unsupported(String::new()),
+        outside_validity: false,
+    };
+    let unsupported = |why: &str| SigStatus::Unsupported(why.to_owned());
+    // The data is padded with zeros after the signature itself.
+    let parsed = SliceReader::new(der)
+        .and_then(|mut r| ContentInfo::decode(&mut r))
+        .and_then(|ci| ci.content.decode_as::<SignedData>());
+    let Ok(data) = parsed else {
+        out.status = unsupported("The signature's data can't be read (it isn't DER-encoded CMS)");
+        return out;
+    };
+    let Some(info) = data.signer_infos.0.iter().next() else {
+        out.status = SigStatus::Invalid("The signature has no signer".into());
+        return out;
+    };
+    let certs: Vec<&Certificate> = data
+        .certificates
+        .as_ref()
+        .map(|c| {
+            c.0.iter()
+                .filter_map(|c| match c {
+                    CertificateChoices::Certificate(c) => Some(c),
+                    CertificateChoices::Other(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let cert = certs.iter().copied().find(|c| match &info.sid {
+        SignerIdentifier::IssuerAndSerialNumber(id) => {
+            id.issuer.to_der().ok() == c.tbs_certificate.issuer.to_der().ok()
+                && id.serial_number.to_der().ok() == c.tbs_certificate.serial_number.to_der().ok()
+        }
+        SignerIdentifier::SubjectKeyIdentifier(ski) => {
+            c.tbs_certificate.extensions.as_ref().is_some_and(|exts| {
+                exts.iter().any(|e| {
+                    e.extn_id.to_string() == "2.5.29.14"
+                        && OctetString::from_der(e.extn_value.as_bytes())
+                            .is_ok_and(|v| v.as_bytes() == ski.0.as_bytes())
+                })
+            })
+        }
+    });
+    let Some(cert) = cert else {
+        out.status = unsupported("The signer's certificate isn't in the signature");
+        return out;
+    };
+    let tbs = &cert.tbs_certificate;
+    out.signer = Some(common_name(&tbs.subject));
+    if tbs.issuer != tbs.subject {
+        out.issuer = common_name(&tbs.issuer);
+    }
+    let Some(hash) = Hash::from_oid(&info.digest_alg.oid) else {
+        out.status = unsupported("The signature uses a hash Panna doesn't know");
+        return out;
+    };
+    let content_digest = hash.digest(signed);
+    let message = match &info.signed_attrs {
+        Some(attrs) => {
+            let mut digest_ok = None;
+            for attr in attrs.iter() {
+                match attr.oid.to_string().as_str() {
+                    "1.2.840.113549.1.9.4" => {
+                        digest_ok = attr
+                            .values
+                            .iter()
+                            .next()
+                            .and_then(|v| v.decode_as::<OctetString>().ok())
+                            .map(|v| v.as_bytes() == content_digest.as_slice());
+                    }
+                    "1.2.840.113549.1.9.5" => {
+                        let when = attr
+                            .values
+                            .iter()
+                            .next()
+                            .and_then(|v| x509_cert::time::Time::from_der(&v.to_der().ok()?).ok());
+                        if let Some(when) = when {
+                            let v = &tbs.validity;
+                            out.outside_validity = when.to_unix_duration() < v.not_before.to_unix_duration()
+                                || when.to_unix_duration() > v.not_after.to_unix_duration();
+                            out.time = Some(unix_date(when));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match digest_ok {
+                Some(true) => {}
+                Some(false) => {
+                    out.status =
+                        SigStatus::Invalid("The document has been altered since it was signed".into());
+                    return out;
+                }
+                None => {
+                    out.status = SigStatus::Invalid("The signature doesn't say what was signed".into());
+                    return out;
+                }
+            }
+            match attrs.to_der() {
+                Ok(d) => d,
+                Err(_) => {
+                    out.status = unsupported("The signature's details can't be read");
+                    return out;
+                }
+            }
+        }
+        None => signed.concat(),
+    };
+    out.status = match verifies(cert, info, hash, &message) {
+        Ok(true) => SigStatus::Valid,
+        Ok(false) if info.signed_attrs.is_none() => {
+            SigStatus::Invalid("The document has been altered since it was signed".into())
+        }
+        Ok(false) => SigStatus::Invalid("The signature doesn't match the signer's certificate".into()),
+        Err(why) => SigStatus::Unsupported(why),
+    };
+    out
+}
+
+pub(crate) fn read(pdf: &Pdf, bytes: &[u8]) -> Vec<Signature> {
+    let len = bytes.len();
+    // A file may end with whitespace after its last %%EOF.
+    let end_of_data = bytes
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .map_or(0, |p| p + 1);
+    read_fields(pdf)
+        .into_iter()
+        .map(|raw| {
+            let mut sig = Signature {
+                field: raw.field,
+                page: raw.page,
+                signer: raw.name.clone(),
+                issuer: String::new(),
+                time: raw.time,
+                reason: raw.reason,
+                location: raw.location,
+                status: SigStatus::Unsupported(String::new()),
+                changed_after: false,
+                outside_validity: false,
+                certifies: raw.certifies,
+            };
+            let r: Vec<usize> = raw
+                .byte_range
+                .iter()
+                .filter_map(|&v| usize::try_from(v).ok())
+                .collect();
+            let [a, b, c, d] = r[..] else {
+                sig.status = SigStatus::Invalid("The signature doesn't say which bytes it covers".into());
+                return sig;
+            };
+            let gap = bytes.get(a.saturating_add(b)..c);
+            let (Some(first), Some(second), Some(gap)) = (
+                bytes.get(a..a.saturating_add(b)),
+                bytes.get(c..c.saturating_add(d)),
+                gap,
+            ) else {
+                sig.status = SigStatus::Invalid("The signature covers bytes the file doesn't have".into());
+                return sig;
+            };
+            if a != 0
+                || gap.first() != Some(&b'<')
+                || gap.last() != Some(&b'>')
+                || gap.len() > MAX_SIGNATURE_LEN * 2 + 2
+            {
+                sig.status = SigStatus::Invalid("The signature covers the wrong part of the file".into());
+                return sig;
+            }
+            let hex: Vec<u8> = gap
+                .get(1..gap.len() - 1)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect();
+            let der: Option<Vec<u8>> = hex
+                .chunks(2)
+                .map(|p| {
+                    std::str::from_utf8(p)
+                        .ok()
+                        .and_then(|s| u8::from_str_radix(s, 16).ok())
+                })
+                .collect();
+            let Some(der) = der else {
+                sig.status = SigStatus::Invalid("The signature's data is damaged".into());
+                return sig;
+            };
+            sig.changed_after = c + d < end_of_data.min(len);
+            if raw.sub_filter == "adbe.x509.rsa_sha1" || raw.sub_filter == "adbe.pkcs7.sha1" {
+                sig.status =
+                    SigStatus::Unsupported(format!("{} signatures aren't supported yet", raw.sub_filter));
+                return sig;
+            }
+            let checked = check_cms(&der, &[first, second]);
+            if let Some(name) = checked.signer {
+                sig.signer = name;
+            }
+            sig.issuer = checked.issuer;
+            sig.time = checked.time.or(sig.time);
+            sig.status = checked.status;
+            sig.outside_validity = checked.outside_validity;
+            sig
+        })
+        .collect()
+}

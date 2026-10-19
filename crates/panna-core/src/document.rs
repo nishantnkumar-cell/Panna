@@ -41,6 +41,8 @@ pub struct DocumentInfo {
     pub attachments: Vec<crate::Attachment>,
     /// Layers that can be shown or hidden.
     pub layers: Vec<crate::Layer>,
+    /// Digital signatures, each checked.
+    pub signatures: Vec<crate::Signature>,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -314,7 +316,9 @@ impl Document {
                 catch_unwind(AssertUnwindSafe(|| crate::attachments::read(&self.pdf))).unwrap_or_default();
             let layers =
                 catch_unwind(AssertUnwindSafe(|| crate::layers::read(&self.pdf))).unwrap_or_default();
+            let signatures = self.signatures();
             DocumentInfo {
+                signatures,
                 fields,
                 links,
                 protected,
@@ -493,6 +497,13 @@ impl Document {
             crate::preflight::check(&self.pdf, encrypted, has_id)
         }))
         .unwrap_or_default()
+    }
+
+    /// The document's digital signatures, each checked: whether the signed bytes are
+    /// unchanged and the signature matches the signer's certificate. Whether to trust that
+    /// certificate isn't decided here.
+    pub fn signatures(&self) -> Vec<crate::Signature> {
+        catch_unwind(AssertUnwindSafe(|| crate::sig::read(&self.pdf, &self.bytes))).unwrap_or_default()
     }
 
     /// What makes the document harder to use with screen readers and other assistive

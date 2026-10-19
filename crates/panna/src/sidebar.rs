@@ -33,6 +33,7 @@ pub enum Tab {
     Files,
     Layers,
     Changes,
+    Signatures,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,6 +70,7 @@ impl Tab {
             Tab::Files => "files",
             Tab::Layers => "layers",
             Tab::Changes => "changes",
+            Tab::Signatures => "signatures",
         }
     }
 
@@ -81,6 +83,7 @@ impl Tab {
             "files" => Some(Tab::Files),
             "layers" => Some(Tab::Layers),
             "changes" => Some(Tab::Changes),
+            "signatures" => Some(Tab::Signatures),
             _ => None,
         }
     }
@@ -211,6 +214,7 @@ pub struct ViewData<'a> {
     pub unsaved: &'a [Annotation],
     pub removed: &'a [CommentId],
     pub attachments: &'a [Attachment],
+    pub signatures: &'a [panna_core::Signature],
     pub layers: &'a [Layer],
     /// Whether each layer is shown.
     pub layers_shown: &'a [bool],
@@ -228,6 +232,7 @@ impl Sidebar {
         // Word-style text tabs; the open one is underlined in the accent colour.
         let has_files = !data.attachments.is_empty();
         let has_layers = !data.layers.is_empty();
+        let has_signatures = !data.signatures.is_empty();
         let tab_button = |tab: Tab, label: &'static str| {
             let active = self.tab == tab;
             button(text(label).size(13))
@@ -278,6 +283,12 @@ impl Sidebar {
             ))
             .push(icon_tab(has_layers, Icon::Layers, "Layers", Tab::Layers))
             .push(icon_tab(has_files, Icon::Paperclip, "Attached files", Tab::Files))
+            .push(icon_tab(
+                has_signatures,
+                crate::signatures::icon(data.signatures),
+                "Signatures",
+                Tab::Signatures,
+            ))
             .push(
                 row![
                     icons::button(Icon::SwapSide, side_tip, Some(ev(Event::SwapSide))),
@@ -310,7 +321,10 @@ impl Sidebar {
             Tab::Changes if data.comparison.is_some() => data
                 .comparison
                 .map_or_else(|| space().into(), crate::compare::Comparison::panel),
-            Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes => self.thumbnails(&data),
+            Tab::Signatures if has_signatures => crate::signatures::panel(data.signatures),
+            Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes | Tab::Signatures => {
+                self.thumbnails(&data)
+            }
             Tab::Bookmarks => bookmarks(data.outline, data.find),
             Tab::Results => data.find.results(data.texts),
             Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),

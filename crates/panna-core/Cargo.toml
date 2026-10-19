@@ -19,6 +19,16 @@ md-5 = "0.10"
 # Reading XFDF form data files (already used by the SVG icons).
 roxmltree = "0.20"
 sha2 = "0.10"
+# Checking digital signatures: CMS and certificates, and the ECDSA algorithms.
+cms = "0.2"
+der = "0.7"
+x509-cert = { version = "0.2", default-features = false }
+spki = "0.7"
+# RSA signatures are checked with public-key arithmetic only (no private keys involved).
+num-bigint = "0.4"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+sha1 = "0.10"
 
 [lints]
 workspace = true

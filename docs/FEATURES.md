@@ -113,7 +113,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Open encrypted PDFs | V1 | Done (see above); changes save back into them encrypted |
 | Encrypt with password, set permissions | Later | Done: AES-256 (revision 6) with an open password, a permissions password and print/change/copy limits; removing or changing it needs the owner password. Checked against poppler |
 | Digitally sign with a local certificate (PKCS#12 / OS store) | Later | |
-| Validate signatures | Later | Revocation checks (OCSP/CRL) are online, so they stay optional and off by default |
+| Validate signatures | Later | Done offline: signed documents open on a Signatures tab in the sidebar listing each signature, whether the signed bytes are unchanged and match the certificate (RSA and ECDSA P-256/P-384 with SHA-1 to SHA-512), whether the document changed afterwards, whether it certifies the document, and who issued the certificate. Trust lists and revocation checks (OCSP/CRL, which are online) not done; RSA-PSS not yet |
 | Certify document | Later | |
 | Adobe Sign, cloud ID | Skip | Online |
 
