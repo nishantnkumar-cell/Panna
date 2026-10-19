@@ -1,10 +1,10 @@
-//! The reports of the PDF/A and accessibility checks: what keeps the document from being
+//! The reports of the PDF/A, PDF/X and accessibility checks: what keeps the document from being
 //! archival PDF, or from working well with screen readers, grouped by rule, each with the
 //! page it's on.
 
 use iced::widget::{Column, button, column, container, row, scrollable, space, text};
 use iced::{Element, Fill, Theme};
-use panna_core::{AccessFinding, Finding};
+use panna_core::{AccessFinding, AccessRule, Finding};
 
 use crate::Message;
 
@@ -17,6 +17,8 @@ pub enum Event {
     RunAccessibility,
     /// Save a PDF/A copy.
     Convert,
+    /// Save a copy with tags added.
+    Tag,
     /// Close the report and show this page.
     Show(usize),
     Close,
@@ -41,8 +43,10 @@ struct Item {
 pub struct Report {
     kind: Kind,
     items: Vec<Item>,
-    /// The PDF/A copy these findings are about, when one was just saved.
+    /// The PDF/A or tagged copy these findings are about, when one was just saved.
     saved: Option<String>,
+    /// The document has no tags, which Panna can add.
+    untagged: bool,
 }
 
 impl Report {
@@ -67,6 +71,7 @@ impl Report {
                 })
                 .collect(),
             saved: None,
+            untagged: false,
         }
     }
 
@@ -81,6 +86,7 @@ impl Report {
     pub fn accessibility(findings: Vec<AccessFinding>) -> Self {
         Self {
             kind: Kind::Accessibility,
+            untagged: findings.iter().any(|f| f.rule == AccessRule::NotTagged),
             items: findings
                 .into_iter()
                 .map(|f| Item {
@@ -90,6 +96,14 @@ impl Report {
                 })
                 .collect(),
             saved: None,
+        }
+    }
+
+    /// The accessibility check of a tagged copy just saved as `name`.
+    pub fn tagged(name: String, findings: Vec<AccessFinding>) -> Self {
+        Self {
+            saved: Some(name),
+            ..Self::accessibility(findings)
         }
     }
 
@@ -125,6 +139,16 @@ impl Report {
                 "Not yet PDF/X".to_owned(),
                 "These keep the document from being PDF/X-4, for printing. Making PDF/X needs \
                  the printer's colour profile, so Panna checks but doesn't convert:",
+            ),
+            (Kind::Accessibility, Some(name)) if clean => (
+                format!("Saved {name}"),
+                "Tags were added, and no other problems were found. Whether the reading order \
+                 and headings make sense still needs a person to check.",
+            ),
+            (Kind::Accessibility, Some(name)) => (
+                format!("Saved {name}"),
+                "Tags were added: each run of text is a paragraph, or a heading where the type is \
+                 larger. These still need fixing in the program that made the document:",
             ),
             (Kind::Accessibility, _) if clean => (
                 "No accessibility problems found".to_owned(),
@@ -171,6 +195,13 @@ impl Report {
                     .on_press_maybe(
                         (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::Convert)),
                     ),
+            );
+        }
+        if self.untagged && self.saved.is_none() {
+            buttons = buttons.push(
+                button("Save a tagged copy…")
+                    .style(button::secondary)
+                    .on_press(Message::Preflight(Event::Tag)),
             );
         }
         let body = column![

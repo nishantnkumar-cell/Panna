@@ -545,6 +545,13 @@ impl Document {
         Ok(bytes)
     }
 
+    /// The document with tags added for screen readers: each run of text a paragraph, or a
+    /// heading where its type is larger, in the order it's drawn. Fails if it has tags.
+    pub fn tagged(&self) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| crate::edit::tag(&self.pdf, &self.bytes)))
+            .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// What makes the document harder to use with screen readers and other assistive
     /// technology: an empty list when the main checks pass.
     pub fn accessibility(&self) -> Vec<crate::AccessFinding> {

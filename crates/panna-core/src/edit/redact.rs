@@ -929,6 +929,124 @@ pub(crate) fn drawn_shapes(content: &[u8]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
     (rects, lines)
 }
 
+/// A run of text in content: the bytes from `BT` to the end of `ET`, the largest size its
+/// text is shown at (in page space, points), and how many bytes of text it shows.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextBlock {
+    pub range: std::ops::Range<usize>,
+    pub size: f64,
+    pub shown: usize,
+}
+
+/// The text objects `content` shows text in, in order; or `None` when it's already marked
+/// up (it has marked content of its own) or can't be read.
+pub(crate) fn text_blocks(content: &[u8]) -> Option<Vec<TextBlock>> {
+    let mut lex = Lexer {
+        data: content,
+        pos: 0,
+    };
+    let mut stack: Vec<(Matrix, f64)> = Vec::new();
+    let (mut ctm, mut font_size) = (IDENTITY, 0.0);
+    let (mut tm, mut tlm) = (IDENTITY, IDENTITY);
+    let mut operands: Vec<Operand> = Vec::new();
+    let mut out = Vec::new();
+    // The current text object's start, the largest size shown in it so far, and the bytes
+    // of text shown.
+    let mut open: Option<(usize, f64, usize)> = None;
+    let mut start = 0;
+    let scale = |m: Matrix| (m[0] * m[3] - m[1] * m[2]).abs().sqrt();
+    loop {
+        lex.skip();
+        if operands.is_empty() {
+            start = lex.pos;
+        }
+        let Some(token) = lex.token(0) else { break };
+        let range = match token {
+            Token::Operand(o) => {
+                operands.push(o);
+                continue;
+            }
+            Token::ArrayEnd | Token::DictEnd => {
+                operands.push(Operand::Other);
+                continue;
+            }
+            Token::Operator(range) => range,
+        };
+        let nums: Vec<f64> = operands.iter().filter_map(Operand::number).collect();
+        match content.get(range)? {
+            b"BDC" | b"BMC" => return None,
+            b"q" if stack.len() < MAX_STACK => stack.push((ctm, font_size)),
+            b"Q" => (ctm, font_size) = stack.pop().unwrap_or((ctm, font_size)),
+            b"cm" => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    ctm = concat([a, b, c, d, e, f], ctm);
+                }
+            }
+            b"BT" => {
+                (tm, tlm) = (IDENTITY, IDENTITY);
+                // A text object inside another isn't allowed; the outer one stands.
+                if open.is_none() {
+                    open = Some((start, 0.0, 0));
+                }
+            }
+            b"ET" => {
+                if let Some((from, size, shown)) = open.take()
+                    && size > 0.0
+                {
+                    out.push(TextBlock {
+                        range: from..lex.pos,
+                        size,
+                        shown,
+                    });
+                }
+            }
+            b"Tf" => {
+                if let Some(v) = nums.first() {
+                    font_size = v.abs();
+                }
+            }
+            b"Tm" => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    tm = [a, b, c, d, e, f];
+                    tlm = tm;
+                }
+            }
+            b"Td" | b"TD" => {
+                if let [x, y] = nums[..] {
+                    tlm = concat([1.0, 0.0, 0.0, 1.0, x, y], tlm);
+                    tm = tlm;
+                }
+            }
+            b"Tj" | b"TJ" | b"'" | b"\"" => {
+                if let Some((_, size, shown)) = open.as_mut() {
+                    let at = font_size * scale(tm) * scale(ctm);
+                    if at.is_finite() {
+                        *size = size.max(at.max(0.01));
+                    }
+                    *shown += operands
+                        .iter()
+                        .map(|o| match o {
+                            Operand::String(s) => s.len(),
+                            Operand::Array(items) => items
+                                .iter()
+                                .map(|i| match i {
+                                    Operand::String(s) => s.len(),
+                                    _ => 0,
+                                })
+                                .sum(),
+                            _ => 0,
+                        })
+                        .sum::<usize>();
+                }
+            }
+            b"ID" => lex.inline_image()?,
+            _ => {}
+        }
+        operands.clear();
+    }
+    Some(out)
+}
+
 /// The inverse of `m`, unless it squashes everything flat.
 pub(crate) fn invert(m: Matrix) -> Option<Matrix> {
     let det = m[0] * m[3] - m[1] * m[2];

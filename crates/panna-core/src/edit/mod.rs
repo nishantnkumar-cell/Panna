@@ -13,6 +13,7 @@ mod picture;
 mod rebuild;
 mod redact;
 mod sign;
+mod tag;
 mod update;
 
 use std::collections::{BTreeMap, HashSet};
@@ -32,6 +33,7 @@ pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
 pub(crate) use sign::prepare as prepare_signature;
 pub use sign::{Corner, SignOptions, Visible};
+pub(crate) use tag::tag;
 
 use crate::{CommentId, FieldValue, ObjRef};
 
@@ -77,6 +79,12 @@ pub enum SaveError {
     CertifySigned,
     /// The certificate file couldn't be used, and why.
     Certificate(String),
+    /// Tagging password-protected files isn't supported.
+    TaggingProtected,
+    /// The document has tags already.
+    AlreadyTagged,
+    /// No page has text to tag.
+    NothingToTag,
 }
 
 impl fmt::Display for SaveError {
@@ -115,6 +123,16 @@ impl fmt::Display for SaveError {
                  can certify a document."
             ),
             Self::Certificate(why) => write!(f, "{why}"),
+            Self::TaggingProtected => write!(
+                f,
+                "Panna can't add tags to a password-protected PDF. Remove the protection first, \
+                 from Password protection in All tools."
+            ),
+            Self::AlreadyTagged => write!(f, "This PDF has tags already."),
+            Self::NothingToTag => write!(
+                f,
+                "This PDF has no text to tag. If it's scanned, its text needs recognising first."
+            ),
             Self::RedactsFormField => write!(
                 f,
                 "A marked area covers a form field. Flatten the form first (in the page tools), \

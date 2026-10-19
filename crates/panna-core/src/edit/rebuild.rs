@@ -1302,7 +1302,7 @@ fn shown_box(to_shown: super::redact::Matrix, height: f64, [x0, y0, x1, y1]: [f6
 }
 
 /// A page's content, all its streams decoded and joined.
-fn page_content(page: &Dict<'_>) -> Vec<u8> {
+pub(crate) fn page_content(page: &Dict<'_>) -> Vec<u8> {
     use hayro::hayro_syntax::object::{Array, Stream};
     let mut out = Vec::new();
     if let Some(stream) = page.get::<Stream<'_>>(b"Contents") {

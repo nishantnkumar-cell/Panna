@@ -20,6 +20,7 @@ type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
 type ArchiveReply = Box<dyn FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send>;
+type TagReply = Box<dyn FnOnce(Result<Vec<crate::AccessFinding>, SaveError>) + Send>;
 /// What signing needs.
 pub(crate) struct SignJob {
     path: PathBuf,
@@ -134,6 +135,7 @@ enum Reply {
     Accessibility(AccessReply),
     /// Writes a PDF/A copy.
     Archive(PathBuf, ArchiveReply),
+    Tag(PathBuf, TagReply),
     Sign(Box<SignJob>, SignReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
@@ -420,6 +422,20 @@ impl RenderWorker {
         });
     }
 
+    /// Writes a copy of the document (with the changes last given to it) with tags added for
+    /// screen readers to `path`, and replies with the accessibility check of the copy.
+    pub fn save_tagged(
+        &self,
+        path: PathBuf,
+        reply: impl FnOnce(Result<Vec<crate::AccessFinding>, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Tag(path, Box::new(reply)),
+        });
+    }
+
     /// Signs the document, with unsaved changes, and writes the signed copy to `path` (see
     /// [`Document::signed`]).
     pub fn sign(
@@ -661,6 +677,11 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     let copy = current.reopen(bytes).map_err(|_| SaveError::Damaged)?;
                     write_atomically(&path, copy.bytes())?;
                     Ok(copy.preflight())
+                })),
+                Reply::Tag(path, reply) => reply(current.tagged().and_then(|bytes| {
+                    let copy = current.reopen(bytes).map_err(|_| SaveError::Damaged)?;
+                    write_atomically(&path, copy.bytes())?;
+                    Ok(copy.accessibility())
                 })),
                 Reply::Sign(job, reply) => reply(
                     current
