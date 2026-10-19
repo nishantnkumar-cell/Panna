@@ -3,6 +3,11 @@ use panna_core::{Addition, Document, Limits};
 
 /// A page with a pale blue box and dark red text over it.
 fn page() -> Document {
+    page_with("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", None)
+}
+
+/// The same page with its text in `font`, which may have a ToUnicode map.
+fn page_with(font: &str, to_unicode: Option<&str>) -> Document {
     let content = "0.8 0.9 1 rg 10 100 180 40 re f\n\
                    BT /F1 12 Tf 0.6 0 0 rg 20 115 Td (Old words here) Tj ET\n\
                    BT /F1 12 Tf 0 0 0 rg 20 60 Td (Stays the same) Tj ET";
@@ -13,7 +18,11 @@ fn page() -> Document {
          /Resources << /Font << /F1 5 0 R >> >> >>"
             .to_owned(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        font.to_owned(),
+        to_unicode.map_or_else(
+            || "null".to_owned(),
+            |map| format!("<< /Length {} >>\nstream\n{map}\nendstream", map.len()),
+        ),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -74,4 +83,58 @@ fn replacing_text_keeps_what_is_behind_it() {
         row.iter().any(|p| p[0] > 120 && p[1] < 40 && p[2] < 40),
         "no red ink"
     );
+}
+
+/// Replaces "Old words here" with `text`, and gives the new file.
+fn replace(doc: &Document, text: &str) -> Vec<u8> {
+    let found = doc.page_text(0).unwrap();
+    let all = found.slice(0..found.len());
+    let at = all.find("Old words here").unwrap();
+    let area = found.rects(at..at + "Old words here".len())[0];
+    doc.with_additions(
+        0,
+        &[Addition::ReplaceText {
+            area,
+            text: text.into(),
+            size: 12.0,
+            color: None,
+        }],
+    )
+    .unwrap()
+}
+
+fn uses_page_font(bytes: &[u8]) -> bool {
+    bytes.windows(10).any(|w| w == b"/PaFo 12 T")
+}
+
+#[test]
+fn new_text_keeps_the_font_it_replaces() {
+    let doc = page_with("<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>", None);
+    let bytes = replace(&doc, "Fresh words");
+    assert!(uses_page_font(&bytes));
+    let text = doc.reopen(bytes).unwrap().page_text(0).unwrap();
+    assert!(text.slice(0..text.len()).contains("Fresh words"));
+}
+
+#[test]
+fn subsets_keep_their_font_only_for_letters_the_page_has() {
+    let map = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange \
+               <00> <FF> endcodespacerange 1 beginbfrange <20> <7A> <0020> endbfrange endcmap \
+               CMapName currentdict /CMap defineresource pop end end";
+    let widths = vec!["500"; 91].join(" ");
+    let font = format!(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Times-Roman /FirstChar 32 /LastChar 122 \
+         /Widths [{widths}] /ToUnicode 6 0 R >>"
+    );
+    let doc = page_with(&font, Some(map));
+    // Every letter is on the page already, in that font.
+    let bytes = replace(&doc, "Shower sold");
+    assert!(uses_page_font(&bytes));
+    let text = doc.reopen(bytes).unwrap().page_text(0).unwrap();
+    assert!(text.slice(0..text.len()).contains("Shower sold"));
+    // Z, b and a aren't, so the subset may not have them: Helvetica instead.
+    let bytes = replace(&doc, "Zebra");
+    assert!(!uses_page_font(&bytes));
+    let text = doc.reopen(bytes).unwrap().page_text(0).unwrap();
+    assert!(text.slice(0..text.len()).contains("Zebra"));
 }

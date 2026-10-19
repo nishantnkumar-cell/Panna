@@ -216,6 +216,11 @@ pub(crate) enum Drawing {
     /// Words that can't be seen, each stretched over its box (left, top, right, bottom from
     /// the top-left corner of the page as shown): recognised text over a scanned page.
     Hidden(Words),
+    /// A line of text in a font the page has, named PaFo in the form's resources.
+    SameFont {
+        line: super::rebuild::SameFont,
+        color: Color,
+    },
     /// One, then the other.
     Both(Box<Drawing>, Box<Drawing>),
 }
@@ -242,6 +247,14 @@ impl Drawing {
                 a = n(a)
             ),
             None => RESOURCES.to_owned(),
+        }
+    }
+
+    /// The page's font it writes with, which its resources must name.
+    pub(crate) fn font(&self) -> Option<crate::ObjRef> {
+        match self {
+            Drawing::SameFont { line, .. } => Some(line.font),
+            _ => None,
         }
     }
 
@@ -399,6 +412,21 @@ impl Drawing {
                     out.push_str(") Tj");
                 }
                 out.push_str(" ET Q\n");
+                out
+            }
+            Drawing::SameFont { line, color } => {
+                let mut out = format!(
+                    "BT /PaFo {} Tf {} Tz {} rg 1 0 0 1 {} {} Tm <",
+                    n(line.size),
+                    n(line.stretch),
+                    rgb(*color),
+                    n(line.origin.0),
+                    n(line.origin.1)
+                );
+                for b in &line.bytes {
+                    let _ = write!(out, "{b:02X}");
+                }
+                out.push_str("> Tj ET\n");
                 out
             }
             Drawing::Both(a, b) => a.content(width, height) + &b.content(width, height),

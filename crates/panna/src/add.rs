@@ -466,8 +466,10 @@ impl Adder {
                     .on_action(move |a| ev(Event::Edit(a)))
                     .height(80),
                 text(format!(
-                    "The old text is taken out, and the new text drawn in its place in \
-                     Helvetica, at {size:.0} pt, in the old text's colour."
+                    "The old text is taken out, and the new text drawn in its place at {size:.0} \
+                     pt, in the old text's colour and font. If the font can't show the new \
+                     letters (fonts are often embedded with only the letters a page uses), or \
+                     the text runs to more lines, it's drawn in Helvetica."
                 ))
                 .size(12),
                 buttons(content.text().trim_end() != was, "Change"),

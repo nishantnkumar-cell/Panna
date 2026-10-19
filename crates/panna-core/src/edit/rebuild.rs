@@ -914,7 +914,10 @@ pub(crate) fn rebuild(
                                         None => format!("<< /XObject << /PaIm {num} 0 R >> >>"),
                                     }
                                 }
-                                None => drawing.resources(),
+                                None => match drawing.font().and_then(|r| w.map(doc, r)) {
+                                    Some(num) => format!("<< /Font << /PaFo {num} 0 R >> >>"),
+                                    None => drawing.resources(),
+                                },
                             };
                             let form = w.alloc();
                             w.set(
@@ -1364,6 +1367,144 @@ fn drawn_in(
         let at = concat(matrix, concat(placed.ctm, ctm));
         drawn_in(&inner, inner_res, at, depth + 1, budget, out);
     }
+}
+
+/// New text written in the font a line was in, where it was.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SameFont {
+    /// The font's object.
+    pub font: ObjRef,
+    /// The new text, in the font's character codes.
+    pub bytes: Vec<u8>,
+    /// The size and sideways stretch (100 is none) on the page as shown.
+    pub size: f64,
+    pub stretch: f64,
+    /// Where the first glyph's origin was, from the bottom-left corner of the page as shown.
+    pub origin: (f64, f64),
+}
+
+/// How to write `text` in place of the line in `area` (a page text box) on page `index`, in
+/// the font most of that line is in: when the line is upright and every character of `text`
+/// is one the font can show. Fonts embedded as subsets can only show the characters the page
+/// already uses them for.
+pub(crate) fn same_font(pdf: &Pdf, index: usize, area: [f64; 4], text: &str) -> Option<SameFont> {
+    use super::redact::{IDENTITY, apply, concat, invert};
+    let (content, res, to_shown, height) = shown_page(pdf, index)?;
+    let to_user = invert(to_shown)?;
+    let [x0, top, x1, bottom] = area;
+    let (ux0, uy0) = apply(to_user, x0, height - top);
+    let (ux1, uy1) = apply(to_user, x1, height - bottom);
+    let areas = [[ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)]];
+    let mut lookup = super::redact::Resources { dict: res.clone() };
+    let mut names = || String::from("PannaUnused");
+    let found = super::redact::redact(&content, &mut lookup, &areas, IDENTITY, true, &mut names)?;
+    // The font with the most glyphs in the line, and where its first one was.
+    let mut counts: HashMap<&[u8], usize> = HashMap::new();
+    for taken in &found.taken {
+        *counts.entry(taken.font.as_slice()).or_default() += taken.glyphs;
+    }
+    let (name, _) = counts.into_iter().max_by_key(|(_, n)| *n)?;
+    let first = found.taken.iter().find(|t| t.font == name)?;
+    let m = concat(first.at, to_shown);
+    let size = m[3];
+    let upright = m[0] > 0.0 && size > 0.0 && m[1].abs() < 0.01 * size && m[2].abs() < 0.01 * size;
+    if !upright {
+        return None;
+    }
+    let fonts = res?.get::<Dict<'_>>(b"Font")?;
+    let font = fonts.get::<Dict<'_>>(name)?;
+    let r = fonts.get_ref(name).and_then(obj_ref_of)?;
+    let used = found.used.get(name).cloned().unwrap_or_default();
+    Some(SameFont {
+        font: r,
+        bytes: encode(&font, text, &used)?,
+        size,
+        stretch: 100.0 * m[0] / size,
+        origin: (m[4], m[5]),
+    })
+}
+
+/// `text` in the character codes of `font`, when it can show every character: by its
+/// ToUnicode map, or by WinAnsi or standard encoding for simple fonts without one. Subsets
+/// may only use `used` codes, the ones the page shows with them.
+fn encode(font: &Dict<'_>, text: &str, used: &std::collections::HashSet<u32>) -> Option<Vec<u8>> {
+    use hayro::hayro_interpret::hayro_cmap::{BfString, CMap};
+    use hayro::hayro_syntax::object::{Array, Name};
+    let info = super::redact::font_from(font)?;
+    let two = match info.codes {
+        super::redact::Codes::One => false,
+        super::redact::Codes::Two => true,
+        super::redact::Codes::Unknown => return None,
+    };
+    let base = font
+        .get::<Name<'_>>(b"BaseFont")
+        .map(|n| n.as_str().to_owned())
+        .unwrap_or_default();
+    let subset = base.split_once('+').is_some_and(|(tag, _)| tag.len() == 6);
+    let descriptor = font.get::<Dict<'_>>(b"FontDescriptor").or_else(|| {
+        font.get::<Array<'_>>(b"DescendantFonts")?
+            .iter::<Dict<'_>>()
+            .next()?
+            .get::<Dict<'_>>(b"FontDescriptor")
+    });
+    let embedded = descriptor.as_ref().is_some_and(|d| {
+        [&b"FontFile"[..], b"FontFile2", b"FontFile3"]
+            .iter()
+            .any(|k| d.contains_key(k))
+    });
+    let allowed = |code: u32| (!subset && !two) || used.contains(&code);
+    let mut map: HashMap<char, u32> = HashMap::new();
+    if let Some(unicode) = font.get::<Stream<'_>>(b"ToUnicode") {
+        let data = unicode.decoded().ok()?;
+        let cmap = CMap::parse(&data, hayro::hayro_interpret::hayro_cmap::load_embedded)?;
+        let codes: Vec<u32> = if two || subset {
+            used.iter().copied().collect()
+        } else {
+            (0..256).collect()
+        };
+        for code in codes {
+            if let Some(BfString::Char(c)) = cmap.lookup_bf_string(code) {
+                map.entry(c).or_insert(code);
+            }
+        }
+    } else if !two {
+        let encoding = font.get::<Name<'_>>(b"Encoding").map(|n| n.as_str().to_owned());
+        let win_ansi = match encoding.as_deref() {
+            Some("WinAnsiEncoding") => true,
+            // Standard encoding matches WinAnsi for letters, digits and plain punctuation.
+            None | Some("StandardEncoding") => false,
+            _ => return None,
+        };
+        for c in text.chars() {
+            let code = if win_ansi {
+                match super::annot::win_ansi(&c.to_string()).as_slice() {
+                    [b] if *b != b'?' || c == '?' => u32::from(*b),
+                    _ => return None,
+                }
+            } else if c.is_ascii_alphanumeric() || " .,:;-()!?/&%".contains(c) {
+                u32::from(c as u8)
+            } else {
+                return None;
+            };
+            map.insert(c, code);
+        }
+    } else {
+        return None;
+    }
+    let mut out = Vec::new();
+    for c in text.chars() {
+        let code = *map.get(&c)?;
+        // Fonts that aren't embedded are drawn by the viewer's own, which have every glyph.
+        if !allowed(code) || (embedded && info.width(code).is_none()) {
+            return None;
+        }
+        if two {
+            out.extend_from_slice(&(code as u16).to_be_bytes());
+        } else {
+            out.push(u8::try_from(code).ok()?);
+        }
+    }
+    Some(out)
 }
 
 /// The pictures page `index` draws itself, in the order they're drawn, each as the box it

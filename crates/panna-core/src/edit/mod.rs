@@ -674,7 +674,16 @@ pub(crate) fn add(
                 extra.text_only = true;
                 let size = f64::from(size.clamp(1.0, 500.0));
                 let lines: Vec<String> = text.lines().map(str::to_owned).collect();
-                if lines.iter().any(|l| !l.trim().is_empty()) {
+                let same = match lines.as_slice() {
+                    [line] if !line.trim().is_empty() => rebuild::same_font(doc.0, page, corners(area), line),
+                    _ => None,
+                };
+                if let Some(line) = same {
+                    extra.over.push(marks::Drawing::SameFont {
+                        line,
+                        color: color.unwrap_or(Color::BLACK),
+                    });
+                } else if lines.iter().any(|l| !l.trim().is_empty()) {
                     extra.over.push(marks::Drawing::Text {
                         x: f64::from(area.x0),
                         // Page text boxes reach 0.8 of the size above the baseline; added

@@ -89,7 +89,7 @@ pub(crate) struct Font {
 }
 
 impl Font {
-    fn width(&self, code: u32) -> Option<f64> {
+    pub(crate) fn width(&self, code: u32) -> Option<f64> {
         self.widths.get(&code).copied().or(self.default)
     }
 
@@ -129,9 +129,22 @@ pub(crate) struct FormUse {
     pub ctm: Matrix,
 }
 
+/// Text taken out: the font it was in (by its name in the resources), how many glyphs went,
+/// and where the first one sat: its glyph space to page space.
+#[derive(Debug, Clone)]
+pub(crate) struct Taken {
+    pub font: Vec<u8>,
+    pub glyphs: usize,
+    pub at: Matrix,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Redacted {
     pub content: Vec<u8>,
+    /// Text taken out, run by run (only the content's own, not inside forms).
+    pub taken: Vec<Taken>,
+    /// The character codes shown in each font, by its name in the resources.
+    pub used: HashMap<Vec<u8>, HashSet<u32>>,
     /// Pictures taken out, which the resources must no longer name.
     pub images: HashSet<Vec<u8>>,
     /// Forms touching a marked area: each use, to be replaced with a redacted copy, and the
@@ -345,6 +358,7 @@ struct State {
     scale: f64,
     leading: f64,
     font: Option<Font>,
+    font_name: Vec<u8>,
     size: f64,
     rise: f64,
 }
@@ -358,6 +372,7 @@ impl Default for State {
             scale: 1.0,
             leading: 0.0,
             font: None,
+            font_name: Vec::new(),
             size: 0.0,
             rise: 0.0,
         }
@@ -479,6 +494,7 @@ fn run(
                         .or_insert_with(|| lookup.font(name))
                         .clone();
                     state.font = font;
+                    state.font_name = name.clone();
                 }
                 state.size = n(0);
             }
@@ -514,7 +530,19 @@ fn run(
                     (_, Some(s @ Operand::String(_))) => vec![s.clone()],
                     _ => Vec::new(),
                 };
-                let (shown, removed) = show(&items, &state, &mut tm, &hit);
+                let mut seen = Seen::default();
+                let (shown, removed) = show(&items, &state, &mut tm, &hit, &mut seen);
+                out.used
+                    .entry(state.font_name.clone())
+                    .or_default()
+                    .extend(seen.codes);
+                if let Some(at) = seen.first {
+                    out.taken.push(Taken {
+                        font: state.font_name.clone(),
+                        glyphs: seen.gone,
+                        at,
+                    });
+                }
                 if removed {
                     out.changed = true;
                     let mut text = prefix.into_bytes();
@@ -658,6 +686,15 @@ fn grow(b: Option<[f64; 4]>, x: f64, y: f64) -> [f64; 4] {
     }
 }
 
+/// What showing a string came across: the codes shown, how many glyphs went and where the
+/// first of them sat (glyph space to page space).
+#[derive(Default)]
+struct Seen {
+    codes: HashSet<u32>,
+    gone: usize,
+    first: Option<Matrix>,
+}
+
 /// Shows `items` (strings and adjustments) as a TJ array with the glyphs that touch a marked
 /// area replaced by the space they took; moves `tm` along. Also says whether any went.
 fn show(
@@ -665,6 +702,7 @@ fn show(
     state: &State,
     tm: &mut Matrix,
     hit: &dyn Fn([f64; 4]) -> bool,
+    seen: &mut Seen,
 ) -> (Vec<u8>, bool) {
     let size = state.size;
     let th = state.scale;
@@ -710,8 +748,11 @@ fn show(
                             };
                             let advance = (w0 * size + state.char_space + space) * th;
                             let gone = hit(b) || size == 0.0 && areas_point(hit, render(*tm));
+                            seen.codes.insert(*code);
                             if gone {
                                 removed = true;
+                                seen.gone += 1;
+                                seen.first.get_or_insert(render(*tm));
                                 if !kept.is_empty() {
                                     flush(&mut out, &mut pending);
                                     out.extend_from_slice(hex(&kept).as_bytes());
@@ -743,8 +784,13 @@ fn show(
                         let count = bytes.len() as f64;
                         let b = bounds(render(*tm), [0.0, DESCENT, count * GUESS_BOX, ASCENT]);
                         let advance = (GUESS_ADVANCE * size + state.char_space) * th * count;
+                        if let Some(codes) = font.and_then(|f| f.split(bytes)) {
+                            seen.codes.extend(codes);
+                        }
                         if hit(b) {
                             removed = true;
+                            seen.gone += bytes.len();
+                            seen.first.get_or_insert(render(*tm));
                             if size != 0.0 && th != 0.0 {
                                 pending -= advance / (size * th) * 1000.0;
                             }
