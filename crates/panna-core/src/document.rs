@@ -419,10 +419,15 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
-    /// The document in as small a file as can be written without changing how it looks.
-    pub fn compacted(&self) -> Result<Vec<u8>, crate::SaveError> {
+    /// The document in as small a file as can be written without changing how it looks, or
+    /// with pictures sharper than `pictures` dots per inch (as drawn) scaled down to it.
+    pub fn compacted(&self, pictures: Option<u32>) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::compacted((&self.pdf, &self.bytes, &self.password), self.page_count())
+            crate::edit::compacted(
+                (&self.pdf, &self.bytes, &self.password),
+                self.page_count(),
+                pictures,
+            )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }

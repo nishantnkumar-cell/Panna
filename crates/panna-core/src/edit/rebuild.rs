@@ -10,7 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 
 use hayro::hayro_syntax::Pdf;
-use hayro::hayro_syntax::object::{Dict, Object, ObjectIdentifier};
+use hayro::hayro_syntax::object::{Dict, Object, ObjectIdentifier, Stream};
 
 use super::SaveError;
 use super::annot::n;
@@ -559,7 +559,7 @@ pub(crate) fn rebuild(
     info: Option<ObjRef>,
     encryption: Option<Encryption>,
     clean: Cleanup,
-    compact: bool,
+    compact: Option<super::pack::Compact>,
 ) -> Result<Vec<u8>, SaveError> {
     let first = sources.first().ok_or(SaveError::Damaged)?;
     let info = info.filter(|_| !clean.metadata && !clean.archive);
@@ -1175,11 +1175,36 @@ pub(crate) fn rebuild(
         w.set(num, body);
     }
 
-    if compact {
+    if let Some(compact) = compact {
+        if let Some(dpi) = compact.pictures {
+            let map = w.maps.first().ok_or(SaveError::Damaged)?;
+            for (r, drawn) in drawn_pictures(first.pdf) {
+                let (Some(Some(num)), Some(stream)) =
+                    (map.get(&r), first.pdf.xref().get::<Stream<'_>>(id(r)))
+                else {
+                    continue;
+                };
+                let Some(slot) = w.objects.get_mut(*num as usize - 1) else {
+                    continue;
+                };
+                if let Some(smaller) = slot
+                    .as_deref()
+                    .and_then(|body| super::pack::shrink_picture(&stream, body, drawn, dpi))
+                {
+                    *slot = Some(smaller);
+                }
+            }
+        }
         super::pack::merge_duplicates(&mut w.objects, &[catalog_num, pages_num]);
         super::pack::compress_streams(&mut w.objects);
     }
-    write_file(w.objects, catalog_num, info_num, encryption.as_ref(), compact)
+    write_file(
+        w.objects,
+        catalog_num,
+        info_num,
+        encryption.as_ref(),
+        compact.is_some(),
+    )
 }
 
 /// A resources dictionary written in `owner` or referred to from it.
@@ -1239,6 +1264,72 @@ fn form_with_fields(
     }
     body.extend_from_slice(format!("/Fields [{}]\n/NeedAppearances true\n>>", fields.join(" ")).as_bytes());
     Ok(body)
+}
+
+/// The largest size, in points, each picture is drawn at on `pdf`'s pages, by object: drawn
+/// by the page itself or inside the forms it draws. Pictures drawn only by comments, patterns
+/// or text aren't included.
+fn drawn_pictures(pdf: &Pdf) -> HashMap<ObjRef, (f64, f64)> {
+    let mut out = HashMap::new();
+    let mut budget = 10_000usize;
+    let (pages, _) = page_tree(pdf);
+    for (r, dict) in &pages {
+        let res = inherited(pdf, *r, dict, b"Resources").and_then(|(owner, raw)| resolved(pdf, owner, raw));
+        drawn_in(
+            &page_content(dict),
+            res,
+            super::redact::IDENTITY,
+            0,
+            &mut budget,
+            &mut out,
+        );
+    }
+    out
+}
+
+/// Adds the pictures `content` draws with `ctm` to `out`, looking into forms up to a few
+/// levels deep, and at most `budget` forms in all.
+fn drawn_in(
+    content: &[u8],
+    res: Option<Dict<'_>>,
+    ctm: super::redact::Matrix,
+    depth: usize,
+    budget: &mut usize,
+    out: &mut HashMap<ObjRef, (f64, f64)>,
+) {
+    use super::redact::{Lookup as _, XObject, concat};
+    let mut lookup = super::redact::Resources { dict: res.clone() };
+    for placed in super::redact::placed_images(content, &mut lookup) {
+        let Some((_, Some(r))) = lookup.stream(&placed.name) else {
+            continue;
+        };
+        let m = concat(placed.ctm, ctm);
+        let size = out.entry(r).or_insert((0.0, 0.0));
+        size.0 = size.0.max(m[0].hypot(m[1]));
+        size.1 = size.1.max(m[2].hypot(m[3]));
+    }
+    if depth >= 4 {
+        return;
+    }
+    for placed in super::redact::placed_forms(content, &mut lookup) {
+        let (Some((stream, _)), Some(XObject::Form { matrix, .. })) =
+            (lookup.stream(&placed.name), lookup.xobject(&placed.name))
+        else {
+            continue;
+        };
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let Ok(inner) = stream.decoded() else { continue };
+        // Old files leave a form's resources out, meaning the page's.
+        let inner_res = stream
+            .dict()
+            .get::<Dict<'_>>(b"Resources")
+            .or_else(|| res.clone());
+        let at = concat(matrix, concat(placed.ctm, ctm));
+        drawn_in(&inner, inner_res, at, depth + 1, budget, out);
+    }
 }
 
 /// The pictures page `index` draws itself, in the order they're drawn, each as the box it

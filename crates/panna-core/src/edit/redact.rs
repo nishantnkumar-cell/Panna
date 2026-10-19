@@ -791,6 +791,15 @@ impl Placed {
 
 /// Every picture `content` draws itself (not those inside forms), in order.
 pub(crate) fn placed_images(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Placed> {
+    placed(content, lookup, |x| matches!(x, XObject::Image))
+}
+
+/// Every form `content` draws itself, in order.
+pub(crate) fn placed_forms(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Placed> {
+    placed(content, lookup, |x| matches!(x, XObject::Form { .. }))
+}
+
+fn placed(content: &[u8], lookup: &mut dyn Lookup, wanted: fn(XObject) -> bool) -> Vec<Placed> {
     let mut lex = Lexer {
         data: content,
         pos: 0,
@@ -828,7 +837,7 @@ pub(crate) fn placed_images(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Plac
             }
             b"Do" => {
                 if let Some(Operand::Name(name)) = operands.first()
-                    && matches!(lookup.xobject(name), Some(XObject::Image))
+                    && lookup.xobject(name).is_some_and(wanted)
                 {
                     out.push(Placed {
                         name: name.clone(),

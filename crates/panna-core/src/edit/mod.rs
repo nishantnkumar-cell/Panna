@@ -720,19 +720,20 @@ fn rebuild_from(
     output: Output<'_>,
     clean: Cleanup,
 ) -> Result<Vec<u8>, SaveError> {
-    rebuild_with(docs, plan, extras, output, clean, false)
+    rebuild_with(docs, plan, extras, output, clean, None)
 }
 
 /// Every page of `doc` in as small a file as can be written without changing how anything
-/// looks (see [`pack`]).
-pub(crate) fn compacted(doc: Input<'_>, count: usize) -> Result<Vec<u8>, SaveError> {
+/// looks (see [`pack`]), unless pictures may be made smaller too: then those sharper than
+/// `pictures` dots per inch, as drawn, are scaled down to it.
+pub(crate) fn compacted(doc: Input<'_>, count: usize, pictures: Option<u32>) -> Result<Vec<u8>, SaveError> {
     rebuild_with(
         &[doc],
         &every_page(count),
         &[],
         Output::Keep,
         Cleanup::default(),
-        true,
+        Some(pack::Compact { pictures }),
     )
 }
 
@@ -742,7 +743,7 @@ fn rebuild_with(
     extras: &[rebuild::Extra],
     output: Output<'_>,
     clean: Cleanup,
-    compact: bool,
+    compact: Option<pack::Compact>,
 ) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
     let mut first = None;

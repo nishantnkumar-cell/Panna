@@ -119,7 +119,7 @@ enum Reply {
     Attachment(usize, PathBuf, ExtractReply),
     Print(PrintReply),
     /// Writes a smaller copy of the document.
-    Compact(PathBuf, CompactReply),
+    Compact(PathBuf, Option<u32>, CompactReply),
     /// Writes the document's comments to a comments file.
     ExportComments(PathBuf, crate::DataFormat, String, ExtractReply),
     /// Reads a comments file into annotations for this document.
@@ -329,16 +329,18 @@ impl RenderWorker {
     }
 
     /// Writes a smaller copy of the document (with the changes last given to it) to `path`,
-    /// and replies with the sizes before and after, in bytes.
+    /// with pictures sharper than `pictures` dots per inch scaled down when given, and replies
+    /// with the sizes before and after, in bytes.
     pub fn save_compacted(
         &self,
         path: PathBuf,
+        pictures: Option<u32>,
         reply: impl FnOnce(Result<(u64, u64), SaveError>) + Send + 'static,
     ) {
         let _ = self.jobs.send(Job {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
-            reply: Reply::Compact(path, Box::new(reply)),
+            reply: Reply::Compact(path, pictures, Box::new(reply)),
         });
     }
 
@@ -662,10 +664,12 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 Reply::ExportComments(path, format, name, reply) => {
                     reply(write_atomically(&path, &current.comments_file(format, &name)));
                 }
-                Reply::Compact(path, reply) => reply(current.compacted().and_then(|bytes| {
-                    write_atomically(&path, &bytes)?;
-                    Ok((current.bytes().len() as u64, bytes.len() as u64))
-                })),
+                Reply::Compact(path, pictures, reply) => {
+                    reply(current.compacted(pictures).and_then(|bytes| {
+                        write_atomically(&path, &bytes)?;
+                        Ok((current.bytes().len() as u64, bytes.len() as u64))
+                    }))
+                }
                 Reply::Pictures(page, reply) => reply(current.pictures(page)),
                 Reply::DetectFields(reply) => reply(current.detect_fields()),
                 Reply::Preflight(standard, reply) => reply(match standard {

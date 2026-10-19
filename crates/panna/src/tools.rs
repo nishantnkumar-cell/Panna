@@ -39,7 +39,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
         ]
         .push(has_doc.then(|| {
             column![
-                tool(Icon::Shrink, "Save a smaller copy…", Message::Compact),
+                tool(
+                    Icon::Shrink,
+                    "Save a smaller copy…",
+                    Message::Shrink(crate::shrink::Event::Open)
+                ),
                 tool(
                     Icon::ReadAloud,
                     "Read this page aloud",

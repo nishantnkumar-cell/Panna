@@ -27,6 +27,7 @@ mod redact;
 mod selection;
 mod settings;
 mod shortcuts;
+mod shrink;
 mod sidebar;
 mod sign;
 mod signatures;
@@ -243,9 +244,10 @@ enum Message {
     FormDataExportTo(Option<PathBuf>),
     ImportFormData,
     FormDataChosen(Option<PathBuf>),
-    /// Save a smaller copy of the document.
-    Compact,
-    CompactTo(Option<PathBuf>),
+    /// The Save a smaller copy card.
+    Shrink(shrink::Event),
+    /// Where to save the smaller copy, and the resolution pictures may be scaled down to.
+    CompactTo(Option<PathBuf>, Option<u32>),
     Compacted(Result<(u64, u64), SaveError>),
     ExportComments,
     CommentsExportTo(Option<PathBuf>),
@@ -429,6 +431,8 @@ struct App {
     signing: Option<signing::Signing>,
     /// Choosing hidden information to remove.
     cleaning: Option<panna_core::Cleanup>,
+    /// The Save a smaller copy card.
+    shrinking: Option<shrink::Shrinking>,
     /// The All tools card is showing.
     all_tools: bool,
     /// Pictures chosen for a new PDF, while asking where to save it.
@@ -764,6 +768,7 @@ impl App {
             protecting: None,
             signing: None,
             cleaning: None,
+            shrinking: None,
             all_tools: false,
             pictures: Vec::new(),
             extract_pages: Vec::new(),
@@ -856,6 +861,7 @@ impl App {
                 | Message::Protect(protect::Event::Open)
                 | Message::Signing(signing::Event::Open)
                 | Message::Clean(protect::CleanEvent::Open)
+                | Message::Shrink(shrink::Event::Open)
         ) {
             self.all_tools = false;
         }
@@ -1176,6 +1182,8 @@ impl App {
                     self.signing = None;
                 } else if self.cleaning.is_some() {
                     self.cleaning = None;
+                } else if self.shrinking.is_some() {
+                    self.shrinking = None;
                 } else if self.all_tools {
                     self.all_tools = false;
                 } else if self.confirm_reset {
@@ -1431,8 +1439,22 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Compact => {
-                self.all_tools = false;
+            Message::Shrink(event) => {
+                let state = self.shrinking.get_or_insert_default();
+                match event {
+                    shrink::Event::Open => {
+                        state.pictures = false;
+                        return Task::none();
+                    }
+                    shrink::Event::Pictures(v) => state.pictures = v,
+                    shrink::Event::Dpi(v) => state.dpi = v,
+                    shrink::Event::Cancel => self.shrinking = None,
+                    shrink::Event::Go => {}
+                }
+                if !matches!(event, shrink::Event::Go) {
+                    return Task::none();
+                }
+                let pictures = self.shrinking.take().and_then(shrink::Shrinking::pictures);
                 let name = format!("{} (smaller).pdf", self.file_stem());
                 Task::perform(
                     async move {
@@ -1444,18 +1466,18 @@ impl App {
                             .await
                             .map(|f| f.path().to_path_buf())
                     },
-                    Message::CompactTo,
+                    move |path| Message::CompactTo(path, pictures),
                 )
             }
-            Message::CompactTo(None) => Task::none(),
-            Message::CompactTo(Some(path)) => {
+            Message::CompactTo(None, _) => Task::none(),
+            Message::CompactTo(Some(path), pictures) => {
                 let Some(doc) = &self.doc else { return Task::none() };
                 // Unsaved changes go into the copy too.
                 if self.dirty() {
                     doc.worker.set_changes(self.changes(), |_| {});
                 }
                 let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.save_compacted(path, move |result| {
+                doc.worker.save_compacted(path, pictures, move |result| {
                     let _ = tx.send(result);
                 });
                 Task::perform(rx, |result| {
@@ -4766,6 +4788,9 @@ impl App {
                 protect::card(state),
                 Message::Protect(protect::Event::Cancel),
             ));
+        }
+        if let Some(state) = self.shrinking {
+            layers.push(modal(shrink::card(state), Message::Shrink(shrink::Event::Cancel)));
         }
         if let Some(state) = &self.signing {
             layers.push(modal(
