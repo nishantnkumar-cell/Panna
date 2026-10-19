@@ -218,6 +218,8 @@ enum Message {
     NewSaveTo(Option<PathBuf>),
     /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
+    /// How many files splitting by size saved, or why it couldn't.
+    SplitBySize(Result<usize, SaveError>),
     /// The folder to save extracted pages to, a file each, once chosen.
     ExtractFolder(Option<PathBuf>),
     PagesChanged {
@@ -516,6 +518,9 @@ struct App {
     new_pdf: Option<NewPdf>,
     /// The pages being extracted, while their file or folder is chosen.
     extract_pages: Vec<usize>,
+    /// How the extracted pages are being split, and the size limit when by size.
+    extract_split: pages::Split,
+    extract_limit: u64,
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
     after_save: Option<Pending>,
@@ -954,6 +959,8 @@ impl App {
             blank: None,
             new_pdf: None,
             extract_pages: Vec::new(),
+            extract_split: pages::Split::One,
+            extract_limit: 0,
             confirm: None,
             after_save: None,
             strengthen: None,
@@ -3239,6 +3246,63 @@ impl App {
                     .collect();
                 self.write_extracted(vec![(pages, path)])
             }
+            Message::ExtractFolder(Some(dir)) if self.extract_split == pages::Split::Size => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let pages = std::mem::take(&mut self.extract_pages);
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                self.notice = Some("Splitting the pages into files…".into());
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker
+                    .split_by_size(pages, self.extract_limit, dir, self.file_stem(), move |result| {
+                        let _ = tx.send(result);
+                    });
+                Task::perform(rx, |result| {
+                    Message::SplitBySize(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::SplitBySize(result) => {
+                self.notice = Some(match result {
+                    Ok(1) => "The pages fit in one file.".into(),
+                    Ok(n) => format!("Saved {n} files."),
+                    Err(e) => e.to_string(),
+                });
+                Task::none()
+            }
+            Message::ExtractFolder(Some(dir)) if self.extract_split == pages::Split::Bookmarks => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                self.extract_pages.clear();
+                let count = doc.pages.len();
+                let parts = pages::bookmark_parts(&doc.info.outline, count);
+                let stem = self.file_stem();
+                let mut files: Vec<(Vec<panna_core::PageSource>, PathBuf)> = Vec::new();
+                for (n, (start, title)) in parts.iter().enumerate() {
+                    let end = parts.get(n + 1).map_or(count, |(next, _)| *next);
+                    let name = pages::file_name_part(title);
+                    let path = dir.join(if name.is_empty() {
+                        format!("{stem} {}.pdf", n + 1)
+                    } else {
+                        format!("{stem} {} {name}.pdf", n + 1)
+                    });
+                    if path.exists() {
+                        self.notice = Some(format!(
+                            "“{}” is already in that folder. Choose another folder, or move it first.",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ));
+                        return Task::none();
+                    }
+                    let plan = (*start..end)
+                        .map(|index| panna_core::PageSource::Page {
+                            doc: 0,
+                            index,
+                            turns: 0,
+                        })
+                        .collect();
+                    files.push((plan, path));
+                }
+                self.write_extracted(files)
+            }
             Message::ExtractFolder(Some(dir)) => {
                 let stem = self.file_stem();
                 let mut files: Vec<(Vec<panna_core::PageSource>, PathBuf)> = Vec::new();
@@ -3707,10 +3771,7 @@ impl App {
                 operation::focus(pages::crop_input_id()).chain(operation::select_all(pages::crop_input_id()))
             }
             pages::Op::Extract => {
-                self.extracting = Some(pages::Extracting {
-                    range: (current + 1).to_string(),
-                    split: false,
-                });
+                self.extracting = Some(pages::Extracting::new((current + 1).to_string()));
                 operation::focus(pages::extract_input_id())
                     .chain(operation::select_all(pages::extract_input_id()))
             }
@@ -3742,13 +3803,26 @@ impl App {
         match event {
             pages::ExtractEvent::Range(range) => state.range = range,
             pages::ExtractEvent::Split(split) => state.split = split,
+            pages::ExtractEvent::Size(size) => state.size_mb = size.chars().take(8).collect(),
             pages::ExtractEvent::Cancel => self.extracting = None,
             pages::ExtractEvent::Go => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                let Ok(pages) = pages::parse_range(&state.range, count) else {
-                    return Task::none();
+                let pages = if state.split == pages::Split::Bookmarks {
+                    (0..count).collect()
+                } else {
+                    let Ok(pages) = pages::parse_range(&state.range, count) else {
+                        return Task::none();
+                    };
+                    pages
                 };
-                let split = state.split;
+                self.extract_split = state.split;
+                if state.split == pages::Split::Size {
+                    let Some(limit) = state.size_limit() else {
+                        return Task::none();
+                    };
+                    self.extract_limit = limit;
+                }
+                let split = state.split != pages::Split::One;
                 let label = if pages.len() == 1 {
                     format!("page {}", pages.first().map_or(1, |p| p + 1))
                 } else {
@@ -3761,7 +3835,7 @@ impl App {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save each page in")
+                                .set_title("Save the files in")
                                 .pick_folder()
                                 .await
                                 .map(|f| f.path().to_path_buf())
@@ -5631,7 +5705,11 @@ impl App {
         }
         if let (Some(state), Some(doc)) = (&self.extracting, &self.doc) {
             layers.push(modal(
-                pages::extract_card(state, doc.pages.len()),
+                pages::extract_card(
+                    state,
+                    doc.pages.len(),
+                    pages::bookmark_parts(&doc.info.outline, doc.pages.len()).len(),
+                ),
                 Message::Extract(pages::ExtractEvent::Cancel),
             ));
         }

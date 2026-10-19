@@ -141,7 +141,7 @@ work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-pr
 | Replace pages from another PDF | Pages | Done: the replace button in the Pages tab; bookmarks and links follow the new pages |
 | Create a blank PDF; PDF from a screenshot or the clipboard | Pages | Done: in All tools. A screenshot comes in through the clipboard (every system can copy one there) |
 | Edit page labels (i, ii, iii then 1, 2, 3) | Pages | Done: the labels button in the Pages tab; labels show in the page box and thumbnails, and a label can be typed to go to its page |
-| Split by bookmarks or by file size | Pages | Splitting by page ranges is done |
+| Split by bookmarks or by file size | Pages | Done: in Extract pages, save a PDF for each top-level bookmark, or PDFs of at most a chosen size |
 | Comment summary: a printable list of comments with their pages | Comments | |
 | Print with comments shown | Comments | |
 | Default PDF app on Windows and macOS, through an installer | Desktop | Unsigned for now; the Linux menu entry already registers for PDFs |

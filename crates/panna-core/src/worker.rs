@@ -18,6 +18,16 @@ type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type SplitReply = Box<dyn FnOnce(Result<usize, SaveError>) + Send>;
+
+/// Splitting pages into files of at most a size.
+struct SizeSplit {
+    pages: Vec<usize>,
+    limit: u64,
+    /// Files are named `{stem} part {n}.pdf` in this folder.
+    dir: PathBuf,
+    stem: String,
+}
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
 type ArchiveReply = Box<dyn FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send>;
@@ -138,6 +148,7 @@ enum Reply {
     Save(PathBuf, SaveReply),
     Pages(PageEdit, PagesReply),
     Extract(Vec<(Vec<PageSource>, PathBuf)>, ExtractReply),
+    SplitBySize(SizeSplit, SplitReply),
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
     Print(PrintReply),
@@ -291,6 +302,32 @@ impl RenderWorker {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
             reply: Reply::Extract(files, Box::new(reply)),
+        });
+    }
+
+    /// Saves `pages`, with unsaved changes, as files of at most `limit` bytes each in `dir`,
+    /// named `{stem} part 1.pdf` and so on, keeping the pages in order. A page bigger than
+    /// the limit on its own gets a file of its own. Replies with how many files were written.
+    pub fn split_by_size(
+        &self,
+        pages: Vec<usize>,
+        limit: u64,
+        dir: PathBuf,
+        stem: String,
+        reply: impl FnOnce(Result<usize, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::SplitBySize(
+                SizeSplit {
+                    pages,
+                    limit,
+                    dir,
+                    stem,
+                },
+                Box::new(reply),
+            ),
         });
     }
 
@@ -810,6 +847,20 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         ask!(Op::Rearranged(pages), Bytes).and_then(|bytes| write_atomically(&path, &bytes))
                     }));
                 }
+                Reply::SplitBySize(split, reply) => {
+                    let mut built = |pages: &[usize]| {
+                        let plan = pages
+                            .iter()
+                            .map(|&index| PageSource::Page {
+                                doc: 0,
+                                index,
+                                turns: 0,
+                            })
+                            .collect();
+                        ask!(Op::Rearranged(plan), Bytes)
+                    };
+                    reply(split_by_size(&split, &mut built));
+                }
             }
         };
         match swap {
@@ -895,7 +946,67 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
     }
 }
 
-/// The new version an edit of `current` made, and how it's laid out.
+/// Writes `split`'s pages as files of at most its limit, with `built` making the file of some
+/// pages. Each file takes as many pages as fit: the count doubles until a file is too big,
+/// then halves back to the most that fit.
+/// Makes the file of some pages, for [`split_by_size`].
+type BuildPages<'a> = dyn FnMut(&[usize]) -> Result<Vec<u8>, SaveError> + 'a;
+
+fn split_by_size(split: &SizeSplit, built: &mut BuildPages<'_>) -> Result<usize, SaveError> {
+    let mut parts: Vec<Vec<u8>> = Vec::new();
+    let mut rest = split.pages.as_slice();
+    while !rest.is_empty() {
+        // The most pages known to fit, with their file, and the fewest known not to.
+        let mut fit = (1, built(rest.get(..1).unwrap_or_default())?);
+        let mut too_many = None;
+        let mut try_count = 2;
+        while too_many.is_none() && fit.1.len() as u64 <= split.limit && try_count <= rest.len() {
+            let bytes = built(rest.get(..try_count).unwrap_or_default())?;
+            if bytes.len() as u64 <= split.limit {
+                fit = (try_count, bytes);
+                try_count *= 2;
+            } else {
+                too_many = Some(try_count);
+            }
+        }
+        if fit.1.len() as u64 <= split.limit && too_many.is_none() && fit.0 < rest.len() {
+            // Doubling went past the end with every file fitting: try them all.
+            let bytes = built(rest)?;
+            if bytes.len() as u64 <= split.limit {
+                fit = (rest.len(), bytes);
+            } else {
+                too_many = Some(rest.len());
+            }
+        }
+        if let Some(mut high) = too_many {
+            while high - fit.0 > 1 {
+                let mid = fit.0 + (high - fit.0) / 2;
+                let bytes = built(rest.get(..mid).unwrap_or_default())?;
+                if bytes.len() as u64 <= split.limit {
+                    fit = (mid, bytes);
+                } else {
+                    high = mid;
+                }
+            }
+        }
+        parts.push(fit.1);
+        rest = rest.get(fit.0..).unwrap_or_default();
+    }
+    let paths: Vec<PathBuf> = (1..=parts.len())
+        .map(|n| split.dir.join(format!("{} part {n}.pdf", split.stem)))
+        .collect();
+    if let Some(taken) = paths.iter().find(|p| p.exists()) {
+        return Err(SaveError::OtherFile(format!(
+            "“{}” is already in that folder. Choose another folder, or move it first.",
+            taken.file_name().unwrap_or_default().to_string_lossy()
+        )));
+    }
+    for (bytes, path) in parts.iter().zip(&paths) {
+        write_atomically(path, bytes)?;
+    }
+    Ok(parts.len())
+}
+
 /// The bytes of another file to take pages from, and its name for messages.
 fn other_file(path: &Path, limits: Limits) -> Result<(Vec<u8>, String), SaveError> {
     let name = path
@@ -912,4 +1023,46 @@ fn revised(current: &Doc, revision: Result<Revision, SaveError>) -> Result<(Doc,
     let revision = revision?;
     let doc = Doc::new(revision.bytes, revision.password, current.limits);
     Ok((doc, revision.info))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_splits_fill_each_file_and_keep_page_order() {
+        let dir = std::env::temp_dir().join(format!("panna-split-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+        // Each page takes 100 bytes and every file 50 more; page 5 alone takes 400.
+        let mut written: Vec<Vec<usize>> = Vec::new();
+        let mut built = |pages: &[usize]| -> Result<Vec<u8>, SaveError> {
+            let size = 50
+                + pages
+                    .iter()
+                    .map(|&p| if p == 5 { 400 } else { 100 })
+                    .sum::<usize>();
+            written.push(pages.to_vec());
+            Ok(pages
+                .iter()
+                .flat_map(|p| (*p as u32).to_le_bytes())
+                .chain(std::iter::repeat_n(0, size))
+                .take(size)
+                .collect())
+        };
+        let split = SizeSplit {
+            pages: (0..9).collect(),
+            limit: 350,
+            dir: dir.clone(),
+            stem: "doc".into(),
+        };
+        let files = split_by_size(&split, &mut built).unwrap_or_else(|e| panic!("{e}"));
+        let sizes: Vec<u64> = (1..=files)
+            .map(|n| std::fs::metadata(dir.join(format!("doc part {n}.pdf"))).map_or(0, |m| m.len()))
+            .collect();
+        // 0-2 fit (350), 3-4 (250, as 5 won't fit with them), 5 alone (450), then 6-8.
+        assert_eq!(sizes, [350, 250, 450, 350]);
+        // Writing them again would overwrite, so it's refused.
+        assert!(split_by_size(&split, &mut built).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

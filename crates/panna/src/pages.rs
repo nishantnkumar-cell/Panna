@@ -158,15 +158,89 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
 #[derive(Debug, Clone, Default)]
 pub struct Extracting {
     pub range: String,
-    pub split: bool,
+    pub split: Split,
+    /// The most each file may take when splitting by size, in megabytes, as typed.
+    pub size_mb: String,
+}
+
+/// How extracted pages are saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Split {
+    /// As one PDF.
+    #[default]
+    One,
+    EachPage,
+    /// A PDF for each top-level bookmark, from its page to the next one's; every page.
+    Bookmarks,
+    /// As few PDFs as fit in a size each.
+    Size,
 }
 
 #[derive(Debug, Clone)]
 pub enum ExtractEvent {
     Range(String),
-    Split(bool),
+    Split(Split),
+    Size(String),
     Go,
     Cancel,
+}
+
+impl Extracting {
+    pub fn new(range: String) -> Self {
+        Self {
+            range,
+            split: Split::One,
+            size_mb: "10".into(),
+        }
+    }
+
+    /// The size limit typed, in bytes: from 0.1 MB.
+    pub fn size_limit(&self) -> Option<u64> {
+        let mb: f64 = self.size_mb.trim().replace(',', ".").parse().ok()?;
+        (0.1..=100_000.0)
+            .contains(&mb)
+            .then_some((mb * 1024.0 * 1024.0) as u64)
+    }
+}
+
+/// Where each top-level bookmark's part starts, by page, from `outline`: the first part always
+/// starts on the first page, taking any pages before the first bookmark. Each part is named by
+/// its bookmark.
+pub fn bookmark_parts(outline: &[panna_core::OutlineItem], count: usize) -> Vec<(usize, String)> {
+    let mut parts: Vec<(usize, String)> = Vec::new();
+    for item in outline.iter().filter(|i| i.depth == 0) {
+        let Some(page) = item.page.filter(|p| *p < count) else {
+            continue;
+        };
+        if parts.last().is_some_and(|(last, _)| page <= *last) {
+            continue;
+        }
+        parts.push((page, item.title.clone()));
+    }
+    if let Some(first) = parts.first_mut() {
+        first.0 = 0;
+    }
+    parts
+}
+
+/// `title` made safe as part of a file name on every system.
+pub fn file_name_part(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+    let mut out = words.join(" ");
+    if let Some((cut, _)) = out.char_indices().nth(60) {
+        out.truncate(cut);
+    }
+    out.trim_end_matches(['.', ' ']).to_owned()
 }
 
 pub fn extract_input_id() -> iced::widget::Id {
@@ -208,10 +282,12 @@ pub fn parse_range(spec: &str, count: usize) -> Result<Vec<usize>, String> {
 }
 
 /// The Extract pages card for a document of `count` pages.
-pub fn extract_card<'a>(state: &Extracting, count: usize) -> Element<'a, Message> {
+pub fn extract_card<'a>(state: &Extracting, count: usize, bookmarks: usize) -> Element<'a, Message> {
     let ev = Message::Extract;
     let parsed = parse_range(&state.range, count);
+    let by_bookmarks = state.split == Split::Bookmarks;
     let hint = match &parsed {
+        _ if by_bookmarks => text(format!("Every page, in {bookmarks} files")).size(13),
         Ok(pages) if pages.len() == 1 => text("1 page").size(13),
         Ok(pages) => text(format!("{} pages", pages.len())).size(13),
         Err(e) => text(e.clone()).size(13).style(|theme: &Theme| text::Style {
@@ -219,31 +295,58 @@ pub fn extract_card<'a>(state: &Extracting, count: usize) -> Element<'a, Message
         }),
     };
     let split = Some(state.split);
+    let pick =
+        |label: &'static str, value: Split| radio(label, value, split, move |v| ev(ExtractEvent::Split(v)));
+    let range = text_input(&format!("Pages, such as 1-3, 5 (1 to {count})"), &state.range)
+        .id(extract_input_id())
+        .on_submit(ev(ExtractEvent::Go));
+    let range = if by_bookmarks {
+        range
+    } else {
+        range.on_input(move |v| ev(ExtractEvent::Range(v)))
+    };
+    let mut choices = column![
+        pick("Save them as one PDF", Split::One),
+        pick("Save each page as its own PDF", Split::EachPage),
+    ]
+    .spacing(10);
+    if bookmarks > 0 {
+        choices = choices.push(pick("Save a PDF for each top-level bookmark", Split::Bookmarks));
+    }
+    choices = choices.push(
+        row![
+            pick("Save as PDFs of at most", Split::Size),
+            text_input("10", &state.size_mb)
+                .on_input(move |v| ev(ExtractEvent::Size(v)))
+                .on_submit(ev(ExtractEvent::Go))
+                .width(60),
+            text("MB each"),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
+    );
+    let ok = match state.split {
+        Split::Bookmarks => bookmarks > 0,
+        Split::Size => parsed.is_ok() && state.size_limit().is_some(),
+        Split::One | Split::EachPage => parsed.is_ok(),
+    };
     container(
         column![
-            text("Extract pages").size(16),
-            text_input(&format!("Pages, such as 1-3, 5 (1 to {count})"), &state.range)
-                .id(extract_input_id())
-                .on_input(move |v| ev(ExtractEvent::Range(v)))
-                .on_submit(ev(ExtractEvent::Go)),
+            text("Extract or split pages").size(16),
+            range,
             hint,
-            radio("Save them as one PDF", false, split, |v| ev(ExtractEvent::Split(
-                v
-            ))),
-            radio("Save each page as its own PDF", true, split, |v| {
-                ev(ExtractEvent::Split(v))
-            }),
+            choices,
             row![
                 space::horizontal(),
                 button("Cancel")
                     .style(button::secondary)
                     .on_press(ev(ExtractEvent::Cancel)),
-                button("Extract…").on_press_maybe(parsed.is_ok().then_some(ev(ExtractEvent::Go))),
+                button("Extract…").on_press_maybe(ok.then_some(ev(ExtractEvent::Go))),
             ]
             .spacing(8),
         ]
         .spacing(10)
-        .width(340),
+        .width(380),
     )
     .padding(16)
     .style(container::rounded_box)
