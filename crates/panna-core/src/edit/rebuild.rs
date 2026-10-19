@@ -319,6 +319,32 @@ fn runs_script(annot: &Dict<'_>) -> bool {
         .is_some_and(|s| s.as_str() == "JavaScript")
 }
 
+/// Whether `dict` is a form field (or a field's parent), whose actions run as it's filled in.
+fn is_field(dict: &Dict<'_>) -> bool {
+    dict.contains_key(b"FT") || (dict.contains_key(b"Kids") && dict.contains_key(b"T"))
+}
+
+/// A copied dictionary without its additional actions (scripts that run as a field is
+/// typed in, worked out, formatted or checked), nor its action when that's a `script`.
+fn without_actions(body: &[u8], script: bool) -> Option<Vec<u8>> {
+    if !body.trim_ascii_start().starts_with(b"<<") {
+        return None;
+    }
+    let mut out = b"<<".to_vec();
+    for (key, value) in lex::dict_entries(body)? {
+        if key == b"AA" || (key == b"A" && script) {
+            continue;
+        }
+        out.push(b'/');
+        out.extend_from_slice(key);
+        out.push(b' ');
+        out.extend_from_slice(body.get(value)?);
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b">>");
+    Some(out)
+}
+
 /// Which annotations become part of the page's content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Flatten {
@@ -1171,7 +1197,15 @@ pub(crate) fn rebuild(
     let info_num = info.and_then(|r| w.map(0, r));
 
     while let Some((doc, r, num)) = w.queue.pop_front() {
-        let body = copy_object(&mut w, sources, doc, r)?;
+        let mut body = copy_object(&mut w, sources, doc, r)?;
+        if clean.scripts
+            && let Some(field) = sources
+                .get(doc)
+                .and_then(|s| s.pdf.xref().get::<Dict<'_>>(id(r)))
+                .filter(is_field)
+        {
+            body = without_actions(&body, runs_script(&field)).unwrap_or(body);
+        }
         w.set(num, body);
     }
 
