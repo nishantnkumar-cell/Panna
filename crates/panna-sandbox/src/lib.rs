@@ -8,9 +8,11 @@
 //!   can't read the user's files or use the network; failing that, it drops to low integrity, so it can't write to the user's files or
 //!   reach other programs' windows, and a job object caps its memory, stops it starting
 //!   programs and keeps it off the clipboard and desktop.
-//! - macOS: the address space is capped. The system sandbox isn't applied yet.
+//! - macOS: the system sandbox (Seatbelt) refuses everything but drawing: no files, network,
+//!   other services or programs. The address space limit is set too, though macOS doesn't
+//!   enforce it.
 //!
-//! Only the Windows calls need `unsafe`; they're in their own module.
+//! Only the Windows and macOS calls need `unsafe`; they're in their own modules.
 
 mod spawn;
 
@@ -121,9 +123,45 @@ mod system {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod system {
+    use std::ffi::{CStr, c_char, c_int};
+
+    /// The Seatbelt rules: nothing is allowed but what's listed. Pipes already open (to the
+    /// app) keep working; opening files, sockets, other services or programs is refused.
+    const PROFILE: &CStr = c"(version 1)
+(deny default)
+(allow signal (target self))
+(allow process-info* (target self))
+(allow sysctl-read)
+";
+
+    unsafe extern "C" {
+        // From <sandbox.h>, in libSystem. Deprecated as an API, but it's what Chromium and
+        // Firefox still use to sandbox their content processes.
+        fn sandbox_init(profile: *const c_char, flags: u64, errorbuf: *mut *mut c_char) -> c_int;
+        fn sandbox_free_error(errorbuf: *mut c_char);
+    }
+
     pub(super) fn lock_down() -> Result<(), String> {
-        super::cap_memory()
+        super::cap_memory()?;
+        let mut error: *mut c_char = std::ptr::null_mut();
+        // SAFETY: the profile is a valid C string that outlives the call, flags 0 means it's
+        // a profile's text, and `error` is a valid place for the error pointer.
+        let status = unsafe { sandbox_init(PROFILE.as_ptr(), 0, &mut error) };
+        if status == 0 {
+            return Ok(());
+        }
+        let message = if error.is_null() {
+            String::from("unknown error")
+        } else {
+            // SAFETY: on failure, `error` is a C string from sandbox_init, freed only below.
+            let text = unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned();
+            // SAFETY: as above; it isn't used again.
+            unsafe { sandbox_free_error(error) };
+            text
+        };
+        Err(format!("sandbox: {message}"))
     }
 }
 
@@ -288,7 +326,7 @@ mod system {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     /// Run in a child process, as locking down can't be undone: exits with a bit set for
     /// each thing that still worked.
@@ -305,25 +343,30 @@ mod tests {
         if std::net::UdpSocket::bind("127.0.0.1:0").is_ok() {
             worked |= 2;
         }
-        if std::process::Command::new("/bin/true").status().is_ok() {
+        if std::process::Command::new("/usr/bin/true").status().is_ok() {
             worked |= 4;
         }
-        if landlock_enforced() && std::fs::read("/proc/self/status").is_ok() {
+        if files_enforced() && std::fs::read("/etc/hosts").is_ok() {
             worked |= 8;
         }
-        // Allocating past the cap fails rather than taking the machine's memory.
+        // Allocating past the cap fails rather than taking the machine's memory (Linux only;
+        // macOS ignores the cap).
         let mut big: Vec<u8> = Vec::new();
-        if big
-            .try_reserve_exact(usize::try_from(super::MEMORY).unwrap_or(usize::MAX))
-            .is_ok()
+        if cfg!(target_os = "linux")
+            && big
+                .try_reserve_exact(usize::try_from(super::MEMORY).unwrap_or(usize::MAX))
+                .is_ok()
         {
             worked |= 16;
         }
         std::process::exit(worked);
     }
 
-    fn landlock_enforced() -> bool {
-        std::fs::read_to_string("/sys/kernel/security/lsm").is_ok_and(|l| l.contains("landlock"))
+    /// Whether file access can be taken away here: always on macOS, and on Linux when the
+    /// kernel has Landlock.
+    fn files_enforced() -> bool {
+        cfg!(target_os = "macos")
+            || std::fs::read_to_string("/sys/kernel/security/lsm").is_ok_and(|l| l.contains("landlock"))
     }
 
     #[test]

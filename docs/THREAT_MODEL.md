@@ -61,7 +61,7 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 | Threat | Status | How |
 |---|---|---|
 | Memory bugs in PDF parsing (the main source of PDF-reader CVEs) | Mitigated | `panna` and `panna-core` `#![forbid(unsafe_code)]`. The PDF engine is pure Rust: hayro, hayro-interpret, hayro-jpeg2000, hayro-jbig2, hayro-ccitt, hayro-cmap, skrifa and read-fonts (fonts), vello_cpu, png, miniz_oxide and roxmltree all forbid `unsafe` |
-| Memory bugs in the `unsafe` code that untrusted data still reaches | Partly | Checked by reading each crate's source. hayro's SIMD image scaling (`pic-scale`) is **turned off in this review**, for about 25 ms more per full-page photo. What remains: zune-jpeg's SIMD kernels (IDCT, colour conversion, upsampling), switched on by the `image` crate's defaults, which can't be overridden; hayro-syntax's `unsafe` feature (memchr, flate2 over miniz_oxide, JBIG2 SIMD), which hayro-interpret always enables; and one documented lifetime transmute in hayro-syntax. All are widely used and fuzzed upstream, and our fuzzers reach them. Pages on screen are now drawn in a locked-down renderer process (section 7), so a bug there can't reach files or the network on Linux, or reach files or the network on Windows (AppContainer). Text extraction, export and editing still parse in the app's own process |
+| Memory bugs in the `unsafe` code that untrusted data still reaches | Partly | Checked by reading each crate's source. hayro's SIMD image scaling (`pic-scale`) is **turned off in this review**, for about 25 ms more per full-page photo. What remains: zune-jpeg's SIMD kernels (IDCT, colour conversion, upsampling), switched on by the `image` crate's defaults, which can't be overridden; hayro-syntax's `unsafe` feature (memchr, flate2 over miniz_oxide, JBIG2 SIMD), which hayro-interpret always enables; and one documented lifetime transmute in hayro-syntax. All are widely used and fuzzed upstream, and our fuzzers reach them. Pages on screen are now drawn in a locked-down renderer process (section 7), so a bug there can't reach files or the network on Linux, Windows (AppContainer) or macOS (Seatbelt). Text extraction, export and editing still parse in the app's own process |
 | Memory bugs in other dependencies (GPU stack, windowing, OS dialogs) | Accepted | They don't see PDF data, only the app's own UI and bitmaps already bounded by `Limits` |
 | PDF JavaScript, Launch and Run actions, auto-opening attachments | Mitigated | Not supported at all. Form calculations are evaluated without a script engine (`calc.rs`). Link reading keeps only page jumps and http/https/mailto (`links.rs`) |
 | Opening a link runs something else | Mitigated | Only http, https and mailto with no quotes, spaces or control characters (`safe_uri`); the user confirms; the address is one argument, never a shell; `rundll32` is run by full System32 path |
@@ -147,7 +147,8 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    capabilities (no network, no access to the user's files; it falls back to low integrity
    if Windows refuses the container) and joins a job object with a 4 GB memory cap, no
    child processes and no clipboard or desktop access; on
-   macOS only the memory cap applies so far (the Seatbelt sandbox is still to do). It draws a
+   macOS the system sandbox (Seatbelt) denies everything except drawing: no files, network,
+   other services or programs. It draws a
    test page once locked down; if that fails, pages are drawn in the app as before. Each page
    has 30 seconds. Still in the app's process: text extraction, thumbnails' text, export,
    printing, editing and the checks. Moving those needs the same protocol for more requests.
