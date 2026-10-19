@@ -16,6 +16,8 @@
 
 mod spawn;
 
+#[cfg(windows)]
+pub use spawn::spawn_contained;
 pub use spawn::{Contained, spawn, spawn_plain};
 
 /// Most memory the process may use, in bytes.

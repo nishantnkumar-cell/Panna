@@ -52,6 +52,12 @@ pub fn spawn(program: &Path, arg: &str) -> std::io::Result<Contained> {
     spawn_plain(program, arg)
 }
 
+/// As [`spawn`], only ever in an AppContainer, failing with the reason one couldn't be used.
+#[cfg(windows)]
+pub fn spawn_contained(program: &Path, arg: &str) -> std::io::Result<Contained> {
+    windows::spawn(program, arg)
+}
+
 /// As [`spawn`], always as a plain process, for when one in an AppContainer doesn't work.
 pub fn spawn_plain(program: &Path, arg: &str) -> std::io::Result<Contained> {
     use std::process::{Command, Stdio};
