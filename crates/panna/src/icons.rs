@@ -119,6 +119,8 @@ pub enum Icon {
     Rename,
     Indent,
     Outdent,
+    Hand,
+    ZoomBox,
 }
 
 impl Icon {
@@ -235,6 +237,8 @@ impl Icon {
             Icon::Rename => include_bytes!("../icons/pencil.svg"),
             Icon::Indent => include_bytes!("../icons/indent-increase.svg"),
             Icon::Outdent => include_bytes!("../icons/indent-decrease.svg"),
+            Icon::Hand => include_bytes!("../icons/hand.svg"),
+            Icon::ZoomBox => include_bytes!("../icons/scan-search.svg"),
         }
     }
 }
@@ -329,7 +333,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 111] = [
+    const ALL: [Icon; 113] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -441,6 +445,8 @@ mod tests {
         Icon::Rename,
         Icon::Indent,
         Icon::Outdent,
+        Icon::Hand,
+        Icon::ZoomBox,
     ];
 
     #[test]

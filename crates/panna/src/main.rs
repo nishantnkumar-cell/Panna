@@ -130,6 +130,8 @@ struct Snapshot {
     dragging: bool,
     /// Its picture is on the clipboard.
     copied: bool,
+    /// Dragged with the zoom tool: the view zooms in to the area instead.
+    zoom: bool,
 }
 
 impl Snapshot {
@@ -353,6 +355,11 @@ enum Message {
     AddPictureLoaded(Result<panna_core::StampImage, String>),
     /// Turn the snapshot tool on or off.
     ToggleSnapshot,
+    ToggleHand,
+    ToggleZoomBox,
+    /// The pointer moved in the window while the hand tool is on.
+    HandMoved(Point),
+    HandReleased,
     SnapshotTaken(Result<panna_core::RenderedPage, String>),
     PagePress(usize),
     PageDoubleClick(usize),
@@ -429,6 +436,14 @@ struct App {
     /// The snapshot tool is on: dragging over a page copies a picture of the area.
     snapping: bool,
     snapshot: Option<Snapshot>,
+    /// The hand tool is on: dragging a page scrolls the view.
+    hand: bool,
+    /// Where the pointer was in the window, and the scroll position, when the hand grabbed.
+    panning: Option<(Point, f32, f32)>,
+    /// The pointer in the window, followed while the hand tool is on.
+    cursor: Point,
+    /// The zoom tool is on: dragging a box over a page zooms in to it.
+    zoom_box: bool,
     measure: measure::Measure,
     adder: add::Adder,
     redactor: redact::Redactor,
@@ -860,6 +875,10 @@ impl App {
             save_after_pages: None,
             notice: None,
             snapping: false,
+            hand: false,
+            panning: None,
+            cursor: Point::ORIGIN,
+            zoom_box: false,
             snapshot: None,
             measure: measure::Measure::default(),
             adder: add::Adder::default(),
@@ -912,6 +931,18 @@ impl App {
             _ => None,
         });
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
+        if self.hand {
+            // The hand follows the pointer anywhere in the window, as the pages move under it.
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                    Some(Message::HandMoved(position))
+                }
+                iced::Event::Mouse(
+                    mouse::Event::ButtonReleased(mouse::Button::Left) | mouse::Event::CursorLeft,
+                ) => Some(Message::HandReleased),
+                _ => None,
+            }));
+        }
         if self.selecting || self.annotate.busy() {
             // Finish a text selection even when the button is released outside the page.
             subs.push(event::listen_with(|event, _status, _window| match event {
@@ -1221,9 +1252,8 @@ impl App {
                 }
                 if self.confirm_link.is_some() {
                     self.confirm_link = None;
-                } else if self.snapping {
-                    self.snapping = false;
-                    self.snapshot = None;
+                } else if self.snapping || self.hand || self.zoom_box {
+                    self.stop_page_tools();
                 } else if self.picture_editor.on {
                     if self.picture_editor.busy() {
                         self.picture_editor.cancel();
@@ -1453,8 +1483,9 @@ impl App {
                 }
                 Task::none()
             }
-            Message::PagePress(page) if self.snapping => {
+            Message::PagePress(page) if self.snapping || self.zoom_box => {
                 self.selection = None;
+                let zoom = self.zoom_box;
                 self.snapshot = self.hover.filter(|(p, _)| *p == page).map(|(_, position)| {
                     let at = Point::new(position.x / self.zoom, position.y / self.zoom);
                     Snapshot {
@@ -1463,8 +1494,14 @@ impl App {
                         to: at,
                         dragging: true,
                         copied: false,
+                        zoom,
                     }
                 });
+                Task::none()
+            }
+            Message::PagePress(_) if self.hand => {
+                self.selection = None;
+                self.panning = Some((self.cursor, self.viewport.offset_x, self.viewport.offset_y));
                 Task::none()
             }
             Message::ExportFormData => {
@@ -2299,15 +2336,36 @@ impl App {
                 Task::none()
             }
             Message::ToggleSnapshot => {
-                self.redactor.stop();
-                self.preparer.stop();
-                self.picture_editor.stop();
-                self.adder.on = false;
-                self.adder.cancel();
-                self.measure.on = false;
-                self.measure.clear();
-                self.snapping = !self.snapping;
-                self.snapshot = None;
+                let on = !self.snapping;
+                self.stop_page_tools();
+                self.snapping = on;
+                Task::none()
+            }
+            Message::ToggleHand => {
+                let on = !self.hand;
+                self.stop_page_tools();
+                self.hand = on;
+                Task::none()
+            }
+            Message::ToggleZoomBox => {
+                let on = !self.zoom_box;
+                self.stop_page_tools();
+                self.zoom_box = on;
+                Task::none()
+            }
+            Message::HandMoved(position) => {
+                self.cursor = position;
+                let Some((from, x, y)) = self.panning else {
+                    return Task::none();
+                };
+                let offset = AbsoluteOffset {
+                    x: (x - (position.x - from.x)).max(0.0),
+                    y: (y - (position.y - from.y)).max(0.0),
+                };
+                operation::scroll_to(scroll_id(), offset)
+            }
+            Message::HandReleased => {
+                self.panning = None;
                 Task::none()
             }
             Message::SnapshotTaken(result) => {
@@ -4145,6 +4203,10 @@ impl App {
         };
         snap.dragging = false;
         let snap = *snap;
+        if snap.zoom {
+            self.snapshot = None;
+            return self.zoom_to_area(snap);
+        }
         let (x, y, w, h) = snap.rect();
         // A click rather than a drag.
         if w * self.zoom < 4.0 || h * self.zoom < 4.0 {
@@ -4638,6 +4700,56 @@ impl App {
         })
     }
 
+    /// Turns off the tools that take over dragging on pages.
+    fn stop_page_tools(&mut self) {
+        self.redactor.stop();
+        self.preparer.stop();
+        self.picture_editor.stop();
+        self.adder.on = false;
+        self.adder.cancel();
+        self.measure.on = false;
+        self.measure.clear();
+        self.snapping = false;
+        self.snapshot = None;
+        self.hand = false;
+        self.panning = None;
+        self.zoom_box = false;
+    }
+
+    /// Zooms in so the area dragged with the zoom tool fills the view; a click zooms in a
+    /// step there.
+    fn zoom_to_area(&mut self, area: Snapshot) -> Task<Message> {
+        let (x, y, w, h) = area.rect();
+        let clicked = w * self.zoom < 4.0 || h * self.zoom < 4.0;
+        let zoom = if clicked {
+            self.zoom * 1.5
+        } else {
+            (self.viewport.width / w.max(1.0)).min(self.viewport.height / h.max(1.0)) * 0.95
+        }
+        .clamp(MIN_ZOOM, MAX_ZOOM);
+        let Some(doc) = &self.doc else { return Task::none() };
+        self.zoom = zoom;
+        // The area's middle goes to the middle of the view.
+        let content_w = doc.layout.content_width(zoom, self.viewport.width);
+        let left = doc.layout.page_left(area.page, zoom, content_w);
+        let top = doc.layout.page_top(area.page, zoom) + PAGE_GAP;
+        let middle = (left + (x + w / 2.0) * zoom, top + (y + h / 2.0) * zoom);
+        self.viewport.offset_x = if content_w <= self.viewport.width {
+            0.0
+        } else {
+            (middle.0 - self.viewport.width / 2.0).max(0.0)
+        };
+        self.viewport.offset_y = (middle.1 - self.viewport.height / 2.0).max(0.0);
+        let scroll = operation::scroll_to(
+            scroll_id(),
+            AbsoluteOffset {
+                x: self.viewport.offset_x,
+                y: self.viewport.offset_y,
+            },
+        );
+        Task::batch([scroll, self.request_visible()])
+    }
+
     fn set_zoom(&mut self, zoom: f32) -> Task<Message> {
         let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         let Some(doc) = &self.doc else {
@@ -4925,6 +5037,26 @@ impl App {
             icons::button(Icon::ZoomIn, format!("Zoom in ({m}Plus)"), on(Message::ZoomIn)),
             icons::button(Icon::FitWidth, format!("Fit width ({m}2)"), on(Message::FitWidth)),
             icons::button(Icon::FitPage, format!("Fit page ({m}0)"), on(Message::FitPage)),
+            icons::toggle(
+                Icon::Hand,
+                if self.hand {
+                    "Stop the hand tool (Esc)"
+                } else {
+                    "Hand: drag the pages to scroll"
+                },
+                self.hand,
+                Message::ToggleHand,
+            ),
+            icons::toggle(
+                Icon::ZoomBox,
+                if self.zoom_box {
+                    "Stop the zoom tool (Esc)"
+                } else {
+                    "Zoom: drag a box over a page to zoom in to it"
+                },
+                self.zoom_box,
+                Message::ToggleZoomBox,
+            ),
             gap(),
             icons::button(Icon::RotateCcw, "Rotate left", on(Message::RotateCcw)),
             icons::button(Icon::RotateCw, "Rotate right", on(Message::RotateCw)),
@@ -5680,7 +5812,14 @@ impl App {
                         } else {
                             mouse::Interaction::ResizingDiagonallyUp
                         }
+                    } else if self.hand {
+                        if self.panning.is_some() {
+                            mouse::Interaction::Grabbing
+                        } else {
+                            mouse::Interaction::Grab
+                        }
                     } else if self.snapping
+                        || self.zoom_box
                         || self.measure.on
                         || self.adder.on
                         || self.redactor.on
