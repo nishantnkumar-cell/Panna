@@ -615,6 +615,7 @@ mod tests {
             y1: 10.0,
             size: 10.0,
             cells: cells.iter().map(|(x, t)| (*x, (*t).to_owned())).collect(),
+            x1: 0.0,
         };
         let lines = [
             row(&[(72.0, "Item"), (200.0, "Price")]),
@@ -635,6 +636,7 @@ mod tests {
     fn line(text: &str, y0: f32, size: f32) -> Line {
         Line {
             cells: Vec::new(),
+            x1: 300.0,
             text: text.into(),
             x0: 72.0,
             y0,

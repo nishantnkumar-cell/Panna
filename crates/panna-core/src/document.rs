@@ -433,15 +433,70 @@ impl Document {
         page: usize,
         additions: &[crate::Addition],
     ) -> Result<Vec<u8>, crate::SaveError> {
+        // Replaced text without a colour of its own takes the colour of the text it replaces.
+        let additions: Vec<crate::Addition> = additions
+            .iter()
+            .map(|a| match a {
+                crate::Addition::ReplaceText {
+                    area,
+                    text,
+                    size,
+                    color: None,
+                } => crate::Addition::ReplaceText {
+                    area: *area,
+                    text: text.clone(),
+                    size: *size,
+                    color: self.text_color(page, *area),
+                },
+                other => other.clone(),
+            })
+            .collect();
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::add(
                 (&self.pdf, &self.bytes, &self.password),
                 self.page_count(),
                 page,
-                additions,
+                &additions,
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The colour text in `area` of page `page` is drawn in, as near as the picture of the
+    /// page shows: the pixel that stands out most from the area's background.
+    fn text_color(&self, page: usize, area: crate::TextBox) -> Option<crate::Color> {
+        const SCALE: f32 = 2.0;
+        let cache = self.new_cache();
+        let shown = self.render_page(&cache, page, SCALE).ok()?;
+        let scale = shown.width as f32 / self.page_size(page)?.width.max(1.0);
+        let (w, h) = (shown.width as usize, shown.height as usize);
+        let px = |v: f32, max: usize| ((v * scale).max(0.0) as usize).min(max);
+        let (x0, x1) = (px(area.x0, w), px(area.x1, w));
+        let (y0, y1) = (px(area.y0, h), px(area.y1, h));
+        let mut counts: std::collections::HashMap<[u8; 3], usize> = std::collections::HashMap::new();
+        let mut pixels = Vec::new();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let at = (y * w + x) * 4;
+                if let Some([r, g, b]) = shown
+                    .rgba
+                    .get(at..at + 3)
+                    .and_then(|p| <[u8; 3]>::try_from(p).ok())
+                {
+                    *counts.entry([r, g, b]).or_default() += 1;
+                    pixels.push([r, g, b]);
+                }
+            }
+        }
+        let background = counts.into_iter().max_by_key(|(_, n)| *n)?.0;
+        let distance = |p: &[u8; 3]| {
+            p.iter()
+                .zip(background)
+                .map(|(a, b)| (i32::from(*a) - i32::from(b)).pow(2))
+                .sum::<i32>()
+        };
+        let ink = pixels.iter().max_by_key(|p| distance(p))?;
+        Some(crate::Color(ink.map(|c| f32::from(c) / 255.0)))
     }
 
     /// The document with `add` fields added to its form and the fields `remove` taken out,

@@ -371,15 +371,16 @@ pub(crate) fn redact(
     lookup: &mut dyn Lookup,
     areas: &[[f64; 4]],
     ctm: Matrix,
+    text_only: bool,
     names: &mut dyn FnMut() -> String,
 ) -> Option<Redacted> {
     // First, which pictures and forms are hit anywhere, so that every use of them goes.
-    let first = run(content, lookup, areas, ctm, None, names)?;
+    let first = run(content, lookup, areas, ctm, None, text_only, names)?;
     let plan = (
         first.images,
         first.forms.into_iter().map(|f| f.name).collect::<HashSet<_>>(),
     );
-    run(content, lookup, areas, ctm, Some(&plan), names)
+    run(content, lookup, areas, ctm, Some(&plan), text_only, names)
 }
 
 type Plan = (HashSet<Vec<u8>>, HashSet<Vec<u8>>);
@@ -404,6 +405,7 @@ fn run(
     areas: &[[f64; 4]],
     ctm: Matrix,
     plan: Option<&Plan>,
+    text_only: bool,
     names: &mut dyn FnMut() -> String,
 ) -> Option<Redacted> {
     let mut out = Redacted::default();
@@ -539,7 +541,10 @@ fn run(
             }
             b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => {
                 let painted = op != b"n";
-                if painted && let Some(b) = path.take() {
+                if painted
+                    && !text_only
+                    && let Some(b) = path.take()
+                {
                     // Strokes reach a little past their path; enough to count for thin lines.
                     if areas.iter().any(|a| inside(b, *a)) {
                         out.changed = true;
@@ -551,7 +556,7 @@ fn run(
             b"Do" => {
                 if let Some(Operand::Name(name)) = operands.first() {
                     match lookup.xobject(name) {
-                        Some(XObject::Image) => {
+                        Some(XObject::Image) if !text_only => {
                             let b = bounds(state.ctm, [0.0, 0.0, 1.0, 1.0]);
                             let gone = match plan {
                                 Some((images, _)) => images.contains(name),
@@ -582,7 +587,7 @@ fn run(
                                 });
                             }
                         }
-                        Some(XObject::Other) | None => {}
+                        Some(XObject::Image | XObject::Other) | None => {}
                     }
                 }
             }
@@ -596,7 +601,7 @@ fn run(
                     }
                 }
                 lex.inline_image()?;
-                if hit(bounds(state.ctm, [0.0, 0.0, 1.0, 1.0])) {
+                if !text_only && hit(bounds(state.ctm, [0.0, 0.0, 1.0, 1.0])) {
                     out.changed = true;
                     replace = Some(Vec::new());
                 }
@@ -1288,7 +1293,7 @@ mod tests {
             count += 1;
             format!("R{count}")
         };
-        redact(content.as_bytes(), &mut Fake, areas, IDENTITY, &mut names).unwrap()
+        redact(content.as_bytes(), &mut Fake, areas, IDENTITY, false, &mut names).unwrap()
     }
 
     fn text(r: &Redacted) -> String {

@@ -583,6 +583,15 @@ pub enum Addition {
         rect: crate::TextBox,
         target: crate::LinkTarget,
     },
+    /// The text in `area` taken out (only the text: pictures and drawings stay) and `text`
+    /// written in its place in Helvetica, at `size`, in `color` or the colour the old text
+    /// was drawn in.
+    ReplaceText {
+        area: crate::TextBox,
+        text: String,
+        size: f32,
+        color: Option<Color>,
+    },
 }
 
 /// Every page of `doc`, with `additions` added to page `page`.
@@ -620,6 +629,28 @@ pub(crate) fn add(
                 image: image.clone(),
             }),
             Addition::Link { rect, target } => extra.links.push((corners(rect), target.clone())),
+            Addition::ReplaceText {
+                area,
+                text,
+                size,
+                color,
+            } => {
+                extra.redact.push(corners(area));
+                extra.text_only = true;
+                let size = f64::from(size.clamp(1.0, 500.0));
+                let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+                if lines.iter().any(|l| !l.trim().is_empty()) {
+                    extra.over.push(marks::Drawing::Text {
+                        x: f64::from(area.x0),
+                        // Page text boxes reach 0.8 of the size above the baseline; added
+                        // text's baseline is 0.77 below its top.
+                        top: f64::from(area.y1) - size * 0.97,
+                        lines,
+                        size,
+                        color: color.unwrap_or(Color::BLACK),
+                    });
+                }
+            }
         }
     }
     rebuild_from(

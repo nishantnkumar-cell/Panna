@@ -110,6 +110,7 @@ pub enum Icon {
     CheckBoxField,
     DropdownField,
     DataImport,
+    EditText,
 }
 
 impl Icon {
@@ -217,6 +218,7 @@ impl Icon {
             Icon::DropdownField => include_bytes!("../icons/square-chevron-down.svg"),
             Icon::CommentsExport => include_bytes!("../icons/message-square-share.svg"),
             Icon::DataImport => include_bytes!("../icons/file-up.svg"),
+            Icon::EditText => include_bytes!("../icons/text-cursor-input.svg"),
         }
     }
 }
@@ -311,7 +313,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 102] = [
+    const ALL: [Icon; 103] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -414,6 +416,7 @@ mod tests {
         Icon::CheckBoxField,
         Icon::DropdownField,
         Icon::DataImport,
+        Icon::EditText,
     ];
 
     #[test]

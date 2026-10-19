@@ -275,6 +275,8 @@ pub(crate) struct Extra {
     pub links: Vec<([f64; 4], crate::LinkTarget)>,
     /// Areas to take content out of for good, in the same space as `links`.
     pub redact: Vec<[f64; 4]>,
+    /// Take only text out of the `redact` areas, leaving pictures, drawings and comments.
+    pub text_only: bool,
     /// Form fields to add, placed in the same space as `links`.
     pub fields: Vec<super::NewField>,
     /// Widgets to take off the page, and fields to take out of the form.
@@ -664,7 +666,7 @@ pub(crate) fn rebuild(
                     || !extra.fields.is_empty()
                     || !extra.drop_annots.is_empty()
                     || redacting;
-                let gone = if redacting {
+                let gone = if redacting && !extra.text_only {
                     redacted_annotations(pdf, dict, &areas)?
                 } else {
                     std::collections::HashSet::new()
@@ -922,6 +924,7 @@ pub(crate) fn rebuild(
                             super::redact::IDENTITY,
                             0,
                             &mut counter,
+                            extra.text_only,
                         )?;
                         let num = w.alloc();
                         w.set(num, flate_stream("", &content));
@@ -1408,14 +1411,20 @@ fn redact_into<'a>(
     ctm: super::redact::Matrix,
     depth: usize,
     counter: &mut u32,
+    text_only: bool,
 ) -> Result<(Vec<u8>, FormOverrides), SaveError> {
     let mut lookup = super::redact::Resources { dict: res.clone() };
     let mut names = || {
         *counter += 1;
         format!("PannaRedact{counter}")
     };
-    // Content Panna can't follow is dropped rather than kept unredacted.
-    let redacted = super::redact::redact(content, &mut lookup, areas, ctm, &mut names).unwrap_or_default();
+    // Content Panna can't follow is dropped rather than kept unredacted; when only editing
+    // text, it's kept as it was.
+    let redacted = super::redact::redact(content, &mut lookup, areas, ctm, text_only, &mut names)
+        .unwrap_or_else(|| super::redact::Redacted {
+            content: if text_only { content.to_vec() } else { Vec::new() },
+            ..super::redact::Redacted::default()
+        });
     let mut overrides: Vec<(String, u32)> = Vec::new();
     for image in &redacted.images {
         overrides.push((String::from_utf8_lossy(image).into_owned(), 0));
@@ -1450,6 +1459,7 @@ fn redact_into<'a>(
                 form.ctm,
                 depth + 1,
                 counter,
+                text_only,
             )?
         };
         let data = dict.data();

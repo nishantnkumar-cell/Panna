@@ -74,6 +74,7 @@ pub struct PageText {
 pub(crate) struct Line {
     pub text: String,
     pub x0: f32,
+    pub x1: f32,
     pub y0: f32,
     pub y1: f32,
     pub size: f32,
@@ -280,6 +281,7 @@ impl PageText {
                 cells,
                 text: text.trim().to_owned(),
                 x0: fold(|b| b.x0, f32::min),
+                x1: fold(|b| b.x1, f32::max),
                 y0: fold(|b| b.y0, f32::min),
                 y1: fold(|b| b.y1, f32::max),
                 // Boxes run from the descent to the ascent: 1000 units of a 1000-unit em.
@@ -287,6 +289,27 @@ impl PageText {
             });
         }
         out
+    }
+
+    /// The line of text at `x`, `y`: what it says, the box around it, and its font size.
+    pub fn line_at(&self, x: f32, y: f32) -> Option<(String, TextBox, f32)> {
+        self.lines()
+            .into_iter()
+            .filter(|l| x >= l.x0 - 2.0 && x <= l.x1 + 2.0 && y >= l.y0 - 1.0 && y <= l.y1 + 1.0)
+            // The nearest by height, where lines overlap.
+            .min_by(|a, b| {
+                let d = |l: &Line| ((l.y0 + l.y1) / 2.0 - y).abs();
+                d(a).total_cmp(&d(b))
+            })
+            .map(|l| {
+                let area = TextBox {
+                    x0: l.x0,
+                    y0: l.y0,
+                    x1: l.x1,
+                    y1: l.y1,
+                };
+                (l.text, area, l.size)
+            })
     }
 
     pub fn hit(&self, x: f32, y: f32) -> bool {
