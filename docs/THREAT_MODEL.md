@@ -149,7 +149,8 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    test page once locked down; if that fails, pages are drawn in the app as before. Each page
    has 30 seconds. Still in the app's process: text extraction, thumbnails' text, export,
    printing, editing and the checks. Moving those needs the same protocol for more requests.
-2. **Code-signed and notarised releases: set up, waiting on certificates.** A version tag
+2. **Code-signed and notarised releases: set up, on hold at the owner's request**
+   ([#37](https://github.com/nishantnkumar-cell/Panna/issues/37)). A version tag
    builds every platform into a draft release with `SHA256SUMS`. Windows builds are signed
    and macOS builds signed with the hardened runtime, notarised and stapled once the
    certificates are added as repository secrets ([RELEASING.md](RELEASING.md)); until then
