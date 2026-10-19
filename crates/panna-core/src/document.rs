@@ -651,8 +651,22 @@ impl Document {
         password: &str,
         options: &crate::SignOptions,
     ) -> Result<Vec<u8>, crate::SaveError> {
-        let signer =
-            crate::sig::Signer::from_pkcs12(pkcs12, password).map_err(crate::SaveError::Certificate)?;
+        self.signed_by(
+            &crate::DigitalId::File {
+                pkcs12: std::sync::Arc::new(pkcs12.to_vec()),
+                password: password.to_owned(),
+            },
+            options,
+        )
+    }
+
+    /// The document signed with a digital ID, as [`Document::signed`] does.
+    pub fn signed_by(
+        &self,
+        id: &crate::DigitalId,
+        options: &crate::SignOptions,
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        let signer = crate::sig::Signer::of(id).map_err(crate::SaveError::Certificate)?;
         let signed_before = !self.signatures().is_empty();
         let (mut bytes, room) = catch_unwind(AssertUnwindSafe(|| {
             crate::edit::prepare_signature(&self.pdf, &self.bytes, &signer.name(), options, signed_before)

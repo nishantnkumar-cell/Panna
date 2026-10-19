@@ -6,6 +6,7 @@
 
 mod add;
 mod annotate;
+mod certstore;
 mod clipboard;
 mod colors;
 mod comments;
@@ -2392,7 +2393,7 @@ impl App {
                 let (Some(doc), Some(state)) = (&self.doc, &self.signing) else {
                     return Task::none();
                 };
-                let Some((_, file)) = &state.file else {
+                let Some(id) = state.id() else {
                     return Task::none();
                 };
                 // Unsaved changes are signed too.
@@ -2400,15 +2401,9 @@ impl App {
                     doc.worker.set_changes(self.changes(), |_| {});
                 }
                 let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.sign(
-                    path.clone(),
-                    Arc::clone(file),
-                    state.password.clone(),
-                    state.options(),
-                    move |result| {
-                        let _ = tx.send(result);
-                    },
-                );
+                doc.worker.sign(path.clone(), id, state.options(), move |result| {
+                    let _ = tx.send(result);
+                });
                 Task::perform(rx, move |result| Message::SignSaved {
                     path: path.clone(),
                     result: result.unwrap_or(Err(SaveError::EngineCrashed)),
@@ -3348,7 +3343,12 @@ impl App {
                 page,
                 ..signing::Signing::default()
             });
-            return Task::none();
+            if !certstore::AVAILABLE {
+                return Task::none();
+            }
+            return Task::perform(certstore::find(), |found| {
+                Message::Signing(signing::Event::Found(found))
+            });
         }
         let Some(state) = &mut self.signing else {
             return Task::none();
@@ -3383,6 +3383,7 @@ impl App {
                             |n| n.to_string_lossy().into_owned(),
                         );
                         state.file = Some((name, Arc::new(bytes)));
+                        state.stored = None;
                         state.error = None;
                         iced::widget::operation::focus(signing::input_id())
                     }
@@ -3391,6 +3392,17 @@ impl App {
                         Task::none()
                     }
                 }
+            }
+            signing::Event::Found(found) => {
+                // Without the store, a certificate file still works, so nothing is said.
+                state.store = found.unwrap_or_default();
+                Task::none()
+            }
+            signing::Event::Stored(id) => {
+                state.stored = Some(id);
+                state.file = None;
+                state.error = None;
+                Task::none()
             }
             signing::Event::Password(v) => {
                 state.password = clean(v);
@@ -3421,7 +3433,7 @@ impl App {
                 Task::none()
             }
             signing::Event::Go => {
-                if state.file.is_none() {
+                if state.file.is_none() && state.stored.is_none() {
                     return Task::none();
                 }
                 state.error = None;

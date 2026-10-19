@@ -840,12 +840,51 @@ pub(crate) fn read(pdf: &Pdf, bytes: &[u8]) -> Vec<Signature> {
         .collect()
 }
 
+/// Signs a SHA-256 digest with a key held outside Panna, such as in the system's certificate
+/// store: an RSA key gives a PKCS #1 v1.5 signature, an elliptic-curve key its two numbers
+/// one after the other, each padded to the curve's size.
+pub type SignDigest = std::sync::Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, String> + Send + Sync>;
+
+/// A key held outside Panna, with its certificates.
+#[derive(Clone)]
+pub struct HeldKey {
+    /// The certificates, the signer's own first, in DER.
+    pub chain: Vec<Vec<u8>>,
+    pub sign: SignDigest,
+}
+
+impl std::fmt::Debug for HeldKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldKey")
+            .field("certificates", &self.chain.len())
+            .finish()
+    }
+}
+
+/// A digital ID to sign with.
+#[derive(Clone, Debug)]
+pub enum DigitalId {
+    /// A certificate file (.p12 or .pfx) and its password.
+    File {
+        pkcs12: std::sync::Arc<Vec<u8>>,
+        password: String,
+    },
+    Held(HeldKey),
+}
+
 /// A private key to sign with.
 pub(crate) enum Key {
     Rsa(Box<rsa::RsaPrivateKey>),
     P256(p256::ecdsa::SigningKey),
     P384(p384::ecdsa::SigningKey),
+    /// Held elsewhere; `curve` is P-256 or P-384's size in bytes for an elliptic-curve key.
+    Held {
+        sign: SignDigest,
+        curve: Option<usize>,
+    },
 }
+
+const UNSUPPORTED_KEY: &str = "The certificate's kind of key isn't supported yet (RSA, P-256 and P-384 are).";
 
 /// The signer's key and certificates (their own first) from a PKCS #12 file.
 pub(crate) struct Signer {
@@ -871,9 +910,7 @@ impl Signer {
             } else if let Ok(k) = p384::ecdsa::SigningKey::from_pkcs8_der(key_der) {
                 Key::P384(k)
             } else {
-                return Err(
-                    "The certificate's kind of key isn't supported yet (RSA, P-256 and P-384 are).".into(),
-                );
+                return Err(UNSUPPORTED_KEY.into());
             }
         };
         let chain: Vec<Certificate> = chain
@@ -885,6 +922,49 @@ impl Signer {
             return Err("The certificate file has no certificate for its key.".into());
         }
         Ok(Self { key, chain })
+    }
+
+    pub(crate) fn of(id: &DigitalId) -> Result<Self, String> {
+        match id {
+            DigitalId::File { pkcs12, password } => Self::from_pkcs12(pkcs12, password),
+            DigitalId::Held(held) => Self::held(held),
+        }
+    }
+
+    fn held(held: &HeldKey) -> Result<Self, String> {
+        let chain: Vec<Certificate> = held
+            .chain
+            .iter()
+            .filter_map(|c| Certificate::from_der(c).ok())
+            .collect();
+        let cert = chain
+            .first()
+            .ok_or_else(|| "The certificate couldn't be read.".to_owned())?;
+        let spki = &cert.tbs_certificate.subject_public_key_info;
+        let curve = match spki.algorithm.oid.to_string().as_str() {
+            "1.2.840.113549.1.1.1" => None,
+            "1.2.840.10045.2.1" => {
+                let named = spki
+                    .algorithm
+                    .parameters
+                    .as_ref()
+                    .and_then(|p| p.decode_as::<ObjectIdentifier>().ok())
+                    .map(|o| o.to_string());
+                match named.as_deref() {
+                    Some("1.2.840.10045.3.1.7") => Some(32),
+                    Some("1.3.132.0.34") => Some(48),
+                    _ => return Err(UNSUPPORTED_KEY.into()),
+                }
+            }
+            _ => return Err(UNSUPPORTED_KEY.into()),
+        };
+        Ok(Self {
+            key: Key::Held {
+                sign: std::sync::Arc::clone(&held.sign),
+                curve,
+            },
+            chain,
+        })
     }
 
     /// The name on the signer's certificate.
@@ -963,6 +1043,29 @@ impl Signer {
                     .map_err(|e| format!("The signature couldn't be made: {e}"))?;
                 (sig.to_der().as_bytes().to_vec(), "1.2.840.10045.4.3.2")
             }
+            Key::Held { sign, curve } => {
+                let made = sign(&message_digest)?;
+                let wrong = || "The signature that came back couldn't be read.".to_owned();
+                match curve {
+                    None => (made, "1.2.840.113549.1.1.11"),
+                    Some(32) => (
+                        p256::ecdsa::Signature::from_slice(&made)
+                            .map_err(|_| wrong())?
+                            .to_der()
+                            .as_bytes()
+                            .to_vec(),
+                        "1.2.840.10045.4.3.2",
+                    ),
+                    Some(_) => (
+                        p384::ecdsa::Signature::from_slice(&made)
+                            .map_err(|_| wrong())?
+                            .to_der()
+                            .as_bytes()
+                            .to_vec(),
+                        "1.2.840.10045.4.3.2",
+                    ),
+                }
+            }
         };
         let sha256 = AlgorithmIdentifierOwned {
             oid: oid("2.16.840.1.101.3.4.2.1")?,
@@ -978,7 +1081,8 @@ impl Signer {
             signed_attrs: Some(attrs),
             signature_algorithm: AlgorithmIdentifierOwned {
                 oid: oid(algorithm)?,
-                parameters: matches!(self.key, Key::Rsa(_)).then_some(Any::null()),
+                parameters: matches!(self.key, Key::Rsa(_) | Key::Held { curve: None, .. })
+                    .then_some(Any::null()),
             },
             signature: OctetString::new(signature).map_err(fail)?,
             unsigned_attrs: None,

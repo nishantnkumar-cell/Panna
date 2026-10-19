@@ -210,3 +210,41 @@ fn certificates_lead_to_the_ones_trusted() {
     assert!(panna_core::trusted_by(&own, &trusted).is_none());
     assert!(panna_core::trusted_by(&own, std::slice::from_ref(&own.chain[0])).is_some());
 }
+
+/// A key in the system's certificate store, as the app reaches it: only its certificates
+/// and a way to sign a digest, giving raw signatures as Windows does.
+fn held(p12: &str) -> panna_core::DigitalId {
+    use p256::pkcs8::DecodePrivateKey;
+    let store = p12_keystore::KeyStore::from_pkcs12(&fixture(p12), "secret").unwrap();
+    let (_, chain) = store.private_key_chain().unwrap();
+    let certs = chain.chain().iter().map(|c| c.as_der().to_vec()).collect();
+    let key = chain.key().to_vec();
+    let sign: panna_core::SignDigest = if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_der(&key) {
+        std::sync::Arc::new(move |digest: &[u8]| {
+            k.sign(rsa::Pkcs1v15Sign::new::<sha2::Sha256>(), digest)
+                .map_err(|e| e.to_string())
+        })
+    } else {
+        let k = p256::ecdsa::SigningKey::from_pkcs8_der(&key).unwrap();
+        std::sync::Arc::new(move |digest: &[u8]| {
+            use p256::ecdsa::signature::hazmat::PrehashSigner;
+            let sig: p256::ecdsa::Signature = k.sign_prehash(digest).map_err(|e| e.to_string())?;
+            Ok(sig.to_bytes().to_vec())
+        })
+    };
+    panna_core::DigitalId::Held(panna_core::HeldKey { chain: certs, sign })
+}
+
+#[test]
+fn signing_with_a_key_held_elsewhere_makes_a_valid_signature() {
+    for p12 in ["signer-rsa.p12", "signer-ec.p12"] {
+        let doc = plain();
+        let signed = doc
+            .signed_by(&held(p12), &panna_core::SignOptions::default())
+            .unwrap();
+        let sigs = doc.reopen(signed).unwrap().signatures();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].status, SigStatus::Valid, "{p12}");
+        assert_eq!(sigs[0].signer, "Pat Example");
+    }
+}

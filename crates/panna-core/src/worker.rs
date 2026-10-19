@@ -24,8 +24,7 @@ type TagReply = Box<dyn FnOnce(Result<Vec<crate::AccessFinding>, SaveError>) + S
 /// What signing needs.
 pub(crate) struct SignJob {
     path: PathBuf,
-    pkcs12: std::sync::Arc<Vec<u8>>,
-    password: String,
+    id: crate::DigitalId,
     options: crate::SignOptions,
 }
 
@@ -446,23 +445,14 @@ impl RenderWorker {
     pub fn sign(
         &self,
         path: PathBuf,
-        pkcs12: std::sync::Arc<Vec<u8>>,
-        password: String,
+        id: crate::DigitalId,
         options: crate::SignOptions,
         reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
     ) {
         let _ = self.jobs.send(Job {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
-            reply: Reply::Sign(
-                Box::new(SignJob {
-                    path,
-                    pkcs12,
-                    password,
-                    options,
-                }),
-                Box::new(reply),
-            ),
+            reply: Reply::Sign(Box::new(SignJob { path, id, options }), Box::new(reply)),
         });
     }
 
@@ -692,7 +682,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 })),
                 Reply::Sign(job, reply) => reply(
                     current
-                        .signed(&job.pkcs12, &job.password, &job.options)
+                        .signed_by(&job.id, &job.options)
                         .and_then(|bytes| write_atomically(&job.path, &bytes)),
                 ),
                 Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
