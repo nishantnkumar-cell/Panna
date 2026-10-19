@@ -248,7 +248,9 @@ jobs:
           mkdir dmg
           cp -R Panna.app dmg/
           ln -s /Applications dmg/Applications
-          hdiutil create -volname Panna -srcfolder dmg -ov -format UDZO panna-${{ matrix.name }}.dmg
+          # hdiutil's own size guess can come up short for a universal app, so leave room.
+          size=$(( $(du -sm dmg | cut -f1) + 64 ))
+          hdiutil create -volname Panna -srcfolder dmg -fs HFS+ -size ${size}m -ov -format UDZO panna-${{ matrix.name }}.dmg
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
