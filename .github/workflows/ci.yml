@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    # A version tag (v1.2.3) also publishes a draft release with checksums.
+    tags: ["v*"]
   pull_request:
   schedule:
     # Nightly: re-check advisories against new RustSec entries and run the fuzzer longer.
@@ -115,6 +117,11 @@ jobs:
             os: macos-latest
             target: universal
     runs-on: ${{ matrix.os }}
+    env:
+      # Signing runs only once these secrets exist (see docs/RELEASING.md), and never for pull
+      # requests from forks, which don't get secrets.
+      WINDOWS_SIGNING: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+      MACOS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -140,6 +147,24 @@ jobs:
           cp packaging/linux/$ID.svg $D/share/icons/hicolor/scalable/apps/
           tar czf $D.tar.gz $D
 
+      - name: Sign Windows executable
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING == 'true'
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+            /f $pfx /p $env:PASSWORD /d Panna target/${{ matrix.target }}/release/panna.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signtool.FullName verify /pa target/${{ matrix.target }}/release/panna.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item $pfx
+
       - name: Package Windows zip
         if: runner.os == 'Windows'
         shell: pwsh
@@ -160,9 +185,47 @@ jobs:
             target/x86_64-apple-darwin/release/panna
           cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
           cp packaging/macos/Panna.icns "$APP/Contents/Resources/Panna.icns"
-          # Ad-hoc signature so Apple Silicon will run it. Notarisation needs a developer account.
-          codesign --force --deep --sign - "$APP"
-          ditto -c -k --keepParent "$APP" panna-${{ matrix.name }}.zip
+
+      - name: Sign macOS app (ad hoc)
+        if: matrix.target == 'universal' && env.MACOS_SIGNING != 'true'
+        # Enough for Apple Silicon to run it; Gatekeeper still warns on first open.
+        run: codesign --force --sign - Panna.app
+
+      - name: Sign and notarise macOS app
+        if: matrix.target == 'universal' && env.MACOS_SIGNING == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -F'"' '/Developer ID Application/ { print $2; exit }')
+          test -n "$IDENTITY"
+          # Hardened runtime, needed for notarisation; Panna needs none of its exceptions.
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" Panna.app
+          codesign --verify --strict --verbose=2 Panna.app
+          ditto -c -k --keepParent Panna.app notarise.zip
+          xcrun notarytool submit notarise.zip --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple Panna.app
+          spctl --assess --type execute --verbose Panna.app
+          rm notarise.zip
+          security delete-keychain "$KEYCHAIN"
+
+      - name: Zip macOS app
+        if: matrix.target == 'universal'
+        run: ditto -c -k --keepParent Panna.app panna-${{ matrix.name }}.zip
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -171,6 +234,30 @@ jobs:
             panna-${{ matrix.name }}.tar.gz
             panna-${{ matrix.name }}.zip
           if-no-files-found: error
+
+  release:
+    name: Draft release with checksums
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft \
+            --title "Panna $GITHUB_REF_NAME" --notes "Check a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
 
   flatpak:
     name: Flatpak (KDE Plasma and GNOME)

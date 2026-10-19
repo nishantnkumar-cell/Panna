@@ -135,7 +135,7 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 | A tampered build tool or script | **Mitigated (fixed in this review)** | `cargo-fuzz` and the Python packages are pinned to versions; the Flatpak cargo generator is fetched from a fixed commit and its SHA-256 is checked |
 | A malicious or vulnerable crate | Mitigated | `Cargo.lock` is committed; `cargo-deny` allows only crates.io and an approved licence list, and bans networking crates; RustSec checks run nightly |
 | CI tokens misused by pull requests | Mitigated | The workflow token is read-only (`contents: read`), and there's no `pull_request_target` |
-| Unsigned releases | Open | Windows and macOS builds aren't code-signed yet, and macOS builds aren't notarised (that needs an Apple developer account) |
+| Unsigned releases | Ready, needs certificates | CI signs Windows builds and signs and notarises macOS builds once the certificates are added as secrets; every release has SHA-256 checksums |
 
 ## 7. Open items, in priority order
 
@@ -149,7 +149,11 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    test page once locked down; if that fails, pages are drawn in the app as before. Each page
    has 30 seconds. Still in the app's process: text extraction, thumbnails' text, export,
    printing, editing and the checks. Moving those needs the same protocol for more requests.
-2. **Code-signed and notarised releases**, with checksums published beside each download.
+2. **Code-signed and notarised releases: set up, waiting on certificates.** A version tag
+   builds every platform into a draft release with `SHA256SUMS`. Windows builds are signed
+   and macOS builds signed with the hardened runtime, notarised and stapled once the
+   certificates are added as repository secrets ([RELEASING.md](RELEASING.md)); until then
+   they come out unsigned and ad-hoc signed.
 3. **Wiping passwords and keys from memory: done where Panna holds them.** Open and
    permissions passwords, certificate-file passwords, the file key of an encrypted PDF and
    the passwords typed into the app are kept in `zeroize::Zeroizing`, so they are
