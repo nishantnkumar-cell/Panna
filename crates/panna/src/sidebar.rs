@@ -215,6 +215,7 @@ pub struct ViewData<'a> {
     pub removed: &'a [CommentId],
     pub attachments: &'a [Attachment],
     pub signatures: &'a [panna_core::Signature],
+    pub trusted: &'a [panna_core::Cert],
     pub layers: &'a [Layer],
     /// Whether each layer is shown.
     pub layers_shown: &'a [bool],
@@ -321,7 +322,7 @@ impl Sidebar {
             Tab::Changes if data.comparison.is_some() => data
                 .comparison
                 .map_or_else(|| space().into(), crate::compare::Comparison::panel),
-            Tab::Signatures if has_signatures => crate::signatures::panel(data.signatures),
+            Tab::Signatures if has_signatures => crate::signatures::panel(data.signatures, data.trusted),
             Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes | Tab::Signatures => {
                 self.thumbnails(&data)
             }

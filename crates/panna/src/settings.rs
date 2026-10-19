@@ -137,6 +137,11 @@ fn finite(s: &str) -> Option<f32> {
 }
 
 fn file_path() -> Option<PathBuf> {
+    Some(config_dir()?.join("settings.txt"))
+}
+
+/// Panna's folder in the OS config directory.
+pub fn config_dir() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -147,7 +152,7 @@ fn file_path() -> Option<PathBuf> {
             .filter(|p| p.is_absolute())
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     }?;
-    Some(base.join("Panna").join("settings.txt"))
+    Some(base.join("Panna"))
 }
 
 #[cfg(test)]

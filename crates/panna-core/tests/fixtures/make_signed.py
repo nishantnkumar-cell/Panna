@@ -5,6 +5,10 @@ self-signed certificate for "Test Signer" made on the spot.
 - signed-ecdsa.pdf: ECDSA P-256 with SHA-256 (ETSI.CAdES.detached)
 - signed-rsa-pss.pdf: RSA 2048 with RSA-PSS and SHA-256
 - signed-then-changed.pdf: signed-rsa.pdf with an incremental update added after signing
+- signed-by-ca.pdf: signed by "CA Signer", whose certificate "Panna Test CA" issued; the
+  CA's certificate is in the signature too
+- signed-by-ca-alone.pdf: the same, without the CA's certificate in the signature
+- test-ca.pem: the CA's certificate
 - signer-rsa.p12, signer-ec.p12: certificate files for "Pat Example" to sign with, password
   "secret"
 
@@ -116,3 +120,37 @@ for name, key_args in [
              str(HERE / name), "-passout", "pass:secret"],
             check=True,
         )
+
+# Signed with a certificate a CA issued.
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(tmp)
+    ca_key, ca_cert, key, csr, cert = (tmp / n for n in ("ca.key", "ca.pem", "k.pem", "r.csr", "c.pem"))
+    rsa_args = ["-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"]
+    subprocess.run(["openssl", "genpkey", *rsa_args, "-out", str(ca_key)], check=True)
+    subprocess.run(
+        ["openssl", "req", "-new", "-x509", "-key", str(ca_key), "-out", str(ca_cert), "-days",
+         "3650", "-subj", "/CN=Panna Test CA/O=Panna tests", "-sha256"],
+        check=True,
+    )
+    subprocess.run(["openssl", "genpkey", *rsa_args, "-out", str(key)], check=True)
+    subprocess.run(["openssl", "req", "-new", "-key", str(key), "-out", str(csr), "-subj",
+                    "/CN=CA Signer/O=Panna tests"], check=True)
+    subprocess.run(
+        ["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca_cert), "-CAkey", str(ca_key),
+         "-CAcreateserial", "-out", str(cert), "-days", "3650", "-sha256"],
+        check=True,
+    )
+    (HERE / "test-ca.pem").write_bytes(ca_cert.read_bytes())
+    for name, extra in [("signed-by-ca.pdf", ["-certfile", str(ca_cert)]), ("signed-by-ca-alone.pdf", [])]:
+        out, start, end = pdf(b"adbe.pkcs7.detached")
+        data, sig = tmp / "data", tmp / "sig.der"
+        data.write_bytes(bytes(out[:start]) + bytes(out[end:]))
+        subprocess.run(
+            ["openssl", "cms", "-sign", "-binary", "-in", str(data), "-signer", str(cert),
+             "-inkey", str(key), "-outform", "DER", "-out", str(sig), "-md", "sha256",
+             "-nosmimecap", *extra],
+            check=True,
+        )
+        hexsig = sig.read_bytes().hex().upper().encode()
+        out[start + 1 : start + 1 + len(hexsig)] = hexsig
+        (HERE / name).write_bytes(out)

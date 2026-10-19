@@ -57,6 +57,112 @@ pub struct Signature {
     /// Whether this signature certifies the document (and what it allows afterwards: 1 no
     /// changes, 2 form filling and signing, 3 also comments).
     pub certifies: Option<u8>,
+    /// The signer's certificate, then each certificate in the signature that issued the one
+    /// before it (checked, not just by name).
+    pub chain: Vec<Cert>,
+}
+
+/// A certificate: whose it is, who issued it, and its SHA-256 fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cert {
+    pub name: String,
+    /// Empty when the certificate issued itself.
+    pub issuer: String,
+    /// Upper-case hex.
+    pub fingerprint: String,
+    der: Vec<u8>,
+}
+
+impl Cert {
+    fn of(cert: &Certificate) -> Option<Self> {
+        let der = cert.to_der().ok()?;
+        let tbs = &cert.tbs_certificate;
+        Some(Self {
+            name: common_name(&tbs.subject),
+            issuer: if tbs.issuer == tbs.subject {
+                String::new()
+            } else {
+                common_name(&tbs.issuer)
+            },
+            fingerprint: Sha256::digest(&der).iter().map(|b| format!("{b:02X}")).collect(),
+            der,
+        })
+    }
+
+    /// A certificate file's certificate: DER, or PEM ("-----BEGIN CERTIFICATE-----").
+    pub fn from_file(bytes: &[u8]) -> Result<Self, String> {
+        let der = match pem_body(bytes) {
+            Some(der) => der,
+            None => bytes.to_vec(),
+        };
+        let cert = Certificate::from_der(&der).map_err(|_| "That isn't a certificate file".to_owned())?;
+        Self::of(&cert).ok_or_else(|| "The certificate can't be read".to_owned())
+    }
+
+    /// The certificate as DER, for saving.
+    pub fn der(&self) -> &[u8] {
+        &self.der
+    }
+
+    /// Whether `issuer`'s key signed this certificate.
+    fn issued_by(&self, issuer: &Cert) -> bool {
+        match (
+            Certificate::from_der(&self.der),
+            Certificate::from_der(&issuer.der),
+        ) {
+            (Ok(child), Ok(parent)) => cert_signed_by(&child, &parent),
+            _ => false,
+        }
+    }
+}
+
+/// The first PEM certificate's bytes.
+fn pem_body(bytes: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let start = text.find("-----BEGIN CERTIFICATE-----")? + "-----BEGIN CERTIFICATE-----".len();
+    let end = start + text.get(start..)?.find("-----END CERTIFICATE-----")?;
+    let b64: Vec<u8> = text
+        .get(start..end)?
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    base64_decode(&b64)
+}
+
+fn base64_decode(data: &[u8]) -> Option<Vec<u8>> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let data = data
+        .strip_suffix(b"==")
+        .or_else(|| data.strip_suffix(b"="))
+        .unwrap_or(data);
+    let mut out = Vec::with_capacity(data.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for &c in data {
+        acc = (acc << 6) | u32::from(value(c)?);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Who among `trusted` the signature's certificates lead to: one of them is trusted, or
+/// the last one was issued by a trusted certificate.
+pub fn trusted_by<'a>(sig: &Signature, trusted: &'a [Cert]) -> Option<&'a Cert> {
+    let last = sig.chain.last()?;
+    trusted.iter().find(|t| {
+        sig.chain.iter().any(|c| c.fingerprint == t.fingerprint)
+            || (last.issuer == t.name && last.issued_by(t))
+    })
 }
 
 struct Raw {
@@ -417,14 +523,14 @@ fn rsa_pss_verifies(n: &[u8], e: &[u8], sig: &[u8], pss: &Pss, digest: &[u8]) ->
 /// Whether `sig` over `message` was made with the certificate's key.
 fn verifies(
     cert: &Certificate,
-    info: &SignerInfo,
+    algorithm: &spki::AlgorithmIdentifierOwned,
+    sig: &[u8],
     digest_hash: Hash,
     message: &[u8],
 ) -> Result<bool, String> {
     let spki = &cert.tbs_certificate.subject_public_key_info;
     let key = spki.subject_public_key.raw_bytes();
-    let sig = info.signature.as_bytes();
-    let alg = info.signature_algorithm.oid.to_string();
+    let alg = algorithm.oid.to_string();
     // The hash the signature algorithm names, when it names one.
     let named = match alg.as_str() {
         "1.2.840.113549.1.1.5" | "1.2.840.10045.4.1" => Some(Hash::Sha1),
@@ -443,7 +549,7 @@ fn verifies(
                 .sequence(|r| Ok((UintRef::decode(r)?, UintRef::decode(r)?)))
                 .map_err(|_| "The certificate's RSA key can't be read".to_owned())?;
             if alg == "1.2.840.113549.1.1.10" {
-                let pss = pss_params(info.signature_algorithm.parameters.as_ref())?;
+                let pss = pss_params(algorithm.parameters.as_ref())?;
                 let digest = pss.hash.digest(&[message]);
                 return Ok(rsa_pss_verifies(n.as_bytes(), e.as_bytes(), sig, &pss, &digest));
             }
@@ -482,6 +588,17 @@ fn verifies(
     }
 }
 
+/// Whether `parent`'s key signed `child`.
+fn cert_signed_by(child: &Certificate, parent: &Certificate) -> bool {
+    if child.tbs_certificate.issuer != parent.tbs_certificate.subject {
+        return false;
+    }
+    let (Ok(tbs), Some(sig)) = (child.tbs_certificate.to_der(), child.signature.as_bytes()) else {
+        return false;
+    };
+    verifies(parent, &child.signature_algorithm, sig, Hash::Sha256, &tbs).unwrap_or(false)
+}
+
 /// What a signature's CMS data says: who signed, when the signer says it was, how it checks
 /// out, and whether the certificate was valid then.
 struct Checked {
@@ -490,6 +607,7 @@ struct Checked {
     time: Option<String>,
     status: SigStatus,
     outside_validity: bool,
+    chain: Vec<Cert>,
 }
 
 fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
@@ -499,6 +617,7 @@ fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
         time: None,
         status: SigStatus::Unsupported(String::new()),
         outside_validity: false,
+        chain: Vec::new(),
     };
     let unsupported = |why: &str| SigStatus::Unsupported(why.to_owned());
     // The data is padded with zeros after the signature itself.
@@ -544,6 +663,16 @@ fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
         out.status = unsupported("The signer's certificate isn't in the signature");
         return out;
     };
+    // Up from the signer's certificate, through those in the signature that issued each.
+    let mut at = cert;
+    out.chain.extend(Cert::of(at));
+    while out.chain.len() < 10 && at.tbs_certificate.issuer != at.tbs_certificate.subject {
+        let Some(next) = certs.iter().copied().find(|c| cert_signed_by(at, c)) else {
+            break;
+        };
+        out.chain.extend(Cert::of(next));
+        at = next;
+    }
     let tbs = &cert.tbs_certificate;
     out.signer = Some(common_name(&tbs.subject));
     if tbs.issuer != tbs.subject {
@@ -605,7 +734,13 @@ fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
         }
         None => signed.concat(),
     };
-    out.status = match verifies(cert, info, hash, &message) {
+    out.status = match verifies(
+        cert,
+        &info.signature_algorithm,
+        info.signature.as_bytes(),
+        hash,
+        &message,
+    ) {
         Ok(true) => SigStatus::Valid,
         Ok(false) if info.signed_attrs.is_none() => {
             SigStatus::Invalid("The document has been altered since it was signed".into())
@@ -638,6 +773,7 @@ pub(crate) fn read(pdf: &Pdf, bytes: &[u8]) -> Vec<Signature> {
                 changed_after: false,
                 outside_validity: false,
                 certifies: raw.certifies,
+                chain: Vec::new(),
             };
             let r: Vec<usize> = raw
                 .byte_range
@@ -698,6 +834,7 @@ pub(crate) fn read(pdf: &Pdf, bytes: &[u8]) -> Vec<Signature> {
             sig.time = checked.time.or(sig.time);
             sig.status = checked.status;
             sig.outside_validity = checked.outside_validity;
+            sig.chain = checked.chain;
             sig
         })
         .collect()

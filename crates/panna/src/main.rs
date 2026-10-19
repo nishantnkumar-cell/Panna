@@ -34,6 +34,7 @@ mod signing;
 mod speech;
 mod toolbar;
 mod tools;
+mod trust;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -275,6 +276,7 @@ enum Message {
     },
     ArchiveTo(Option<PathBuf>),
     Signing(signing::Event),
+    Trust(trust::Event),
     SignTo(Option<PathBuf>),
     SignSaved {
         path: PathBuf,
@@ -370,6 +372,7 @@ struct App {
     viewport: ViewportState,
     page_input: String,
     settings: Settings,
+    trusted: trust::Trusted,
     toolbar: Toolbar,
     sidebar: Sidebar,
     window_size: Size,
@@ -729,6 +732,7 @@ impl App {
             toolbar: Toolbar::new(settings.toolbar_dock, settings.toolbar_pos),
             sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
             settings,
+            trusted: trust::Trusted::load(),
             window_size: INITIAL_SIZE,
             screen: Screen::Windowed,
             page_edits: 0,
@@ -2250,6 +2254,7 @@ impl App {
             }
             Message::Protect(event) => self.protect(event),
             Message::Signing(event) => self.signing(event),
+            Message::Trust(event) => self.trust(event),
             Message::SignTo(None) => Task::none(),
             Message::SignTo(Some(path)) => {
                 let (Some(doc), Some(state)) = (&self.doc, &self.signing) else {
@@ -3081,6 +3086,38 @@ impl App {
         Task::perform(rx, |result| {
             Message::Extracted(result.unwrap_or(Err(SaveError::EngineCrashed)))
         })
+    }
+
+    /// Trusting a certificate, or no longer trusting it.
+    fn trust(&mut self, event: trust::Event) -> Task<Message> {
+        let result = match event {
+            trust::Event::Add(cert) => self.trusted.add(cert),
+            trust::Event::Remove(fingerprint) => self.trusted.remove(&fingerprint),
+            trust::Event::Import => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Choose a certificate to trust")
+                            .add_filter(
+                                "Certificates",
+                                &["cer", "crt", "pem", "der", "CER", "CRT", "PEM", "DER"],
+                            )
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    |path| Message::Trust(trust::Event::Imported(path)),
+                );
+            }
+            trust::Event::Imported(None) => Ok(()),
+            trust::Event::Imported(Some(path)) => trust::read(&path)
+                .and_then(|bytes| panna_core::Cert::from_file(&bytes))
+                .and_then(|cert| self.trusted.add(cert)),
+        };
+        if let Err(e) = result {
+            self.notice = Some(format!("Couldn't change the trusted certificates: {e}"));
+        }
+        Task::none()
     }
 
     /// The Sign with a certificate card's events.
@@ -4817,6 +4854,7 @@ impl App {
                 removed: &self.annotate.removed,
                 attachments: &doc.info.attachments,
                 signatures: &doc.info.signatures,
+                trusted: &self.trusted.certs,
                 layers: &doc.info.layers,
                 layers_shown: &doc.layers_shown,
                 can_undo_pages: self.page_edits > 0,

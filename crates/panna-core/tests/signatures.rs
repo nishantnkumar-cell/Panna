@@ -176,3 +176,37 @@ fn rsa_pss_signatures_check_out() {
     let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
     assert!(matches!(doc.signatures()[0].status, SigStatus::Invalid(_)));
 }
+
+#[test]
+fn certificates_lead_to_the_ones_trusted() {
+    let fixture_path = |n: &str| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(n)
+    };
+    let ca = panna_core::Cert::from_file(&std::fs::read(fixture_path("test-ca.pem")).unwrap()).unwrap();
+    assert_eq!((ca.name.as_str(), ca.issuer.as_str()), ("Panna Test CA", ""));
+    assert_eq!(ca.fingerprint.len(), 64);
+
+    let with_ca = open("signed-by-ca.pdf").signatures().remove(0);
+    assert_eq!(with_ca.status, SigStatus::Valid);
+    let names: Vec<&str> = with_ca.chain.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["CA Signer", "Panna Test CA"]);
+    assert_eq!(with_ca.chain[1].fingerprint, ca.fingerprint);
+
+    let alone = open("signed-by-ca-alone.pdf").signatures().remove(0);
+    assert_eq!(alone.chain.len(), 1);
+    assert_eq!(alone.issuer, "Panna Test CA");
+
+    let trusted = [ca];
+    for sig in [&with_ca, &alone] {
+        assert_eq!(
+            panna_core::trusted_by(sig, &trusted).map(|c| c.name.as_str()),
+            Some("Panna Test CA")
+        );
+    }
+    // A self-signed certificate is trusted only when it's on the list itself.
+    let own = open("signed-rsa.pdf").signatures().remove(0);
+    assert!(panna_core::trusted_by(&own, &trusted).is_none());
+    assert!(panna_core::trusted_by(&own, std::slice::from_ref(&own.chain[0])).is_some());
+}
