@@ -266,6 +266,7 @@ enum Message {
     Preflight(preflight::Event),
     Preflighted {
         doc: u64,
+        standard: panna_core::Standard,
         findings: Vec<panna_core::Finding>,
     },
     AccessChecked {
@@ -1816,19 +1817,24 @@ impl App {
                 self.preflight = None;
                 self.go_to_page(page)
             }
-            Message::Preflight(preflight::Event::Run) => {
+            Message::Preflight(event @ (preflight::Event::Run | preflight::Event::RunPrint)) => {
                 self.all_tools = false;
+                let standard = match event {
+                    preflight::Event::RunPrint => panna_core::Standard::PdfX,
+                    _ => panna_core::Standard::PdfA,
+                };
                 let Some(doc) = &self.doc else { return Task::none() };
                 if self.dirty() {
                     doc.worker.set_changes(self.changes(), |_| {});
                 }
                 let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.preflight(move |findings| {
+                doc.worker.preflight(standard, move |findings| {
                     let _ = tx.send(findings);
                 });
                 let id = doc.id;
                 Task::perform(rx, move |findings| Message::Preflighted {
                     doc: id,
+                    standard,
                     findings: findings.unwrap_or_default(),
                 })
             }
@@ -1854,9 +1860,16 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Preflighted { doc, findings } => {
+            Message::Preflighted {
+                doc,
+                standard,
+                findings,
+            } => {
                 if self.doc.as_ref().is_some_and(|d| d.id == doc) {
-                    self.preflight = Some(preflight::Report::new(findings));
+                    self.preflight = Some(match standard {
+                        panna_core::Standard::PdfA => preflight::Report::new(findings),
+                        panna_core::Standard::PdfX => preflight::Report::print(findings),
+                    });
                 }
                 Task::none()
             }

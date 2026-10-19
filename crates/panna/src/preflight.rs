@@ -11,6 +11,8 @@ use crate::Message;
 #[derive(Debug, Clone)]
 pub enum Event {
     Run,
+    /// Check for PDF/X.
+    RunPrint,
     /// Run the accessibility check.
     RunAccessibility,
     /// Save a PDF/A copy.
@@ -23,6 +25,7 @@ pub enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     PdfA,
+    PdfX,
     Accessibility,
 }
 
@@ -44,8 +47,17 @@ pub struct Report {
 
 impl Report {
     pub fn new(findings: Vec<Finding>) -> Self {
+        Self::of(Kind::PdfA, findings)
+    }
+
+    /// The findings of the PDF/X check.
+    pub fn print(findings: Vec<Finding>) -> Self {
+        Self::of(Kind::PdfX, findings)
+    }
+
+    fn of(kind: Kind, findings: Vec<Finding>) -> Self {
         Self {
-            kind: Kind::PdfA,
+            kind,
             items: findings
                 .into_iter()
                 .map(|f| Item {
@@ -102,6 +114,17 @@ impl Report {
             (Kind::PdfA, None) => (
                 "Not yet PDF/A".to_owned(),
                 "These keep the document from being archival PDF (PDF/A-2b):",
+            ),
+            (Kind::PdfX, _) if clean => (
+                "Meets PDF/X-4's main rules".to_owned(),
+                "Fonts are embedded, the printing condition is named, every page gives its \
+                 trimmed size, and the metadata says it's PDF/X-4. Not every rule of the \
+                 standard is checked.",
+            ),
+            (Kind::PdfX, _) => (
+                "Not yet PDF/X".to_owned(),
+                "These keep the document from being PDF/X-4, for printing. Making PDF/X needs \
+                 the printer's colour profile, so Panna checks but doesn't convert:",
             ),
             (Kind::Accessibility, _) if clean => (
                 "No accessibility problems found".to_owned(),

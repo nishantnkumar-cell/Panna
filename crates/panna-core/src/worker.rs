@@ -130,7 +130,7 @@ enum Reply {
     /// Where form fields could go.
     DetectFields(DetectReply),
     /// What keeps the document from being PDF/A.
-    Preflight(PreflightReply),
+    Preflight(crate::Standard, PreflightReply),
     Accessibility(AccessReply),
     /// Writes a PDF/A copy.
     Archive(PathBuf, ArchiveReply),
@@ -382,13 +382,17 @@ impl RenderWorker {
         });
     }
 
-    /// What keeps the document, with unsaved changes, from being PDF/A (see
-    /// [`Document::preflight`]).
-    pub fn preflight(&self, reply: impl FnOnce(Vec<crate::Finding>) + Send + 'static) {
+    /// What keeps the document, with unsaved changes, from being PDF/A or PDF/X (see
+    /// [`Document::preflight`] and [`Document::preflight_x`]).
+    pub fn preflight(
+        &self,
+        standard: crate::Standard,
+        reply: impl FnOnce(Vec<crate::Finding>) + Send + 'static,
+    ) {
         let _ = self.jobs.send(Job {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
-            reply: Reply::Preflight(Box::new(reply)),
+            reply: Reply::Preflight(standard, Box::new(reply)),
         });
     }
 
@@ -619,7 +623,10 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 })),
                 Reply::Pictures(page, reply) => reply(current.pictures(page)),
                 Reply::DetectFields(reply) => reply(current.detect_fields()),
-                Reply::Preflight(reply) => reply(current.preflight()),
+                Reply::Preflight(standard, reply) => reply(match standard {
+                    crate::Standard::PdfA => current.preflight(),
+                    crate::Standard::PdfX => current.preflight_x(),
+                }),
                 Reply::Accessibility(reply) => reply(current.accessibility()),
                 Reply::Archive(path, reply) => reply(current.archived().and_then(|bytes| {
                     let copy = current.reopen(bytes).map_err(|_| SaveError::Damaged)?;

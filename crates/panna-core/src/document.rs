@@ -494,7 +494,7 @@ impl Document {
         let encrypted = crate::edit::protected(&self.bytes);
         let has_id = crate::edit::has_file_id(&self.bytes);
         catch_unwind(AssertUnwindSafe(|| {
-            crate::preflight::check(&self.pdf, encrypted, has_id)
+            crate::preflight::check(&self.pdf, encrypted, has_id, crate::Standard::PdfA)
         }))
         .unwrap_or_default()
     }
@@ -581,6 +581,17 @@ impl Document {
                     undescribed: &undescribed,
                 },
             )
+        }))
+        .unwrap_or_default()
+    }
+
+    /// What keeps the document from being PDF/X-4, the kind of PDF for printing: an empty
+    /// list when the main rules are met. Not every rule of the standard is checked.
+    pub fn preflight_x(&self) -> Vec<crate::Finding> {
+        let encrypted = crate::edit::protected(&self.bytes);
+        let has_id = crate::edit::has_file_id(&self.bytes);
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::preflight::check(&self.pdf, encrypted, has_id, crate::Standard::PdfX)
         }))
         .unwrap_or_default()
     }

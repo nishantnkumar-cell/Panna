@@ -76,6 +76,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                     Message::Preflight(crate::preflight::Event::Run)
                 ),
                 tool(
+                    Icon::Print,
+                    "Check for PDF/X (printing)",
+                    Message::Preflight(crate::preflight::Event::RunPrint)
+                ),
+                tool(
                     Icon::Signed,
                     "Sign with a certificate…",
                     Message::Signing(crate::signing::Event::Open)

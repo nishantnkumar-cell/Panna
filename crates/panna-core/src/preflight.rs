@@ -1,6 +1,8 @@
 //! Checking a document against the main rules of PDF/A-2b, the archival kind of PDF: all
 //! fonts embedded, colours tied to a stated output, metadata that says it is PDF/A, and
-//! nothing that runs, plays, or depends on files outside it.
+//! nothing that runs, plays, or depends on files outside it. Also against PDF/X-4, the kind
+//! for printing, which asks much the same plus a printing condition and each page's trimmed
+//! size.
 
 use std::collections::HashSet;
 
@@ -30,6 +32,18 @@ pub enum Rule {
     NotPrinted,
     ForbiddenFilter,
     ExternalContent,
+    NotMarkedPdfX,
+    NoPrintingCondition,
+    NoTrimBox,
+}
+
+/// Which standard to check against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standard {
+    /// PDF/A-2b, for archiving.
+    PdfA,
+    /// PDF/X-4, for printing.
+    PdfX,
 }
 
 impl Rule {
@@ -49,6 +63,11 @@ impl Rule {
             Rule::NotPrinted => "Comments and fields must be set to print",
             Rule::ForbiddenFilter => "LZW compression isn't allowed",
             Rule::ExternalContent => "Content must not come from outside the file",
+            Rule::NotMarkedPdfX => "The file must say it is PDF/X-4",
+            Rule::NoPrintingCondition => {
+                "The file must name the printing condition it's made for (output intent)"
+            }
+            Rule::NoTrimBox => "Every page must give its trimmed size (trim box)",
         }
     }
 }
@@ -67,6 +86,8 @@ struct Check<'a> {
     out: Vec<Finding>,
     seen: HashSet<(i32, i32)>,
     visits: usize,
+    /// Checking for PDF/A, which has rules PDF/X doesn't.
+    archive: bool,
 }
 
 impl Check<'_> {
@@ -101,7 +122,7 @@ impl Check<'_> {
             Some(Object::Array(a)) => a.iter::<Name<'_>>().map(|n| n.as_str().to_owned()).collect(),
             _ => Vec::new(),
         };
-        if filters.iter().any(|f| lzw(f)) {
+        if self.archive && filters.iter().any(|f| lzw(f)) {
             self.add(Rule::ForbiddenFilter, "A stream uses LZW", page);
         }
     }
@@ -219,12 +240,14 @@ impl Check<'_> {
     }
 }
 
-pub(crate) fn check(pdf: &Pdf, encrypted: bool, has_id: bool) -> Vec<Finding> {
+pub(crate) fn check(pdf: &Pdf, encrypted: bool, has_id: bool, standard: Standard) -> Vec<Finding> {
+    let archive = standard == Standard::PdfA;
     let mut c = Check {
         pdf,
         out: Vec::new(),
         seen: HashSet::new(),
         visits: 0,
+        archive,
     };
     if encrypted {
         c.add(Rule::Encrypted, "Remove the password protection first", None);
@@ -240,21 +263,40 @@ pub(crate) fn check(pdf: &Pdf, encrypted: bool, has_id: bool) -> Vec<Finding> {
         Some(meta) => {
             let xmp = meta.decoded().map(|d| d.into_owned()).unwrap_or_default();
             let text = String::from_utf8_lossy(&xmp);
-            if !text.contains("pdfaid:part") {
+            if archive && !text.contains("pdfaid:part") {
                 c.add(Rule::NotMarkedPdfA, "No pdfaid:part in the metadata", None);
+            }
+            if !archive && !text.contains("PDF/X-4") {
+                c.add(
+                    Rule::NotMarkedPdfX,
+                    "No pdfxid:GTS_PDFXVersion of PDF/X-4 in the metadata",
+                    None,
+                );
             }
         }
     }
-    let pdfa_intent = catalog.get::<Array<'_>>(b"OutputIntents").is_some_and(|a| {
-        a.iter::<Dict<'_>>().any(|i| {
-            i.get::<Name<'_>>(b"S").is_some_and(|s| s.as_str() == "GTS_PDFA1")
-                && i.get::<Stream<'_>>(b"DestOutputProfile").is_some()
+    let intent = |kind: &str| {
+        catalog.get::<Array<'_>>(b"OutputIntents").is_some_and(|a| {
+            a.iter::<Dict<'_>>().any(|i| {
+                i.get::<Name<'_>>(b"S").is_some_and(|s| s.as_str() == kind)
+                    && (i.get::<Stream<'_>>(b"DestOutputProfile").is_some()
+                        // A registered printing condition, such as FOGRA39, can stand in for
+                        // the profile in PDF/X.
+                        || (kind == "GTS_PDFX" && i.contains_key(b"OutputConditionIdentifier")))
+            })
         })
-    });
-    if !pdfa_intent {
+    };
+    if archive && !intent("GTS_PDFA1") {
         c.add(
             Rule::NoOutputIntent,
             "No PDF/A output intent with a colour profile",
+            None,
+        );
+    }
+    if !archive && !intent("GTS_PDFX") {
+        c.add(
+            Rule::NoPrintingCondition,
+            "No PDF/X output intent with a printing condition or colour profile",
             None,
         );
     }
@@ -262,7 +304,7 @@ pub(crate) fn check(pdf: &Pdf, encrypted: bool, has_id: bool) -> Vec<Finding> {
         if names.contains_key(b"JavaScript") {
             c.add(Rule::Scripts, "The document has JavaScript", None);
         }
-        if names.contains_key(b"EmbeddedFiles") {
+        if archive && names.contains_key(b"EmbeddedFiles") {
             c.add(Rule::AttachedFiles, "The document has attached files", None);
         }
     }
@@ -277,6 +319,9 @@ pub(crate) fn check(pdf: &Pdf, encrypted: bool, has_id: bool) -> Vec<Finding> {
 
     for (index, page) in pdf.pages().iter().enumerate() {
         let raw = page.raw();
+        if !archive && !raw.contains_key(b"TrimBox") && !raw.contains_key(b"ArtBox") {
+            c.add(Rule::NoTrimBox, "The page has no trim box", Some(index));
+        }
         if raw.contains_key(b"AA") {
             c.add(Rule::Scripts, "A page has automatic actions", Some(index));
         }
@@ -331,11 +376,13 @@ pub(crate) fn check(pdf: &Pdf, encrypted: bool, has_id: bool) -> Vec<Finding> {
                     );
                     continue;
                 }
-                "FileAttachment" => c.add(Rule::AttachedFiles, "A file attached to a comment", Some(index)),
+                "FileAttachment" if archive => {
+                    c.add(Rule::AttachedFiles, "A file attached to a comment", Some(index))
+                }
                 _ => {}
             }
             c.actions(&annot, Some(index), what);
-            if subtype == "Popup" || subtype == "Link" {
+            if !archive || subtype == "Popup" || subtype == "Link" {
                 continue;
             }
             let rect_empty = annot

@@ -137,3 +137,41 @@ fn a_pdfa_copy_fixes_what_it_can() {
         Err(panna_core::SaveError::ArchiveProtected)
     ));
 }
+
+#[test]
+fn pdf_x_asks_for_a_printing_condition_and_trim_boxes() {
+    let x_rules = |doc: &Document| {
+        let mut r: Vec<Rule> = doc.preflight_x().into_iter().map(|f| f.rule).collect();
+        r.dedup();
+        r
+    };
+    let meta = "<x:xmpmeta><pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion></x:xmpmeta>";
+    let plain = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        ],
+        "/ID [<00> <00>]",
+    );
+    let doc = Document::from_bytes(plain, None, Limits::default()).unwrap();
+    assert_eq!(
+        x_rules(&doc),
+        [Rule::NoMetadata, Rule::NoPrintingCondition, Rule::NoTrimBox]
+    );
+
+    let ready = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 4 0 R /OutputIntents [<< /Type /OutputIntent \
+             /S /GTS_PDFX /OutputConditionIdentifier (FOGRA39) >>] >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /TrimBox [10 10 190 190] >>",
+            &stream("/Type /Metadata /Subtype /XML", meta),
+        ],
+        "/ID [<00> <00>]",
+    );
+    let doc = Document::from_bytes(ready, None, Limits::default()).unwrap();
+    assert_eq!(x_rules(&doc), []);
+    // The same file isn't PDF/A.
+    assert!(!doc.preflight().is_empty());
+}
