@@ -20,6 +20,8 @@ arboard = { version = "3", default-features = false, features = ["image-data", "
 # Drawing signatures and initials into pictures.
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 ab_glyph = "0.2"
+# Locks down the process that draws pages.
+panna-sandbox = { path = "../panna-sandbox", version = "0.1.0" }
 
 # The Windows and macOS print dialogs.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]

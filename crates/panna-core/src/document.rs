@@ -1074,6 +1074,11 @@ impl Document {
         Self::from_bytes(bytes, Some(&self.password), self.limits)
     }
 
+    /// The password the file was opened with ("" when none).
+    pub(crate) fn password(&self) -> &str {
+        &self.password
+    }
+
     pub fn limits(&self) -> Limits {
         self.limits
     }

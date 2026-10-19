@@ -61,7 +61,7 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 | Threat | Status | How |
 |---|---|---|
 | Memory bugs in PDF parsing (the main source of PDF-reader CVEs) | Mitigated | `panna` and `panna-core` `#![forbid(unsafe_code)]`. The PDF engine is pure Rust: hayro, hayro-interpret, hayro-jpeg2000, hayro-jbig2, hayro-ccitt, hayro-cmap, skrifa and read-fonts (fonts), vello_cpu, png, miniz_oxide and roxmltree all forbid `unsafe` |
-| Memory bugs in the `unsafe` code that untrusted data still reaches | Partly | Checked by reading each crate's source. hayro's SIMD image scaling (`pic-scale`) is **turned off in this review**, for about 25 ms more per full-page photo. What remains: zune-jpeg's SIMD kernels (IDCT, colour conversion, upsampling), switched on by the `image` crate's defaults, which can't be overridden; hayro-syntax's `unsafe` feature (memchr, flate2 over miniz_oxide, JBIG2 SIMD), which hayro-interpret always enables; and one documented lifetime transmute in hayro-syntax. All are widely used and fuzzed upstream, and our fuzzers reach them. Containing them fully needs process isolation (section 7) |
+| Memory bugs in the `unsafe` code that untrusted data still reaches | Partly | Checked by reading each crate's source. hayro's SIMD image scaling (`pic-scale`) is **turned off in this review**, for about 25 ms more per full-page photo. What remains: zune-jpeg's SIMD kernels (IDCT, colour conversion, upsampling), switched on by the `image` crate's defaults, which can't be overridden; hayro-syntax's `unsafe` feature (memchr, flate2 over miniz_oxide, JBIG2 SIMD), which hayro-interpret always enables; and one documented lifetime transmute in hayro-syntax. All are widely used and fuzzed upstream, and our fuzzers reach them. Pages on screen are now drawn in a locked-down renderer process (section 7), so a bug there can't reach files or the network on Linux, or write to the user's files on Windows. Text extraction, export and editing still parse in the app's own process |
 | Memory bugs in other dependencies (GPU stack, windowing, OS dialogs) | Accepted | They don't see PDF data, only the app's own UI and bitmaps already bounded by `Limits` |
 | PDF JavaScript, Launch and Run actions, auto-opening attachments | Mitigated | Not supported at all. Form calculations are evaluated without a script engine (`calc.rs`). Link reading keeps only page jumps and http/https/mailto (`links.rs`) |
 | Opening a link runs something else | Mitigated | Only http, https and mailto with no quotes, spaces or control characters (`safe_uri`); the user confirms; the address is one argument, never a shell; `rundll32` is run by full System32 path |
@@ -78,8 +78,8 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 | Attachment bombs | **Mitigated (fixed in this review)** | Attachments are size-checked the same way before being unpacked for saving |
 | Huge files, page counts and render sizes | Mitigated | `Limits`: 1 GiB files, 100 000 pages, 12 000 px and 64 Mpx bitmaps |
 | Reference cycles and deep nesting (page trees, outlines, form XObjects, patterns, fields, xref `/Prev`) | Mitigated | Tested with hostile files (`examples/hostile.rs`): all finish in under 2 s. hayro caps object nesting, and Panna's walkers keep visited sets and depth limits |
-| Very long content streams (millions of operators) | Partly | They finish, but can use about 700 MB for a 1 MB file. A memory cap needs process isolation |
-| Rendering that takes very long | Partly | The UI stays responsive (the worker is separate), but a page can keep one CPU core busy. A time limit needs process isolation |
+| Very long content streams (millions of operators) | Mitigated for display | They finish, but can use about 700 MB for a 1 MB file. On screen they're drawn in the renderer process, which is capped at 4 GB (Linux address space, Windows job object) and replaced if it fails |
+| Rendering that takes very long | Mitigated for display | The UI stays responsive, and a page that takes over 30 seconds to draw has its renderer process stopped; the next page starts a fresh one |
 | Engine panics | Mitigated | `catch_unwind` around every engine call; release builds keep unwinding (`panic = "unwind"`) |
 | Stack overflow from deep recursion | Partly | Not seen in testing (hayro and Panna limit depth), but a stack overflow can't be caught and would end the process |
 
@@ -139,12 +139,16 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 
 ## 7. Open items, in priority order
 
-1. **Process isolation for the render worker.** Run parsing and rendering in a child process
-   with a memory limit (a job object on Windows, rlimit or cgroup on Linux), no file-system
-   or network access (AppContainer on Windows, App Sandbox on macOS, seccomp and Landlock on
-   Linux), and a time limit per page. That turns every remaining denial-of-service item into
-   "this page couldn't be shown", and contains any memory bug in a dependency's `unsafe` code.
-   Planned in [ARCHITECTURE.md](ARCHITECTURE.md).
+1. **Process isolation: done for drawing pages on screen; still to do for the rest.** The app
+   starts a copy of itself as a renderer (`panna_core::isolate`), which locks itself down
+   before reading PDF data (`panna-sandbox`): on Linux, Landlock takes away all file access,
+   seccomp refuses sockets, starting programs and reaching into other processes, and the
+   address space is capped at 4 GB; on Windows it drops to low integrity and joins a job
+   object with a 4 GB memory cap, no child processes and no clipboard or desktop access; on
+   macOS only the memory cap applies so far (the Seatbelt sandbox is still to do). It draws a
+   test page once locked down; if that fails, pages are drawn in the app as before. Each page
+   has 30 seconds. Still in the app's process: text extraction, thumbnails' text, export,
+   printing, editing and the checks. Moving those needs the same protocol for more requests.
 2. **Code-signed and notarised releases**, with checksums published beside each download.
 3. Zero passwords and decrypted keys in memory after use (`zeroize`).
 4. Have redaction also search bookmarks and comments for the redacted text, and offer to

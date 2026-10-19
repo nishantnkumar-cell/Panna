@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/panna-core", "crates/panna-print", "crates/panna"]
+members = ["crates/panna-core", "crates/panna-print", "crates/panna-sandbox", "crates/panna"]
 exclude = ["fuzz"]
 
 [workspace.package]

@@ -19,6 +19,7 @@ mod formats;
 mod formdata;
 mod forms;
 mod guard;
+pub mod isolate;
 mod layers;
 mod limits;
 mod links;

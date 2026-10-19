@@ -618,12 +618,29 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
     let mut pending: Vec<Job> = Vec::new();
     let mut history: Vec<Document> = Vec::new();
     let mut hidden: Option<Vec<crate::ObjRef>> = None;
+    // Pages are drawn in a renderer process when the app provides one (see `isolate`).
+    let mut renderer: Option<crate::isolate::Renderer> = None;
+    let mut version: u64 = 0;
     loop {
+        version += 1;
         let current = live.as_ref().unwrap_or(&base);
         // What's shown: the document with the layers the user hid, when they've chosen.
         let with_layers = hidden.as_ref().and_then(|h| current.with_layers_hidden(h).ok());
         let view = with_layers.as_ref().unwrap_or(current);
         let cache = view.new_cache();
+        let mut draw = |index: usize, scale: f32| {
+            if renderer.is_none() {
+                renderer = crate::isolate::Renderer::start();
+            }
+            match renderer.as_mut() {
+                Some(r) => r.render(view, version, index, scale).unwrap_or_else(|()| {
+                    // Crashed, stuck or out of memory: a fresh one draws the next page.
+                    renderer = None;
+                    Err(RenderError::EngineCrashed)
+                }),
+                None => view.render_page(&cache, index, scale),
+            }
+        };
         // Render from `current` until an edit or save needs to swap documents.
         let swap = loop {
             if pending.is_empty() {
@@ -655,7 +672,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     rotation,
                     reply,
                 } => {
-                    let page = view.render_page(&cache, job.index, scale);
+                    let page = draw(job.index, scale);
                     reply(page.map(|p| p.rotated(rotation)));
                 }
                 Reply::Text(reply) => reply(view.page_text(job.index)),
@@ -716,7 +733,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     area,
                     reply,
                 } => {
-                    let page = view.render_page(&cache, page, scale);
+                    let page = draw(page, scale);
                     reply(page.map(|p| p.rotated(rotation).cropped(area)));
                 }
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
@@ -736,6 +753,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 }
             }
         };
+        drop(draw);
         drop(cache);
         match swap {
             Swap::Layers(list) => hidden = list,

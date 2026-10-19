@@ -63,9 +63,14 @@ See [SECURITY.md](../SECURITY.md) for the policy and [THREAT_MODEL.md](THREAT_MO
 7. Supply chain: `cargo-audit` (RustSec advisories) and `cargo-deny` (licenses, bans, sources)
    run on every push. `Cargo.lock` is committed.
 
-### Process isolation (planned, before 1.0)
+### Process isolation
 
-Move the render worker into a child process that has no file system or network access
-(seccomp on Linux, App Sandbox on macOS, an AppContainer / restricted token on Windows). The
-UI sends it the file bytes and gets back bitmaps. That way even a bug in a dependency's
-`unsafe` code (SIMD, image decoders) can't reach the user's files.
+Pages shown on screen are drawn in a child process: the app starts a copy of itself with
+`--panna-render`, which locks itself down (`crates/panna-sandbox`) before it reads PDF data,
+then loads the document's bytes and returns bitmaps over its standard input and output
+(`panna_core::isolate`). A crash, a page over 30 seconds or one that runs out of memory
+loses only that page; the next one starts a fresh renderer. On Linux the renderer has no
+file-system access (Landlock), no sockets or program starts (seccomp) and a 4 GB address
+space; on Windows it runs at low integrity in a job object with a 4 GB memory cap; on macOS
+only the memory cap applies so far. Text extraction, export, printing and editing still run
+in the app's worker thread.

@@ -71,6 +71,20 @@ const KEEP_MARGIN: usize = 2;
 const HANDLE: f32 = 8.0;
 
 fn main() -> iced::Result {
+    // A copy of the app started to draw pages: locked down before it sees any PDF data.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == panna_core::isolate::ARG)
+    {
+        match panna_sandbox::lock_down() {
+            Ok(()) => panna_core::isolate::serve(),
+            Err(e) => eprintln!("panna: the page renderer couldn't be locked down ({e})"),
+        }
+        std::process::exit(0);
+    }
+    if let Ok(program) = std::env::current_exe() {
+        panna_core::isolate::use_renderer(program);
+    }
     iced::application(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
