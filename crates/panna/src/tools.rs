@@ -26,9 +26,19 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
     };
     let mut tools: Vec<Element<'a, Message>> = vec![
         tool(
+            Icon::NewBlank,
+            "New blank PDF…",
+            Message::Blank(crate::create::Event::Open),
+        ),
+        tool(
             Icon::FromPictures,
             "Make a PDF from pictures…",
             Message::FromPictures,
+        ),
+        tool(
+            Icon::FromClipboard,
+            "Make a PDF from the picture on the clipboard…",
+            Message::FromClipboard,
         ),
         tool(
             Icon::Scanner,

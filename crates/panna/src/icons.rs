@@ -74,6 +74,8 @@ pub enum Icon {
     Watermark,
     Export,
     FromPictures,
+    NewBlank,
+    FromClipboard,
     Flatten,
     Protect,
     Clean,
@@ -193,6 +195,8 @@ impl Icon {
             Icon::Watermark => include_bytes!("../icons/file-type.svg"),
             Icon::Export => include_bytes!("../icons/file-output.svg"),
             Icon::FromPictures => include_bytes!("../icons/file-image.svg"),
+            Icon::NewBlank => include_bytes!("../icons/file.svg"),
+            Icon::FromClipboard => include_bytes!("../icons/clipboard-paste.svg"),
             Icon::Flatten => include_bytes!("../icons/layers.svg"),
             Icon::Protect => include_bytes!("../icons/lock.svg"),
             Icon::Clean => include_bytes!("../icons/shield-check.svg"),
@@ -335,7 +339,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 114] = [
+    const ALL: [Icon; 116] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -402,6 +406,8 @@ mod tests {
         Icon::Watermark,
         Icon::Export,
         Icon::FromPictures,
+        Icon::NewBlank,
+        Icon::FromClipboard,
         Icon::Flatten,
         Icon::Protect,
         Icon::Clean,

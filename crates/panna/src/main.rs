@@ -12,6 +12,7 @@ mod clipboard;
 mod colors;
 mod comments;
 mod compare;
+mod create;
 mod export;
 mod find;
 mod form;
@@ -205,6 +206,14 @@ enum Message {
     PicturesSaveTo(Option<PathBuf>),
     /// The PDF made of pictures was saved here, or why not.
     PicturesMade(Result<PathBuf, String>),
+    /// The New blank PDF card.
+    Blank(create::Event),
+    /// Makes a PDF of the picture on the clipboard.
+    FromClipboard,
+    /// The clipboard's picture, as width, height and RGBA, or why there isn't one.
+    ClipboardPicture(Result<(u32, u32, std::sync::Arc<Vec<u8>>), String>),
+    /// Where to save a new blank or clipboard PDF.
+    NewSaveTo(Option<PathBuf>),
     /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
     /// The folder to save extracted pages to, a file each, once chosen.
@@ -498,6 +507,10 @@ struct App {
     all_tools: bool,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
+    /// The New blank PDF card, while open.
+    blank: Option<create::Blank>,
+    /// A new PDF waiting for where to save it.
+    new_pdf: Option<NewPdf>,
     /// The pages being extracted, while their file or folder is chosen.
     extract_pages: Vec<usize>,
     /// What to do once unsaved changes are saved or discarded.
@@ -593,6 +606,52 @@ async fn make_pdf_from_pictures(files: Vec<PathBuf>, target: PathBuf) -> Result<
             std::fs::write(&target, pdf).map_err(|e| format!("Couldn't write the PDF: {e}"))?;
             Ok(target)
         })();
+        let _ = tx.send(result);
+    });
+    rx.await
+        .unwrap_or_else(|_| Err("Making the PDF stopped unexpectedly.".into()))
+}
+
+/// A new PDF to make once there's somewhere to save it.
+enum NewPdf {
+    Blank {
+        width: f32,
+        height: f32,
+        count: usize,
+    },
+    Picture {
+        width: u32,
+        height: u32,
+        rgba: std::sync::Arc<Vec<u8>>,
+    },
+}
+
+/// Asks where to save a new PDF, suggesting `name`.
+fn ask_new_pdf_path(name: &'static str) -> Task<Message> {
+    Task::perform(
+        async move {
+            rfd::AsyncFileDialog::new()
+                .set_title("Save the new PDF as")
+                .add_filter("PDF documents", &["pdf"])
+                .set_file_name(name)
+                .save_file()
+                .await
+                .map(|f| f.path().to_path_buf())
+        },
+        Message::NewSaveTo,
+    )
+}
+
+/// Makes `new` and saves it at `target`.
+async fn make_new_pdf(new: NewPdf, target: PathBuf) -> Result<PathBuf, String> {
+    let (tx, rx) = futures_channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = match new {
+            NewPdf::Blank { width, height, count } => panna_core::blank_pdf(width, height, count),
+            NewPdf::Picture { width, height, rgba } => panna_core::rgba_to_pdf(width, height, &rgba),
+        }
+        .and_then(|pdf| std::fs::write(&target, pdf).map_err(|e| format!("Couldn't write the PDF: {e}")))
+        .map(|()| target);
         let _ = tx.send(result);
     });
     rx.await
@@ -888,6 +947,8 @@ impl App {
             scanned: Vec::new(),
             all_tools: false,
             pictures: Vec::new(),
+            blank: None,
+            new_pdf: None,
             extract_pages: Vec::new(),
             confirm: None,
             after_save: None,
@@ -994,6 +1055,8 @@ impl App {
         if matches!(
             message,
             Message::FromPictures
+                | Message::FromClipboard
+                | Message::Blank(create::Event::Open)
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
                 | Message::Signing(signing::Event::Open)
@@ -1388,6 +1451,8 @@ impl App {
                     self.exporting = None;
                 } else if self.flattening.is_some() {
                     self.flattening = None;
+                } else if self.blank.is_some() {
+                    self.blank = None;
                 } else if self.replacing.is_some() {
                     self.replacing = None;
                 } else if self.protecting.is_some() {
@@ -2888,6 +2953,59 @@ impl App {
                     }
                 ));
                 Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
+            }
+            Message::Blank(create::Event::Open) => {
+                self.blank = Some(create::Blank::default());
+                operation::focus(create::pages_input_id())
+                    .chain(operation::select_all(create::pages_input_id()))
+            }
+            Message::Blank(create::Event::Cancel) => {
+                self.blank = None;
+                Task::none()
+            }
+            Message::Blank(create::Event::Go) => {
+                let Some((width, height, count)) = self.blank.as_ref().and_then(create::Blank::pages) else {
+                    return Task::none();
+                };
+                self.blank = None;
+                self.new_pdf = Some(NewPdf::Blank { width, height, count });
+                ask_new_pdf_path("Untitled.pdf")
+            }
+            Message::Blank(event) => {
+                if let Some(state) = &mut self.blank {
+                    state.update(event);
+                }
+                Task::none()
+            }
+            Message::FromClipboard => Task::perform(
+                async {
+                    let (tx, rx) = futures_channel::oneshot::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(clipboard::paste_picture());
+                    });
+                    rx.await
+                        .unwrap_or_else(|_| Err("The clipboard couldn't be read.".into()))
+                        .map(|(w, h, rgba)| (w, h, std::sync::Arc::new(rgba)))
+                },
+                Message::ClipboardPicture,
+            ),
+            Message::ClipboardPicture(Ok((width, height, rgba))) => {
+                self.new_pdf = Some(NewPdf::Picture { width, height, rgba });
+                ask_new_pdf_path("Clipboard.pdf")
+            }
+            Message::ClipboardPicture(Err(e)) => {
+                self.notice = Some(e);
+                Task::none()
+            }
+            Message::NewSaveTo(None) => {
+                self.new_pdf = None;
+                Task::none()
+            }
+            Message::NewSaveTo(Some(target)) => {
+                let Some(new) = self.new_pdf.take() else {
+                    return Task::none();
+                };
+                Task::perform(make_new_pdf(new, target), Message::PicturesMade)
             }
             Message::PicturesMade(Ok(path)) => {
                 self.notice = None;
@@ -5500,6 +5618,9 @@ impl App {
                 pages::flatten_card(state),
                 Message::Flatten(pages::FlattenEvent::Cancel),
             ));
+        }
+        if let Some(state) = &self.blank {
+            layers.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
         }
         if let Some(state) = &self.replacing {
             layers.push(modal(

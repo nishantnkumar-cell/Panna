@@ -59,18 +59,68 @@ pub fn pictures_to_pdf(pictures: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
         return Err(format!("Choose from 1 to {MAX_PICTURES} pictures."));
     }
     let count = pictures.len();
+    let pictures = pictures
+        .into_iter()
+        .enumerate()
+        .map(|(i, bytes)| {
+            Picture::read(bytes).map_err(|e| {
+                if count == 1 {
+                    e
+                } else {
+                    format!("Picture {}: {e}", i + 1)
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(pages_of(pictures))
+}
+
+/// A new PDF with an RGBA picture (from the clipboard, say) on its one page, fitted to an A4
+/// page turned to suit it.
+pub fn rgba_to_pdf(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let picture = StampImage::from_rgba(width, height, rgba)?;
+    Ok(pages_of(vec![Picture::Decoded(picture)]))
+}
+
+/// Pages a new blank PDF can have at most.
+pub const MAX_BLANK_PAGES: usize = 1000;
+
+/// A new PDF of `count` empty pages, each `width` by `height` points.
+pub fn blank_pdf(width: f32, height: f32, count: usize) -> Result<Vec<u8>, String> {
+    if count == 0 || count > MAX_BLANK_PAGES {
+        return Err(format!("Choose from 1 to {MAX_BLANK_PAGES} pages."));
+    }
+    // ISO 32000-2 limits pages to 3 to 14,400 units on a side.
+    if !(3.0..=14_400.0).contains(&width) || !(3.0..=14_400.0).contains(&height) {
+        return Err("Pages must be from 3 to 14,400 points on a side.".into());
+    }
+    let mut objects: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), Vec::new()];
+    let mut kids = String::new();
+    for i in 0..count {
+        let _ = write!(kids, "{} 0 R ", i + 3);
+        objects.push(
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << >> >>",
+                n(f64::from(width)),
+                n(f64::from(height))
+            )
+            .into_bytes(),
+        );
+    }
+    if let Some(tree) = objects.get_mut(1) {
+        *tree = format!("<< /Type /Pages /Kids [{}] /Count {count} >>", kids.trim_end()).into_bytes();
+    }
+    Ok(file_of(&objects))
+}
+
+/// A new PDF with each picture on a page of its own.
+fn pages_of(pictures: Vec<Picture>) -> Vec<u8> {
+    let count = pictures.len();
     // Objects: 1 catalog, 2 page tree, then for each picture a page, its content, its image
     // and (maybe) the image's mask.
     let mut objects: Vec<Vec<u8>> = vec![Vec::new(), Vec::new()];
     let mut kids = String::new();
-    for (i, bytes) in pictures.into_iter().enumerate() {
-        let picture = Picture::read(bytes).map_err(|e| {
-            if count == 1 {
-                e
-            } else {
-                format!("Picture {}: {e}", i + 1)
-            }
-        })?;
+    for picture in pictures {
         let (w, h) = picture.size();
         let (w, h) = (f64::from(w), f64::from(h));
         let (bw, bh) = if w > h { (PAGE.1, PAGE.0) } else { PAGE };
@@ -121,7 +171,11 @@ pub fn pictures_to_pdf(pictures: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
     if let Some(tree) = objects.get_mut(1) {
         *tree = format!("<< /Type /Pages /Kids [{}] /Count {count} >>", kids.trim_end()).into_bytes();
     }
+    file_of(&objects)
+}
 
+/// A PDF file of numbered objects (from 1), the first being the catalog.
+fn file_of(objects: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets = Vec::with_capacity(objects.len());
     for (i, body) in objects.iter().enumerate() {
@@ -141,5 +195,5 @@ pub fn pictures_to_pdf(pictures: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
         objects.len() + 1
     );
     out.extend_from_slice(xref.as_bytes());
-    Ok(out)
+    out
 }

@@ -72,3 +72,30 @@ fn tiff_pictures_become_pages_too() {
         &page.rgba[mid..mid + 3]
     );
 }
+
+#[test]
+fn blank_pdfs_have_the_pages_asked_for() {
+    let doc = Document::from_bytes(
+        panna_core::blank_pdf(842.0, 595.0, 3).unwrap(),
+        None,
+        Limits::default(),
+    )
+    .unwrap();
+    let info = doc.info().unwrap();
+    assert_eq!(info.pages.len(), 3);
+    assert!(info.pages.iter().all(|p| (p.width, p.height) == (842.0, 595.0)));
+    assert!(panna_core::blank_pdf(612.0, 792.0, 0).is_err());
+    assert!(panna_core::blank_pdf(1.0, 792.0, 1).is_err());
+}
+
+#[test]
+fn a_clipboard_picture_becomes_a_page() {
+    let rgba = [10u8, 20, 30, 255].repeat(40 * 30);
+    let pdf = panna_core::rgba_to_pdf(40, 30, &rgba).unwrap();
+    let doc = Document::from_bytes(pdf, None, Limits::default()).unwrap();
+    let info = doc.info().unwrap();
+    assert_eq!(info.pages.len(), 1);
+    // Wider than tall, at 96 pixels an inch.
+    assert_eq!((info.pages[0].width, info.pages[0].height), (30.0, 22.5));
+    assert!(panna_core::rgba_to_pdf(0, 0, &[]).is_err());
+}
