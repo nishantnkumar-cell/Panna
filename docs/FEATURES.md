@@ -104,7 +104,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Scan to PDF (from scanner) | Later | OS scanner APIs |
 | OCR (make scanned PDF searchable) | Later | Local OCR engine; the Tesseract C++ dependency would need sandboxing |
 | Optimise / reduce file size | Later | Done: "Save a smaller copy…" in All tools writes a copy with uncompressed and lightly compressed streams compressed harder, identical streams (fonts, pictures) kept once, unused objects dropped, and small objects packed into compressed object streams. Pages look exactly the same; pictures are not yet downsampled |
-| PDF/A, PDF/X conversion and preflight checks | Later | Preflight done: All tools › Check for PDF/A lists what keeps a document from PDF/A-2b (password protection, missing identifier, metadata or output intent, fonts not embedded, scripts, attached files, media, comments without appearances or not set to print, LZW and outside content), each with its page. Converting, and PDF/X, not yet |
+| PDF/A, PDF/X conversion and preflight checks | Later | Preflight done: All tools › Check for PDF/A lists what keeps a document from PDF/A-2b (password protection, missing identifier, metadata or output intent, fonts not embedded, scripts, attached files, media, comments without appearances or not set to print, LZW and outside content), each with its page. Converting done too: "Save a PDF/A copy…" on the report writes PDF/A metadata, an sRGB output intent and a file identifier, drops scripts and sets comments to print, then checks the copy; fonts that aren't embedded are reported, not fixed. PDF/X not yet |
 
 ## 7. Security and signatures
 

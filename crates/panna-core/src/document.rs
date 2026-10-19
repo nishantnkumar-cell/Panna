@@ -658,6 +658,21 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// A copy made PDF/A-2b where it can be: scripts and forbidden actions taken out,
+    /// metadata naming it PDF/A, an sRGB output intent, and comments and fields set to
+    /// print. What can't be fixed this way, such as fonts that aren't embedded, stays, so
+    /// check the copy with [`Document::preflight`].
+    pub fn archived(&self) -> Result<Vec<u8>, crate::SaveError> {
+        if crate::edit::protected(&self.bytes) {
+            return Err(crate::SaveError::ArchiveProtected);
+        }
+        self.cleaned(crate::Cleanup {
+            scripts: true,
+            archive: true,
+            ..crate::Cleanup::default()
+        })
+    }
+
     /// The contents of attached file `index` (in [`DocumentInfo::attachments`]).
     pub fn attachment(&self, index: usize) -> Option<Vec<u8>> {
         catch_unwind(AssertUnwindSafe(|| crate::attachments::data(&self.pdf, index)))

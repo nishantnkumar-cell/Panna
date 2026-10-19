@@ -266,6 +266,12 @@ enum Message {
         doc: u64,
         findings: Vec<panna_core::Finding>,
     },
+    ArchiveTo(Option<PathBuf>),
+    Archived {
+        doc: u64,
+        name: String,
+        result: Result<Vec<panna_core::Finding>, SaveError>,
+    },
     FieldsDetected {
         doc: u64,
         result: Result<Vec<panna_core::NewField>, String>,
@@ -1735,6 +1741,53 @@ impl App {
             }
             Message::Preflight(preflight::Event::Close) => {
                 self.preflight = None;
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Convert) => {
+                self.preflight = None;
+                let name = format!("{} (PDF-A).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a PDF/A copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::ArchiveTo,
+                )
+            }
+            Message::ArchiveTo(None) => Task::none(),
+            Message::ArchiveTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Unsaved changes go into the copy too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_archived(path, move |result| {
+                    let _ = tx.send(result);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::Archived {
+                    doc: id,
+                    name,
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::Archived { doc, name, result } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    match result {
+                        Ok(findings) => self.preflight = Some(preflight::Report::saved(name, findings)),
+                        Err(e) => self.notice = Some(e.to_string()),
+                    }
+                }
                 Task::none()
             }
             Message::Preflight(preflight::Event::Show(page)) => {

@@ -80,6 +80,7 @@ fn hidden_information_is_removed() {
         scripts: true,
         attachments: true,
         comments: true,
+        archive: false,
     };
     let out = doc.cleaned(all).unwrap();
     for gone in [

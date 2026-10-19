@@ -19,6 +19,7 @@ type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
+type ArchiveReply = Box<dyn FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send>;
 type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
 type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
 type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
@@ -120,6 +121,8 @@ enum Reply {
     DetectFields(DetectReply),
     /// What keeps the document from being PDF/A.
     Preflight(PreflightReply),
+    /// Writes a PDF/A copy.
+    Archive(PathBuf, ArchiveReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
@@ -377,6 +380,20 @@ impl RenderWorker {
         });
     }
 
+    /// Writes a PDF/A copy of the document (with the changes last given to it) to `path`,
+    /// and replies with what still keeps the copy from being PDF/A.
+    pub fn save_archived(
+        &self,
+        path: PathBuf,
+        reply: impl FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Archive(path, Box::new(reply)),
+        });
+    }
+
     /// Where form fields could go (see [`Document::detect_fields`]).
     pub fn detect_fields(
         &self,
@@ -556,6 +573,11 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                 Reply::Pictures(page, reply) => reply(current.pictures(page)),
                 Reply::DetectFields(reply) => reply(current.detect_fields()),
                 Reply::Preflight(reply) => reply(current.preflight()),
+                Reply::Archive(path, reply) => reply(current.archived().and_then(|bytes| {
+                    let copy = current.reopen(bytes).map_err(|_| SaveError::Damaged)?;
+                    write_atomically(&path, copy.bytes())?;
+                    Ok(copy.preflight())
+                })),
                 Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
                 Reply::Compare(path, reply) => reply(match Document::open(&path, None, current.limits()) {
                     Ok(other) => current

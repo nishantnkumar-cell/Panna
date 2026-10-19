@@ -10,6 +10,8 @@ use crate::Message;
 #[derive(Debug, Clone)]
 pub enum Event {
     Run,
+    /// Save a PDF/A copy.
+    Convert,
     /// Close the report and show this page.
     Show(usize),
     Close,
@@ -18,25 +20,52 @@ pub enum Event {
 #[derive(Debug)]
 pub struct Report {
     findings: Vec<Finding>,
+    /// The PDF/A copy these findings are about, when one was just saved.
+    saved: Option<String>,
 }
 
 impl Report {
     pub fn new(findings: Vec<Finding>) -> Self {
-        Self { findings }
+        Self {
+            findings,
+            saved: None,
+        }
+    }
+
+    /// The findings on a PDF/A copy just saved as `name`.
+    pub fn saved(name: String, findings: Vec<Finding>) -> Self {
+        Self {
+            findings,
+            saved: Some(name),
+        }
     }
 
     pub fn card(&self) -> Element<'_, Message> {
         let close = Message::Preflight(Event::Close);
-        let (title, summary) = if self.findings.is_empty() {
+        let (title, summary) = if let Some(name) = &self.saved {
+            let title = format!("Saved {name}");
+            if self.findings.is_empty() {
+                (
+                    title,
+                    "The copy meets PDF/A-2b's main rules. Not every rule of the standard is \
+                     checked.",
+                )
+            } else {
+                (
+                    title,
+                    "The copy is closer to PDF/A, but these couldn't be fixed by Panna:",
+                )
+            }
+        } else if self.findings.is_empty() {
             (
-                "Meets PDF/A-2b's main rules",
+                "Meets PDF/A-2b's main rules".to_owned(),
                 "Fonts are embedded, colours are tied to an output profile, the metadata says \
                  it's PDF/A, and nothing runs or comes from outside the file. Not every rule \
                  of the standard is checked.",
             )
         } else {
             (
-                "Not yet PDF/A",
+                "Not yet PDF/A".to_owned(),
                 "These keep the document from being archival PDF (PDF/A-2b):",
             )
         };
@@ -69,7 +98,17 @@ impl Report {
             text(title).size(16),
             text(summary).size(13),
             scrollable(list).height(height),
-            row![space::horizontal(), button("Close").on_press(close)],
+            row![
+                space::horizontal(),
+                button("Save a PDF/A copy…")
+                    .style(button::secondary)
+                    .on_press_maybe(
+                        (self.saved.is_none() && !self.findings.is_empty())
+                            .then_some(Message::Preflight(Event::Convert))
+                    ),
+                button("Close").on_press(close),
+            ]
+            .spacing(8),
         ]
         .spacing(10);
         container(container(body).width(420))

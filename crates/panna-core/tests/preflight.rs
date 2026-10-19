@@ -100,3 +100,40 @@ fn password_protection_is_reported() {
     let doc = Document::from_bytes(bytes.to_vec(), Some("secret"), Limits::default()).unwrap();
     assert!(rules(&doc).contains(&Rule::Encrypted));
 }
+
+#[test]
+fn a_pdfa_copy_fixes_what_it_can() {
+    let bytes = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [] >> >> \
+             /OpenAction << /S /JavaScript /JS (app.alert\\(1\\)) >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
+             /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>",
+            &stream("", "BT /F1 12 Tf 10 10 Td (Hi) Tj ET"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Annot /Subtype /Square /Rect [10 10 30 30] /F 2 /AP << /N 8 0 R >> >>",
+            "<< /Title (Report & notes) >>",
+            &stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 20 20]",
+                "0 0 20 20 re S",
+            ),
+        ],
+        "/Info 7 0 R",
+    );
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    let copy = doc.reopen(doc.archived().unwrap()).unwrap();
+    // The font isn't embedded in the original, so that stays to be fixed elsewhere.
+    assert_eq!(rules(&copy), [Rule::FontNotEmbedded]);
+    assert_eq!(copy.info().unwrap().title.as_deref(), None);
+    let raw = copy.bytes();
+    let text = String::from_utf8_lossy(raw);
+    assert!(text.contains("Report &amp; notes"));
+    // Password protected files are turned down.
+    let locked = include_bytes!("fixtures/encrypted-aes256.pdf");
+    let locked = Document::from_bytes(locked.to_vec(), Some("secret"), Limits::default()).unwrap();
+    assert!(matches!(
+        locked.archived(),
+        Err(panna_core::SaveError::ArchiveProtected)
+    ));
+}

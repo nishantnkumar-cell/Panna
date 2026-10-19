@@ -8,6 +8,7 @@ pub(crate) mod lex;
 mod marks;
 mod new_field;
 mod pack;
+mod pdfa;
 mod picture;
 mod rebuild;
 mod redact;
@@ -65,6 +66,8 @@ pub enum SaveError {
     ProtectionLocked,
     /// A marked area covers a form field, whose value would stay in the form.
     RedactsFormField,
+    /// PDF/A files can't be password protected.
+    ArchiveProtected,
 }
 
 impl fmt::Display for SaveError {
@@ -86,6 +89,11 @@ impl fmt::Display for SaveError {
                 f,
                 "Only the owner can change this PDF's password protection. Open it with the \
                  owner password first."
+            ),
+            Self::ArchiveProtected => write!(
+                f,
+                "PDF/A files can't have password protection. Remove it first, from Password \
+                 protection in All tools."
             ),
             Self::RedactsFormField => write!(
                 f,

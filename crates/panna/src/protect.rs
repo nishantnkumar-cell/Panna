@@ -183,6 +183,7 @@ pub fn default_cleanup() -> Cleanup {
         scripts: true,
         attachments: true,
         comments: false,
+        archive: false,
     }
 }
 

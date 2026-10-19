@@ -296,6 +296,10 @@ pub struct Cleanup {
     pub attachments: bool,
     /// Comments and markup; links and form fields stay.
     pub comments: bool,
+    /// Makes the copy PDF/A-2b where it can: new metadata naming it PDF/A (the document
+    /// information goes into it), an sRGB output intent, and comments and fields set to
+    /// print. Scripts should go too.
+    pub archive: bool,
 }
 
 impl Cleanup {
@@ -556,7 +560,7 @@ pub(crate) fn rebuild(
     compact: bool,
 ) -> Result<Vec<u8>, SaveError> {
     let first = sources.first().ok_or(SaveError::Damaged)?;
-    let info = info.filter(|_| !clean.metadata);
+    let info = info.filter(|_| !clean.metadata && !clean.archive);
     let mut w = Writer {
         objects: Vec::new(),
         maps: vec![HashMap::new(); sources.len()],
@@ -699,14 +703,20 @@ pub(crate) fn rebuild(
                             }
                         }
                         let has_actions = script || annot.get::<Dict<'_>>(b"AA").is_some();
-                        if clean.scripts && has_actions {
+                        let flags = annot.get::<i64>(b"F").unwrap_or(0);
+                        // PDF/A wants every comment and field printed, none hidden.
+                        let printed = (flags | 4) & !(1 | 2 | 32);
+                        let reflag = clean.archive && subtype != "Popup" && flags != printed;
+                        if (clean.scripts && has_actions) || reflag {
                             // A copy without its scripts, under the number everything that
                             // refers to it will use.
                             if let Some(num) = w.claim(doc, r) {
                                 let data = annot.data();
                                 let mut body = b"<<".to_vec();
                                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
-                                    if key == b"AA" || (key == b"A" && script) {
+                                    if (clean.scripts && (key == b"AA" || (key == b"A" && script)))
+                                        || (reflag && key == b"F")
+                                    {
                                         continue;
                                     }
                                     body.push(b'/');
@@ -715,6 +725,9 @@ pub(crate) fn rebuild(
                                     let value = data.get(value).ok_or(SaveError::Damaged)?;
                                     body.extend(copy_syntax(&mut w, sources, doc, r, value)?);
                                     body.push(b'\n');
+                                }
+                                if reflag {
+                                    body.extend_from_slice(format!("/F {printed}\n").as_bytes());
                                 }
                                 body.extend_from_slice(b">>");
                                 w.set(num, body);
@@ -1074,7 +1087,8 @@ pub(crate) fn rebuild(
             }
         }
         let value = data.get(value.clone()).ok_or(SaveError::Damaged)?;
-        if (clean.metadata && key == b"Metadata")
+        if ((clean.metadata || clean.archive) && key == b"Metadata")
+            || (clean.archive && key == b"OutputIntents")
             || (clean.scripts && key == b"AA")
             // An open action that is a destination only turns to a page; any other runs an action.
             || (clean.scripts && key == b"OpenAction" && !value.trim_ascii_start().starts_with(b"["))
@@ -1103,6 +1117,31 @@ pub(crate) fn rebuild(
                 "/AcroForm << /Fields [{}] /NeedAppearances true /DA (/Helv 0 Tf 0 g) /DR {} >>\n",
                 fields.join(" "),
                 super::new_field::RESOURCES
+            )
+            .as_bytes(),
+        );
+    }
+    if clean.archive {
+        let meta = first.pdf.metadata();
+        let text = |v: &Option<Vec<u8>>| v.as_deref().map(crate::document::decode_text_string);
+        let xmp = super::pdfa::xmp(text(&meta.title).as_deref(), text(&meta.author).as_deref());
+        let meta_num = w.alloc();
+        let mut stream = format!(
+            "<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n",
+            xmp.len()
+        )
+        .into_bytes();
+        stream.extend(xmp);
+        stream.extend_from_slice(b"\nendstream");
+        w.set(meta_num, stream);
+        let profile = super::pdfa::srgb_profile();
+        let profile_num = w.alloc();
+        w.set(profile_num, flate_stream("/N 3", &profile));
+        body.extend_from_slice(
+            format!(
+                "/Metadata {meta_num} 0 R\n/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 \
+                 /OutputConditionIdentifier (sRGB IEC61966-2.1) /Info (sRGB IEC61966-2.1) \
+                 /DestOutputProfile {profile_num} 0 R >>]\n"
             )
             .as_bytes(),
         );
@@ -1491,6 +1530,12 @@ fn write_file(
             "/Encrypt {num} 0 R /ID {} ",
             String::from_utf8_lossy(&e.id)
         );
+    } else {
+        // An identifier made from the content, as PDF/A and many tools want one.
+        use md5::{Digest, Md5};
+        let digest = Md5::digest(&out);
+        let hex: String = digest.iter().map(|b| format!("{b:02X}")).collect();
+        let _ = write!(trailer, "/ID [<{hex}> <{hex}>] ");
     }
     if compact {
         // The cross-reference stream is the last object, and lists itself.
