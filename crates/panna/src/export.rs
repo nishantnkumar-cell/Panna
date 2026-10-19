@@ -64,6 +64,7 @@ pub fn extension(format: ExportFormat) -> &'static str {
         ExportFormat::Jpeg => "jpg",
         ExportFormat::Word => "docx",
         ExportFormat::PowerPoint => "pptx",
+        ExportFormat::Excel => "xlsx",
     }
 }
 
@@ -83,6 +84,12 @@ pub fn card<'a>(state: &Exporting, count: usize) -> Element<'a, Message> {
         .size(13),
         Ok((pages, _)) if state.format == ExportFormat::PowerPoint => text(format!(
             "{} into one PowerPoint presentation, a picture of each page as a slide",
+            plural(pages.len())
+        ))
+        .size(13),
+        Ok((pages, _)) if state.format == ExportFormat::Excel => text(format!(
+            "{} into one Excel workbook: a sheet for each page, a row for each line, and columns \
+             where the words line up",
             plural(pages.len())
         ))
         .size(13),
@@ -120,6 +127,12 @@ pub fn card<'a>(state: &Exporting, count: usize) -> Element<'a, Message> {
             radio(
                 "PowerPoint presentation (.pptx)",
                 ExportFormat::PowerPoint,
+                format,
+                move |v| ev(Event::Format(v))
+            ),
+            radio(
+                "Excel workbook (.xlsx)",
+                ExportFormat::Excel,
                 format,
                 move |v| ev(Event::Format(v))
             ),

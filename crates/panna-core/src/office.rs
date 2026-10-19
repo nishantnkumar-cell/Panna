@@ -1,7 +1,8 @@
 //! Saving pages as Office files: a Word document (.docx) of the text, in paragraphs, with
 //! headings where the type is larger and a page break between pages (layout, pictures and
-//! tables aren't kept); or a PowerPoint presentation (.pptx) with a picture of each page as
-//! a slide.
+//! tables aren't kept); a PowerPoint presentation (.pptx) with a picture of each page as a
+//! slide; or an Excel workbook (.xlsx) with a sheet for each page, a row for each line of
+//! text, and columns where the words line up.
 
 use std::io::Write;
 
@@ -441,12 +442,199 @@ pub(crate) fn pptx(slides: &[(Vec<u8>, f64, f64)]) -> Result<Vec<u8>, SaveError>
     zip(&refs)
 }
 
+/// Rows of cells from lines: a column starts at each left edge that cells share, give or
+/// take, so text that lines up lands in the same column.
+fn table(lines: &[Line]) -> Vec<Vec<(usize, String)>> {
+    let size = {
+        let mut sizes: Vec<f32> = lines.iter().map(|l| l.size).filter(|s| *s > 0.0).collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(10.0)
+    };
+    let mut edges: Vec<f32> = lines.iter().flat_map(|l| l.cells.iter().map(|c| c.0)).collect();
+    edges.sort_by(f32::total_cmp);
+    let mut columns: Vec<f32> = Vec::new();
+    for x in edges {
+        if columns.last().is_none_or(|c| x - c > size) {
+            columns.push(x);
+        }
+    }
+    lines
+        .iter()
+        .map(|line| {
+            let mut row: Vec<(usize, String)> = Vec::new();
+            for (x, text) in &line.cells {
+                let col = columns.iter().rposition(|c| *c <= x + 0.01).unwrap_or(0);
+                // Two cells in one column share it.
+                match row.last_mut() {
+                    Some((c, cell)) if *c >= col => {
+                        cell.push(' ');
+                        cell.push_str(text);
+                    }
+                    _ => row.push((col, text.clone())),
+                }
+            }
+            row
+        })
+        .collect()
+}
+
+/// A spreadsheet column's letters: 0 is A, 26 is AA.
+fn column_name(mut col: usize) -> String {
+    let mut out = Vec::new();
+    loop {
+        out.push(b'A' + (col % 26) as u8);
+        if col < 26 {
+            break;
+        }
+        col = col / 26 - 1;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// The number a cell shows, if it's only a number: digits with an optional sign, decimal
+/// point and thousands separators.
+fn number(text: &str) -> Option<f64> {
+    let t = text.trim();
+    let plain: String = t.chars().filter(|c| *c != ',').collect();
+    let ok = !plain.is_empty()
+        && plain.chars().any(|c| c.is_ascii_digit())
+        && plain
+            .char_indices()
+            .all(|(i, c)| c.is_ascii_digit() || c == '.' || (i == 0 && matches!(c, '-' | '+')))
+        // Thousands separators only between groups of three digits.
+        && t.split(',').skip(1).all(|g| g.len() >= 3 && g.chars().take(3).all(|c| c.is_ascii_digit()));
+    ok.then(|| plain.parse::<f64>().ok())
+        .flatten()
+        .filter(|v| v.is_finite())
+}
+
+fn sheet_xml(rows: &[Vec<(usize, String)>]) -> String {
+    let mut data = String::new();
+    for (r, row) in rows.iter().enumerate() {
+        if row.is_empty() {
+            continue;
+        }
+        let r = r + 1;
+        data.push_str(&format!("<row r=\"{r}\">"));
+        for (col, text) in row {
+            let at = format!("{}{r}", column_name(*col));
+            match number(text) {
+                Some(v) => data.push_str(&format!("<c r=\"{at}\"><v>{v}</v></c>")),
+                None => data.push_str(&format!(
+                    "<c r=\"{at}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{}</t></is></c>",
+                    xml(text)
+                )),
+            }
+        }
+        data.push_str("</row>");
+    }
+    format!(
+        "{XML_HEAD}<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\
+         <sheetData>{data}</sheetData></worksheet>"
+    )
+}
+
+/// `pages` of `doc` as a .xlsx file, a sheet for each page.
+pub(crate) fn xlsx(doc: &Document, pages: &[usize]) -> Result<Vec<u8>, SaveError> {
+    let ns = "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" \
+              xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
+    let mut types = format!(
+        "{XML_HEAD}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+         <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+         <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+         <Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>\
+         <Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>"
+    );
+    let mut sheets = String::new();
+    let mut rels = vec![("rId1".to_owned(), "styles", "styles.xml".to_owned())];
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for (i, &index) in pages.iter().enumerate() {
+        let text = doc.page_text(index).map_err(|_| SaveError::NoSuchPage(index))?;
+        let n = i + 1;
+        files.push((
+            format!("xl/worksheets/sheet{n}.xml"),
+            sheet_xml(&table(&text.lines())).into_bytes(),
+        ));
+        types.push_str(&format!(
+            "<Override PartName=\"/xl/worksheets/sheet{n}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+        ));
+        sheets.push_str(&format!(
+            "<sheet name=\"Page {}\" sheetId=\"{n}\" r:id=\"rId{}\"/>",
+            index + 1,
+            n + 1
+        ));
+        rels.push((
+            format!("rId{}", n + 1),
+            "worksheet",
+            format!("worksheets/sheet{n}.xml"),
+        ));
+    }
+    types.push_str("</Types>");
+    let workbook = format!("{XML_HEAD}<workbook {ns}><sheets>{sheets}</sheets></workbook>");
+    let styles = format!(
+        "{XML_HEAD}<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\
+         <fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>\
+         <fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill \
+         patternType=\"gray125\"/></fill></fills><borders count=\"1\"><border><left/><right/><top/>\
+         <bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" \
+         fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"1\"><xf \
+         numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs><cellStyles \
+         count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles></styleSheet>"
+    );
+    let rel_refs: Vec<(&str, &str, String)> =
+        rels.iter().map(|(a, b, c)| (a.as_str(), *b, c.clone())).collect();
+    let mut all: Vec<(String, Vec<u8>)> = vec![
+        ("[Content_Types].xml".into(), types.into_bytes()),
+        (
+            "_rels/.rels".into(),
+            relationships(&[("rId1", "officeDocument", "xl/workbook.xml".into())]).into_bytes(),
+        ),
+        ("xl/workbook.xml".into(), workbook.into_bytes()),
+        (
+            "xl/_rels/workbook.xml.rels".into(),
+            relationships(&rel_refs).into_bytes(),
+        ),
+        ("xl/styles.xml".into(), styles.into_bytes()),
+    ];
+    all.extend(files);
+    let refs: Vec<(&str, &[u8])> = all.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    zip(&refs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn words_that_line_up_share_a_column() {
+        let row = |cells: &[(f32, &str)]| Line {
+            text: String::new(),
+            x0: 0.0,
+            y0: 0.0,
+            y1: 10.0,
+            size: 10.0,
+            cells: cells.iter().map(|(x, t)| (*x, (*t).to_owned())).collect(),
+        };
+        let lines = [
+            row(&[(72.0, "Item"), (200.0, "Price")]),
+            row(&[(72.0, "Tea"), (201.0, "1,250.50")]),
+            row(&[(72.0, "A long title")]),
+            row(&[(200.5, "3")]),
+        ];
+        let t = table(&lines);
+        assert_eq!(t[1], [(0, "Tea".to_owned()), (1, "1,250.50".to_owned())]);
+        assert_eq!(t[3], [(1, "3".to_owned())]);
+        assert_eq!(number("1,250.50"), Some(1250.5));
+        assert_eq!(number("12,34"), None);
+        assert_eq!(number("2026-10-19"), None);
+        assert_eq!(column_name(0), "A");
+        assert_eq!(column_name(27), "AB");
+    }
+
     fn line(text: &str, y0: f32, size: f32) -> Line {
         Line {
+            cells: Vec::new(),
             text: text.into(),
             x0: 72.0,
             y0,

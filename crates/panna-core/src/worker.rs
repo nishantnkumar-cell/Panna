@@ -520,6 +520,13 @@ fn export_pages<'a>(
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
             write_atomically(path, &crate::office::docx(doc, &pages)?)
         }
+        ExportFormat::Excel => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(());
+            };
+            let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
+            write_atomically(path, &crate::office::xlsx(doc, &pages)?)
+        }
         ExportFormat::PowerPoint => {
             let Some((_, path)) = export.pages.first() else {
                 return Ok(());

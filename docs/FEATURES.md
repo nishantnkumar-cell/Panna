@@ -98,7 +98,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Images (PNG, JPEG, TIFF) → PDF | Later | Done for PNG, JPEG (which go in unchanged) and TIFF (its first page), a picture a page fitted to A4 |
 | PDF → images | Later | Done: PNG or JPEG per page at a chosen resolution |
 | PDF → plain text | Later | Done: chosen pages into one text file |
-| PDF → Word / Excel / PowerPoint | Later | Word done: All tools › Export… › Word document (.docx) writes the text in paragraphs, with headings where the type is larger and each page starting a new page; pictures, tables and layout aren't kept. PowerPoint done: PowerPoint presentation (.pptx) puts a picture of each page on its own slide, at the chosen resolution. Excel not yet |
+| PDF → Word / Excel / PowerPoint | Later | Word done: All tools › Export… › Word document (.docx) writes the text in paragraphs, with headings where the type is larger and each page starting a new page; pictures, tables and layout aren't kept. PowerPoint done: PowerPoint presentation (.pptx) puts a picture of each page on its own slide, at the chosen resolution. Excel done: Excel workbook (.xlsx) gives each page a sheet, each line of text a row, and starts a column wherever words line up, so simple tables land in cells; numbers become numbers |
 | Word / Office → PDF | Skip | Needs Office or LibreOffice installed; could shell out later |
 | Web page → PDF | Skip | Needs network |
 | Scan to PDF (from scanner) | Later | OS scanner APIs |

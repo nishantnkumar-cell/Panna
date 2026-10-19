@@ -17,6 +17,8 @@ pub enum ExportFormat {
     Word,
     /// One PowerPoint presentation (.pptx): a picture of each page as a slide.
     PowerPoint,
+    /// One Excel workbook (.xlsx): a sheet for each page, its lines as rows.
+    Excel,
 }
 
 impl ExportFormat {

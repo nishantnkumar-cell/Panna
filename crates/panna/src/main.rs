@@ -3322,6 +3322,9 @@ impl App {
                             "PowerPoint presentations",
                             "pptx",
                         ),
+                        panna_core::ExportFormat::Excel => {
+                            ("Export as an Excel workbook", "Excel workbooks", "xlsx")
+                        }
                         _ => ("Export text as", "Text files", "txt"),
                     };
                     Task::perform(

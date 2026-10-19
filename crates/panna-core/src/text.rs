@@ -77,6 +77,8 @@ pub(crate) struct Line {
     pub y0: f32,
     pub y1: f32,
     pub size: f32,
+    /// The line cut where words are far apart, as in a table: each part's left edge and text.
+    pub cells: Vec<(f32, String)>,
 }
 
 /// Options for [`PageText::find`].
@@ -253,14 +255,35 @@ impl PageText {
             let fold = |f: fn(&TextBox) -> f32, pick: fn(f32, f32) -> f32| {
                 drawn.iter().map(|b| f(b)).reduce(pick).unwrap_or(0.0)
             };
+            let size =
+                heights.get(heights.len() / 2).copied().unwrap_or(0.0) * 1000.0 / (ASCENT - DESCENT) as f32;
+            // Cells: a gap of more than two spaces' width starts a new one.
+            let mut cells: Vec<(f32, String)> = Vec::new();
+            let mut last_end: Option<f32> = None;
+            for (c, b) in chars.iter().zip(boxes) {
+                if c.is_whitespace() {
+                    continue;
+                }
+                let far = last_end.is_none_or(|end| b.x0 - end > size.max(1.0) * 0.8);
+                match cells.last_mut() {
+                    Some((_, cell)) if !far => {
+                        if last_end.is_some_and(|end| b.x0 - end > size * 0.15) {
+                            cell.push(' ');
+                        }
+                        cell.push(*c);
+                    }
+                    _ => cells.push((b.x0, c.to_string())),
+                }
+                last_end = Some(b.x1);
+            }
             out.push(Line {
+                cells,
                 text: text.trim().to_owned(),
                 x0: fold(|b| b.x0, f32::min),
                 y0: fold(|b| b.y0, f32::min),
                 y1: fold(|b| b.y1, f32::max),
                 // Boxes run from the descent to the ascent: 1000 units of a 1000-unit em.
-                size: heights.get(heights.len() / 2).copied().unwrap_or(0.0) * 1000.0
-                    / (ASCENT - DESCENT) as f32,
+                size,
             });
         }
         out
