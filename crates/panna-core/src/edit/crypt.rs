@@ -32,7 +32,7 @@ enum Method {
 /// The file key and how to use it.
 #[derive(Debug, Clone)]
 pub(crate) struct Crypt {
-    key: Vec<u8>,
+    key: zeroize::Zeroizing<Vec<u8>>,
     strings: Method,
     streams: Method,
     /// The permission flags (/P).
@@ -132,7 +132,7 @@ impl Crypt {
                     (Method::Rc4, Method::Rc4)
                 };
                 Ok(Self {
-                    key,
+                    key: key.into(),
                     strings,
                     streams,
                     p,
@@ -145,7 +145,7 @@ impl Crypt {
                 let (key, owner) =
                     modern_key(r, password.as_bytes(), &o, &u, &oe, &ue).ok_or(SaveError::Encrypted)?;
                 Ok(Self {
-                    key,
+                    key: key.into(),
                     strings: filter(b"StrF")?,
                     streams: filter(b"StmF")?,
                     p,
@@ -281,10 +281,10 @@ impl Crypt {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Protection {
     /// Needed to open the file; empty opens it without one.
-    pub open_password: String,
+    pub open_password: zeroize::Zeroizing<String>,
     /// Lifts the restrictions below. Empty makes one up that nobody knows, so they can't be
     /// lifted.
-    pub owner_password: String,
+    pub owner_password: zeroize::Zeroizing<String>,
     pub allow_printing: bool,
     /// Changing pages, comments and form fields.
     pub allow_changes: bool,
@@ -377,7 +377,7 @@ impl Protection {
         );
         let id = hex(&random(16)?);
         let crypt = Crypt {
-            key,
+            key: key.into(),
             strings: Method::Aes256,
             streams: Method::Aes256,
             p,
@@ -749,7 +749,7 @@ mod tests {
         // The AES-256 fixture's key is bytes 200 to 231.
         let aes256 = encrypt_dict(include_bytes!("../../tests/fixtures/encrypted-aes256.pdf"));
         let key: Vec<u8> = (200..232).collect();
-        assert_eq!(Crypt::new(aes256, &id, "secret").unwrap().key, key);
+        assert_eq!(*Crypt::new(aes256, &id, "secret").unwrap().key, key);
     }
 
     #[test]

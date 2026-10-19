@@ -499,13 +499,13 @@ fn password_protection_is_added_changed_and_removed() {
     use panna_core::{Protection, SaveError};
     let doc = open(three_pages(), None);
     let protection = Protection {
-        open_password: "open sesame".into(),
-        owner_password: "boss".into(),
+        open_password: "open sesame".to_owned().into(),
+        owner_password: "boss".to_owned().into(),
         allow_printing: true,
         ..Protection::default()
     };
     let (bytes, password) = doc.protected(Some(&protection)).unwrap();
-    assert_eq!(password, "boss");
+    assert_eq!(*password, "boss");
     assert!(Document::from_bytes(bytes.clone(), None, Limits::default()).is_err());
     assert!(Document::from_bytes(bytes.clone(), Some("wrong"), Limits::default()).is_err());
 
@@ -524,11 +524,11 @@ fn password_protection_is_added_changed_and_removed() {
 
     // No printing, and no owner password: nobody can print it or lift that.
     let locked = Protection {
-        open_password: "x".into(),
+        open_password: "x".to_owned().into(),
         ..Protection::default()
     };
     let (bytes, password) = doc.protected(Some(&locked)).unwrap();
-    assert_eq!(password, "x");
+    assert_eq!(*password, "x");
     let user = open(bytes, Some("x"));
     assert_eq!(user.print_copy().unwrap_err(), SaveError::PrintingNotAllowed);
 

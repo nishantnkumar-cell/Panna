@@ -575,7 +575,7 @@ enum Status {
     Error(String),
     Password {
         path: PathBuf,
-        input: String,
+        input: zeroize::Zeroizing<String>,
         /// A password was tried and rejected.
         wrong: bool,
     },
@@ -763,6 +763,16 @@ fn reset_view<'a>() -> Element<'a, Message> {
     .padding(18)
     .style(container::rounded_box)
     .into()
+}
+
+/// A typed password without control characters and at most `max` long. Each keystroke
+/// brings the whole password again, so that copy is wiped once read, and the result is made
+/// at its full size up front so growing it leaves no copies behind.
+fn clean_secret(mut typed: String, max: usize) -> zeroize::Zeroizing<String> {
+    let mut kept = zeroize::Zeroizing::new(String::with_capacity(typed.len()));
+    kept.extend(typed.chars().filter(|c| !c.is_control()).take(max));
+    zeroize::Zeroize::zeroize(&mut typed);
+    kept
 }
 
 fn password_id() -> iced::widget::Id {
@@ -979,7 +989,7 @@ impl App {
                     Err(OpenError::PasswordRequired) => {
                         self.status = Status::Password {
                             path: doc.path.clone(),
-                            input: String::new(),
+                            input: Default::default(),
                             wrong: doc.used_password,
                         };
                         self.doc = None;
@@ -1166,7 +1176,8 @@ impl App {
             },
             Message::PasswordInput(value) => {
                 if let Status::Password { input, .. } = &mut self.status {
-                    *input = value;
+                    // Replacing it wipes the previous copy.
+                    *input = value.into();
                 }
                 Task::none()
             }
@@ -1174,7 +1185,8 @@ impl App {
                 let Status::Password { path, input, .. } = &mut self.status else {
                     return Task::none();
                 };
-                let (path, password) = (path.clone(), std::mem::take(input));
+                // The worker wipes the password once the file is open.
+                let (path, password) = (path.clone(), std::mem::take(&mut **input));
                 self.open(path, Some(password))
             }
             Message::ToggleProperties => {
@@ -3463,7 +3475,12 @@ impl App {
         let Some(state) = &mut self.signing else {
             return Task::none();
         };
-        let clean = |v: String| v.chars().filter(|c| !c.is_control()).take(200).collect();
+        let clean = |v: String| {
+            v.chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect::<String>()
+        };
         match event {
             signing::Event::Open => Task::none(),
             signing::Event::Choose => Task::perform(
@@ -3515,7 +3532,7 @@ impl App {
                 Task::none()
             }
             signing::Event::Password(v) => {
-                state.password = clean(v);
+                state.password = clean_secret(v, 200);
                 Task::none()
             }
             signing::Event::Reason(v) => {
@@ -3574,7 +3591,7 @@ impl App {
         let Some(state) = &mut self.protecting else {
             return Task::none();
         };
-        let clean = |v: String| v.chars().filter(|c| !c.is_control()).take(127).collect();
+        let clean = |v: String| clean_secret(v, 127);
         let protection = match event {
             protect::Event::Open => return Task::none(),
             protect::Event::OpenPassword(v) => {

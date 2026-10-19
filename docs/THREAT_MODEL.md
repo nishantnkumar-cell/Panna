@@ -150,7 +150,15 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    has 30 seconds. Still in the app's process: text extraction, thumbnails' text, export,
    printing, editing and the checks. Moving those needs the same protocol for more requests.
 2. **Code-signed and notarised releases**, with checksums published beside each download.
-3. Zero passwords and decrypted keys in memory after use (`zeroize`).
+3. **Wiping passwords and keys from memory: done where Panna holds them.** Open and
+   permissions passwords, certificate-file passwords, the file key of an encrypted PDF and
+   the passwords typed into the app are kept in `zeroize::Zeroizing`, so they are
+   overwritten when replaced or dropped; each keystroke's copy is wiped once read, and the
+   renderer wipes the password from its load request once the file is open. Signing keys
+   from certificate files (RSA, P-256, P-384) wipe themselves in their own crates. Not
+   covered: the copies iced keeps inside a text box while it is on screen, the decoded key
+   that `p12-keystore` holds briefly while reading a certificate file, and buffers the
+   operating system keeps for pipes.
 4. Have redaction also search bookmarks and comments for the redacted text, and offer to
    remove matches.
 5. Offer to upgrade old RC4 or AES-128 protection to AES-256 when saving changes.

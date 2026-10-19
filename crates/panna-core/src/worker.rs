@@ -603,7 +603,11 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
 }
 
 fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenReply, queue: Receiver<Job>) {
-    let document = match Document::open(&path, password.as_deref(), limits) {
+    // The document keeps its own copy; this one is wiped as soon as it has been used.
+    let password = password.map(zeroize::Zeroizing::new);
+    let document = Document::open(&path, password.as_deref().map(String::as_str), limits);
+    drop(password);
+    let document = match document {
         Ok(document) => document,
         Err(e) => return on_open(Err(e)),
     };

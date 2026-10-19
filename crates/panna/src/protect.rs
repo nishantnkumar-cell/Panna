@@ -10,12 +10,12 @@ use crate::Message;
 /// The card, as filled in so far.
 #[derive(Debug, Clone, Default)]
 pub struct Protecting {
-    pub open: String,
-    pub open_again: String,
+    pub open: zeroize::Zeroizing<String>,
+    pub open_again: zeroize::Zeroizing<String>,
     /// Restrict printing, changes or copying.
     pub restrict: bool,
-    pub owner: String,
-    pub owner_again: String,
+    pub owner: zeroize::Zeroizing<String>,
+    pub owner_again: zeroize::Zeroizing<String>,
     pub print: bool,
     pub change: bool,
     pub copy: bool,
@@ -75,7 +75,7 @@ pub fn settings(state: &Protecting) -> Result<Protection, String> {
         owner_password: if restrict {
             state.owner.clone()
         } else {
-            String::new()
+            Default::default()
         },
         allow_printing: !restrict || state.print,
         allow_changes: !restrict || state.change,
@@ -232,19 +232,19 @@ mod tests {
     fn passwords_are_checked_before_protecting() {
         let mut state = Protecting::new(false);
         assert!(settings(&state).is_err());
-        state.open = "a".into();
+        state.open = "a".to_owned().into();
         assert!(settings(&state).is_err());
-        state.open_again = "a".into();
+        state.open_again = "a".to_owned().into();
         let p = settings(&state).unwrap();
         assert!(p.allow_printing && p.allow_changes && p.allow_copying && p.owner_password.is_empty());
         state.restrict = true;
-        state.owner = "a".into();
-        state.owner_again = "a".into();
+        state.owner = "a".to_owned().into();
+        state.owner_again = "a".to_owned().into();
         assert!(settings(&state).is_err());
-        state.owner = "b".into();
-        state.owner_again = "b".into();
+        state.owner = "b".to_owned().into();
+        state.owner_again = "b".to_owned().into();
         let p = settings(&state).unwrap();
         assert!(p.allow_printing && !p.allow_changes && !p.allow_copying);
-        assert_eq!(p.owner_password, "b");
+        assert_eq!(*p.owner_password, "b");
     }
 }

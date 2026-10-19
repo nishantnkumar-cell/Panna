@@ -21,7 +21,7 @@ pub const MAX_FILE: u64 = 1024 * 1024;
 pub struct Signing {
     /// The certificate file's name and contents.
     pub file: Option<(String, Arc<Vec<u8>>)>,
-    pub password: String,
+    pub password: zeroize::Zeroizing<String>,
     /// The system store's certificates, once read, and the one chosen instead of a file.
     pub store: Vec<StoreId>,
     pub stored: Option<StoreId>,

@@ -217,7 +217,7 @@ pub struct Document {
     settings: InterpreterSettings,
     file_len: u64,
     /// The password the file was opened with, needed again to save into an encrypted file.
-    password: String,
+    password: zeroize::Zeroizing<String>,
 }
 
 impl Document {
@@ -281,7 +281,7 @@ impl Document {
             limits,
             settings: InterpreterSettings::default(),
             file_len,
-            password: password.to_owned(),
+            password: zeroize::Zeroizing::new(password.to_owned()),
         })
     }
 
@@ -400,7 +400,7 @@ impl Document {
     /// The file's bytes with `changes` (comments added and removed) as an incremental update.
     pub fn with_changes(&self, changes: &crate::Changes) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::apply(&self.pdf, &self.bytes, changes, &self.password)
+            crate::edit::apply(&self.pdf, &self.bytes, changes, self.password.as_str())
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
@@ -415,7 +415,8 @@ impl Document {
         others: &[&Document],
     ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            let mut docs: Vec<crate::edit::Input<'_>> = vec![(&self.pdf, &self.bytes, &self.password)];
+            let mut docs: Vec<crate::edit::Input<'_>> =
+                vec![(&self.pdf, &self.bytes, self.password.as_str())];
             docs.extend(
                 others
                     .iter()
@@ -431,7 +432,7 @@ impl Document {
     pub fn cropped(&self, pages: &[usize], margins: crate::Margins) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::crop(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 pages,
                 margins,
@@ -449,7 +450,7 @@ impl Document {
     ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::header_footer(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 pages,
                 marks,
@@ -511,7 +512,7 @@ impl Document {
         let count = found.iter().map(|(_, w)| w.len()).sum();
         let bytes = catch_unwind(AssertUnwindSafe(|| {
             crate::edit::with_hidden_text(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 &found,
             )
@@ -525,7 +526,7 @@ impl Document {
     pub fn compacted(&self, pictures: Option<u32>) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::compacted(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 pictures,
             )
@@ -561,7 +562,7 @@ impl Document {
             .collect();
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::add(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 page,
                 &additions,
@@ -642,7 +643,7 @@ impl Document {
             .collect();
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::form_fields(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 &add,
                 remove,
@@ -688,7 +689,7 @@ impl Document {
         self.signed_by(
             &crate::DigitalId::File {
                 pkcs12: std::sync::Arc::new(pkcs12.to_vec()),
-                password: password.to_owned(),
+                password: password.to_owned().into(),
             },
             options,
         )
@@ -835,7 +836,7 @@ impl Document {
     ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::change_pictures(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 page,
                 changes,
@@ -861,7 +862,11 @@ impl Document {
     /// boxes.
     pub fn redacted(&self, areas: &[(usize, Vec<crate::TextBox>)]) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::redact((&self.pdf, &self.bytes, &self.password), self.page_count(), areas)
+            crate::edit::redact(
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                self.page_count(),
+                areas,
+            )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
@@ -874,7 +879,7 @@ impl Document {
     ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::watermark(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 pages,
                 mark,
@@ -919,7 +924,7 @@ impl Document {
         };
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::flatten(
-                (&source.pdf, &source.bytes, &source.password),
+                (&source.pdf, &source.bytes, source.password.as_str()),
                 source.page_count(),
                 comments,
                 fields,
@@ -934,10 +939,10 @@ impl Document {
     pub fn protected(
         &self,
         protection: Option<&crate::Protection>,
-    ) -> Result<(Vec<u8>, String), crate::SaveError> {
+    ) -> Result<(Vec<u8>, zeroize::Zeroizing<String>), crate::SaveError> {
         let bytes = catch_unwind(AssertUnwindSafe(|| {
             crate::edit::protect(
-                (&self.pdf, &self.bytes, &self.password),
+                (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 protection,
             )
@@ -946,7 +951,7 @@ impl Document {
         let password = match protection {
             Some(p) if !p.owner_password.is_empty() => p.owner_password.clone(),
             Some(p) => p.open_password.clone(),
-            None => String::new(),
+            None => Default::default(),
         };
         Ok((bytes, password))
     }
@@ -954,7 +959,11 @@ impl Document {
     /// The document without the hidden information `clean` names, as a new file.
     pub fn cleaned(&self, clean: crate::Cleanup) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::clean_up((&self.pdf, &self.bytes, &self.password), self.page_count(), clean)
+            crate::edit::clean_up(
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                self.page_count(),
+                clean,
+            )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
@@ -989,7 +998,10 @@ impl Document {
     /// the file's permissions don't allow printing.
     pub fn print_copy(&self) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::print_copy((&self.pdf, &self.bytes, &self.password), self.page_count())
+            crate::edit::print_copy(
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                self.page_count(),
+            )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
@@ -1071,7 +1083,7 @@ impl Document {
     }
 
     pub fn reopen(&self, bytes: Vec<u8>) -> Result<Self, OpenError> {
-        Self::from_bytes(bytes, Some(&self.password), self.limits)
+        Self::from_bytes(bytes, Some(self.password.as_str()), self.limits)
     }
 
     /// The password the file was opened with ("" when none).

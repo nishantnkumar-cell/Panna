@@ -894,7 +894,7 @@ pub enum DigitalId {
     /// A certificate file (.p12 or .pfx) and its password.
     File {
         pkcs12: std::sync::Arc<Vec<u8>>,
-        password: String,
+        password: zeroize::Zeroizing<String>,
     },
     Held(HeldKey),
 }

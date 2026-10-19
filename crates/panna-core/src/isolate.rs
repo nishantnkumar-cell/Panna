@@ -254,7 +254,7 @@ pub fn serve() {
     let max_load = Limits::default().max_file_bytes + 4096;
     let mut next = read_frame(&mut input, max_load);
     loop {
-        let Ok((LOAD, body)) = next else { return };
+        let Ok((LOAD, mut body)) = next else { return };
         let doc = numbers::<1>(&body).and_then(|([pw_len], rest)| {
             let (password, rest) = rest.split_at_checked(usize::try_from(pw_len).ok()?)?;
             let password = std::str::from_utf8(password).ok()?;
@@ -263,6 +263,11 @@ pub fn serve() {
                 .ok()
                 .flatten()
         });
+        // The document keeps its own copy of the password, which it wipes when dropped.
+        let password_end = numbers::<1>(&body).map_or(0, |([pw_len], _)| 8 + pw_len as usize);
+        if let Some(password) = body.get_mut(8..password_end) {
+            zeroize::Zeroize::zeroize(password);
+        }
         let Some(doc) = doc else {
             let _ = write_frame(&mut output, FAILED, &[&[3]]);
             next = read_frame(&mut input, max_load);
