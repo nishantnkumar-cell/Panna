@@ -145,6 +145,11 @@ impl FormRuns {
     }
 }
 
+/// PDF's white-space characters, which include NUL (ISO 32000-2, 7.2.3).
+fn is_space(c: u8) -> bool {
+    b"\0\t\n\x0c\r ".contains(&c)
+}
+
 /// The names given to `Do` in content, in order.
 fn drawn_names(content: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
@@ -156,7 +161,7 @@ fn drawn_names(content: &[u8]) -> Vec<Vec<u8>> {
             let mut end = start;
             while content
                 .get(end)
-                .is_some_and(|c| !c.is_ascii_whitespace() && !b"/[]<>(){}%".contains(c))
+                .is_some_and(|c| !is_space(*c) && !b"/[]<>(){}%".contains(c))
             {
                 end += 1;
             }
@@ -168,10 +173,10 @@ fn drawn_names(content: &[u8]) -> Vec<Vec<u8>> {
             && content.get(i + 1) == Some(&b'o')
             && content
                 .get(i + 2)
-                .is_none_or(|c| c.is_ascii_whitespace() || b"/[]<>(){}%".contains(c))
+                .is_none_or(|c| is_space(*c) || b"/[]<>(){}%".contains(c))
             && i.checked_sub(1)
                 .and_then(|p| content.get(p))
-                .is_none_or(|c| c.is_ascii_whitespace())
+                .is_none_or(|c| is_space(*c))
         {
             if let Some(name) = last_name.take() {
                 out.push(name.to_vec());
