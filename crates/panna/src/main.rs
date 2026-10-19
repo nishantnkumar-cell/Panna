@@ -24,6 +24,7 @@ mod prepare;
 mod print;
 mod protect;
 mod redact;
+mod scan;
 mod selection;
 mod settings;
 mod shortcuts;
@@ -248,6 +249,10 @@ enum Message {
     Shrink(shrink::Event),
     /// Recognise the text in pages without any (OCR).
     Recognise,
+    /// The Scan pages card.
+    Scan(scan::Event),
+    /// Where to save the PDF of scanned pages.
+    ScansSaveTo(Option<PathBuf>),
     /// Where to save the smaller copy, and the resolution pictures may be scaled down to.
     CompactTo(Option<PathBuf>, Option<u32>),
     Compacted(Result<(u64, u64), SaveError>),
@@ -437,6 +442,10 @@ struct App {
     shrinking: Option<shrink::Shrinking>,
     /// Text is being recognised in the pages.
     recognising: bool,
+    /// The Scan pages card.
+    scanning: Option<scan::Scanning>,
+    /// Scanned pages waiting to be saved as a PDF.
+    scanned: Vec<Vec<u8>>,
     /// The All tools card is showing.
     all_tools: bool,
     /// Pictures chosen for a new PDF, while asking where to save it.
@@ -476,6 +485,20 @@ enum Pending {
 }
 
 /// Reads `files`, makes a PDF of them and writes it to `target`, on a thread of its own.
+/// Writes scanned pages (PNG files) to `target` as a PDF, a page each, off the interface's
+/// thread.
+async fn make_pdf_from_scans(pages: Vec<Vec<u8>>, target: PathBuf) -> Result<PathBuf, String> {
+    let (tx, rx) = futures_channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = panna_core::pictures_to_pdf(pages).and_then(|pdf| {
+            std::fs::write(&target, pdf).map_err(|e| format!("Couldn't write the PDF: {e}"))?;
+            Ok(target)
+        });
+        let _ = tx.send(result);
+    });
+    rx.await.unwrap_or_else(|_| Err("Making the PDF stopped.".into()))
+}
+
 async fn make_pdf_from_pictures(files: Vec<PathBuf>, target: PathBuf) -> Result<PathBuf, String> {
     let (tx, rx) = futures_channel::oneshot::channel();
     std::thread::spawn(move || {
@@ -774,6 +797,8 @@ impl App {
             cleaning: None,
             shrinking: None,
             recognising: false,
+            scanning: None,
+            scanned: Vec::new(),
             all_tools: false,
             pictures: Vec::new(),
             extract_pages: Vec::new(),
@@ -869,6 +894,7 @@ impl App {
                 | Message::Signing(signing::Event::Open)
                 | Message::Clean(protect::CleanEvent::Open)
                 | Message::Shrink(shrink::Event::Open)
+                | Message::Scan(scan::Event::Open)
         ) {
             self.all_tools = false;
         }
@@ -1191,6 +1217,8 @@ impl App {
                     self.cleaning = None;
                 } else if self.shrinking.is_some() {
                     self.shrinking = None;
+                } else if self.scanning.as_ref().is_some_and(|s| !s.busy) {
+                    self.scanning = None;
                 } else if self.all_tools {
                     self.all_tools = false;
                 } else if self.confirm_reset {
@@ -1445,6 +1473,16 @@ impl App {
                     Err(e) => self.notice = Some(format!("Couldn't read the form data: {e}")),
                 }
                 Task::none()
+            }
+            Message::Scan(event) => self.scan(event),
+            Message::ScansSaveTo(None) => {
+                self.scanned.clear();
+                Task::none()
+            }
+            Message::ScansSaveTo(Some(target)) => {
+                let pages = std::mem::take(&mut self.scanned);
+                self.notice = Some("Making a PDF of the scanned pages…".into());
+                Task::perform(make_pdf_from_scans(pages, target), Message::PicturesMade)
             }
             Message::Recognise => {
                 self.all_tools = false;
@@ -3225,6 +3263,82 @@ impl App {
     }
 
     /// The Sign with a certificate card's events.
+    fn scan(&mut self, event: scan::Event) -> Task<Message> {
+        if let scan::Event::Open = event {
+            if let Some(why) = scan::unavailable() {
+                self.notice = Some(why.into());
+                return Task::none();
+            }
+            self.scanning = Some(scan::Scanning::default());
+            if cfg!(windows) {
+                return Task::none();
+            }
+            return Task::perform(scan::find(), |found| Message::Scan(scan::Event::Found(found)));
+        }
+        let Some(state) = &mut self.scanning else {
+            return Task::none();
+        };
+        match event {
+            scan::Event::Open => {}
+            scan::Event::Found(found) => {
+                if let Ok(list) = &found {
+                    state.device = list.first().cloned();
+                }
+                state.devices = Some(found);
+            }
+            scan::Event::Device(d) => state.device = Some(d),
+            scan::Event::Dpi(v) => state.dpi = v,
+            scan::Event::Colour(v) => state.colour = v,
+            scan::Event::Scan => {
+                if state.busy || state.pages.len() >= scan::MAX_PAGES {
+                    return Task::none();
+                }
+                state.busy = true;
+                state.error = None;
+                let device = state.device.as_ref().map(|d| d.id.clone());
+                return Task::perform(scan::scan(device, state.dpi.0, state.colour), |result| {
+                    Message::Scan(scan::Event::Scanned(result))
+                });
+            }
+            scan::Event::Scanned(result) => {
+                state.busy = false;
+                match result {
+                    Ok(Some(page)) => state.pages.push(page),
+                    Ok(None) => {}
+                    Err(e) => state.error = Some(format!("Couldn't scan: {e}")),
+                }
+            }
+            scan::Event::RemoveLast => {
+                state.pages.pop();
+            }
+            scan::Event::Cancel => {
+                if !state.busy {
+                    self.scanning = None;
+                }
+            }
+            scan::Event::Done => {
+                if state.busy || state.pages.is_empty() {
+                    return Task::none();
+                }
+                self.scanned = std::mem::take(&mut state.pages);
+                self.scanning = None;
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save the scanned pages as")
+                            .add_filter("PDF documents", &["pdf"])
+                            .set_file_name("Scan.pdf")
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::ScansSaveTo,
+                );
+            }
+        }
+        Task::none()
+    }
+
     fn signing(&mut self, event: signing::Event) -> Task<Message> {
         if let signing::Event::Open = event {
             let page = self.current_page();
@@ -4817,6 +4931,9 @@ impl App {
                 protect::card(state),
                 Message::Protect(protect::Event::Cancel),
             ));
+        }
+        if let Some(state) = &self.scanning {
+            layers.push(modal(scan::card(state), Message::Scan(scan::Event::Cancel)));
         }
         if let Some(state) = self.shrinking {
             layers.push(modal(shrink::card(state), Message::Shrink(shrink::Event::Cancel)));
