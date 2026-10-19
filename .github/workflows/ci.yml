@@ -57,13 +57,34 @@ jobs:
         with:
           workspaces: fuzz
       - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Seed the corpus
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          REAL_WORLD: ${{ github.event_name != 'pull_request' && github.event_name != 'push' }}
+        run: |
+          mkdir -p "corpus/$TARGET"
+          if [ "$TARGET" = import_data ]; then
+            cp seeds/data/* "corpus/$TARGET/"
+            exit 0
+          fi
+          cp seeds/pdf/* ../crates/panna-core/tests/fixtures/*.pdf "corpus/$TARGET/"
+          find ../crates/panna-core/tests/fuzz-regressions -type f ! -name '*.md' -exec cp {} "corpus/$TARGET/" \;
+          # Nightly, also the pdf.js test suite's PDFs under 1 MB: only read as input, never run.
+          if [ "$REAL_WORLD" = true ]; then
+            git clone --quiet --depth 1 --filter=blob:none --no-checkout https://github.com/mozilla/pdf.js /tmp/pdfjs || exit 0
+            git -C /tmp/pdfjs ls-tree -r -l HEAD test/pdfs | awk '$4 < 1048576 && $5 ~ /\.pdf$/ { print $5 }' > /tmp/small.txt
+            git -C /tmp/pdfjs checkout HEAD --pathspec-from-file=/tmp/small.txt || exit 0
+            xargs -a /tmp/small.txt -I{} cp "/tmp/pdfjs/{}" "corpus/$TARGET/"
+          fi
+          ls "corpus/$TARGET" | wc -l
       - name: Run fuzzer
         working-directory: fuzz
         env:
           RUSTFLAGS: ""
         run: |
           SECONDS_TO_RUN=${{ github.event_name == 'schedule' && 3600 || 300 }}
-          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=$SECONDS_TO_RUN -rss_limit_mb=2048
+          cargo +nightly fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- -max_total_time=$SECONDS_TO_RUN -rss_limit_mb=2048
       - name: Upload crash inputs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

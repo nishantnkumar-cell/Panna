@@ -1116,6 +1116,7 @@ dependencies = [
  "sha2",
  "spki",
  "x509-cert",
+ "zeroize",
  "zune-core",
  "zune-jpeg",
 ]

@@ -23,7 +23,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = doc.attachment(0);
     let whole = TextBox { x0: 0.0, y0: 0.0, x1: 10_000.0, y1: 10_000.0 };
     let saves = [
-        doc.redacted(&[(0, vec![whole])]),
+        doc.redacted(&[(0, vec![whole])], &["seed".to_owned()]),
         doc.flattened(true, true),
         doc.compacted(Some(72)),
         doc.tagged(),

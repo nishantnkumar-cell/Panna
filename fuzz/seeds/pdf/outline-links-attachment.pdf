@@ -1,0 +1,64 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R /Names << /EmbeddedFiles << /Names [(a.txt) 9 0 R] >> >> /PageLabels << /Nums [0 << /S /r >>] >> /OpenAction [3 0 R /Fit] >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [10 0 R 11 0 R] >>
+endobj
+4 0 obj
+<<  /Length 36 >>
+stream
+BT /F1 12 Tf 20 100 Td (Links) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /Outlines /First 7 0 R /Last 8 0 R /Count 2 >>
+endobj
+7 0 obj
+<< /Title <FEFF00480069> /Parent 6 0 R /Next 8 0 R /Dest [3 0 R /XYZ 0 200 0] >>
+endobj
+8 0 obj
+<< /Title (Second) /Parent 6 0 R /Prev 7 0 R /A << /S /GoTo /D [3 0 R /Fit] >> >>
+endobj
+9 0 obj
+<< /Type /Filespec /F (a.txt) /UF (a.txt) /EF << /F 12 0 R >> >>
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Link /Rect [20 95 80 115] /A << /S /URI /URI (https://example.com/) >> >>
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Link /Rect [100 95 160 115] /Dest [3 0 R /Fit] >>
+endobj
+12 0 obj
+<< /Type /EmbeddedFile /Length 13 >>
+stream
+attached text
+endstream
+endobj
+xref
+0 13
+0000000000 65535 f 
+0000000015 00000 n 
+0000000202 00000 n 
+0000000259 00000 n 
+0000000409 00000 n 
+0000000496 00000 n 
+0000000593 00000 n 
+0000000664 00000 n 
+0000000760 00000 n 
+0000000857 00000 n 
+0000000937 00000 n 
+0000001053 00000 n 
+0000001145 00000 n 
+trailer
+<< /Size 13 /Root 1 0 R  >>
+startxref
+1229
+%%EOF

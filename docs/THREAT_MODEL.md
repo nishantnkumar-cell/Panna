@@ -172,8 +172,11 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    both passwords and the permissions (any that AES-256 files here can't express come out
    stricter). The document's properties name the method. Opened with only the user
    password, the owner password is unknown, so the offer isn't made.
-6. Larger fuzzing corpora: seed the fuzzers with real-world PDFs (pdf.js and PDFBox test
-   suites) and keep crash inputs as regression tests.
+6. **Fuzzing corpora: seeded.** Each fuzzer starts from committed seeds (PDFs covering text,
+   pictures, forms, comments, bookmarks, attachments, object streams, incremental updates
+   and hostile structures, plus FDF, XFDF and CSV files), and the nightly run adds the
+   pdf.js test suite's PDFs. Crash inputs go in `tests/fuzz-regressions/`, which `cargo
+   test` runs along with the seeds. Still to add: the PDFBox suite.
 
 ## 8. Reporting a vulnerability
 
