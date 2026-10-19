@@ -62,9 +62,12 @@ fn exercise(data: &[u8]) -> Option<Document> {
 #[test]
 fn seeds_and_past_crashes_neither_panic_nor_hang() {
     let mut seen = 0;
-    for path in [root().join("fuzz/seeds/pdf"), root().join("crates/panna-core/tests/fuzz-regressions")]
-        .iter()
-        .flat_map(|d| files(d))
+    for path in [
+        root().join("fuzz/seeds/pdf"),
+        root().join("crates/panna-core/tests/fuzz-regressions"),
+    ]
+    .iter()
+    .flat_map(|d| files(d))
     {
         let data = std::fs::read(&path).unwrap();
         let _ = exercise(&data);
