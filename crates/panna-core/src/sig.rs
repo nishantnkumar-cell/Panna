@@ -369,11 +369,11 @@ fn common_name(name: &X509Name) -> String {
     for rdn in name.0.iter() {
         for atv in rdn.0.iter() {
             if atv.oid.to_string() == "2.5.4.3" {
-                return String::from_utf8_lossy(atv.value.value()).into_owned();
+                return crate::document::without_overrides(&String::from_utf8_lossy(atv.value.value()));
             }
         }
     }
-    name.to_string()
+    crate::document::without_overrides(&name.to_string())
 }
 
 fn unix_date(t: x509_cert::time::Time) -> String {

@@ -21,7 +21,9 @@ pub fn open(uri: &str) -> io::Result<()> {
         ));
     }
     let mut command = if cfg!(target_os = "windows") {
-        let mut c = Command::new("rundll32");
+        // The full path, so a rundll32.exe placed elsewhere (next to Panna, say) isn't run.
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let mut c = Command::new(std::path::Path::new(&root).join("System32\\rundll32.exe"));
         c.arg("url.dll,FileProtocolHandler");
         c
     } else if cfg!(target_os = "macos") {

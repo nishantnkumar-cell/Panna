@@ -1125,21 +1125,31 @@ fn decryption_error(e: hayro::hayro_syntax::DecryptionError) -> OpenError {
 /// Decodes a PDF text string:UTF-16BE or UTF-8 with a byte-order mark, otherwise
 /// PDFDocEncoding.
 pub(crate) fn decode_text_string(bytes: &[u8]) -> String {
-    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+    let text: String = if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         let units = rest
             .as_chunks::<2>()
             .0
             .iter()
             .map(|pair| u16::from_be_bytes(*pair));
-        return char::decode_utf16(units)
+        char::decode_utf16(units)
             .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
-            .collect();
-    }
-    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        return String::from_utf8_lossy(rest).into_owned();
-    }
-    // ponytail: Latin-1 approximation of PDFDocEncoding; only 0x18–0x1F and 0x80–0x9F differ.
-    bytes.iter().map(|&b| char::from(b)).collect()
+            .collect()
+    } else if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        String::from_utf8_lossy(rest).into_owned()
+    } else {
+        // ponytail: Latin-1 approximation of PDFDocEncoding; only 0x18–0x1F and 0x80–0x9F differ.
+        bytes.iter().map(|&b| char::from(b)).collect()
+    };
+    without_overrides(&text)
+}
+
+/// `text` without Unicode's direction overrides, embeddings and isolates, which can make text
+/// from a file show as something else (a signer's name, a file name, a bookmark). The marks
+/// right-to-left languages use (U+200E, U+200F) stay.
+pub(crate) fn without_overrides(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+        .collect()
 }
 
 fn format_date(d: &hayro::hayro_syntax::object::DateTime) -> String {
@@ -1211,6 +1221,15 @@ mod tests {
         assert_eq!(decode_text_string(&[0xFE, 0xFF, 0x00, 0x48, 0x00, 0xE9]), "Hé");
         assert_eq!(decode_text_string(&[0xEF, 0xBB, 0xBF, 0xC3, 0xA9]), "é");
         assert_eq!(decode_text_string(&[0xE9]), "é");
+        // A right-to-left override is dropped; a right-to-left mark is kept.
+        let utf16 = |s: &str| {
+            [0xFE, 0xFF]
+                .into_iter()
+                .chain(s.encode_utf16().flat_map(u16::to_be_bytes))
+                .collect::<Vec<u8>>()
+        };
+        assert_eq!(decode_text_string(&utf16("Bank\u{202E}cba")), "Bankcba");
+        assert_eq!(decode_text_string(&utf16("\u{200F}abc")), "\u{200F}abc");
         // Lone surrogate and odd trailing byte don't panic.
         assert_eq!(decode_text_string(&[0xFE, 0xFF, 0xD8, 0x00, 0x41]), "\u{FFFD}");
     }
