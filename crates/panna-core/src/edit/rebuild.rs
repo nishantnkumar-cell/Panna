@@ -289,6 +289,9 @@ pub(crate) struct Extra {
     /// that mention one go, and they are blacked out in bookmark titles. Read from every
     /// page's extra.
     pub scrub: Vec<String>,
+    /// This page takes the place of the first document's page at this index: bookmarks and
+    /// links to that page come here.
+    pub stands_for: Option<usize>,
 }
 
 /// Hidden information to leave out of the new file.
@@ -641,6 +644,17 @@ pub(crate) fn rebuild(
             {
                 map.insert(r, Some(num));
             }
+        }
+    }
+    for (extra, num) in extras.iter().zip(&page_nums) {
+        let Some(index) = extra.stands_for else { continue };
+        let (Some((pages, _)), Some(map)) = (trees.first(), w.maps.first_mut()) else {
+            continue;
+        };
+        if let Some((r, _)) = pages.get(index)
+            && map.get(r).is_some_and(Option::is_none)
+        {
+            map.insert(*r, Some(*num));
         }
     }
     for (place, (source, num)) in plan.iter().zip(&page_nums).enumerate() {

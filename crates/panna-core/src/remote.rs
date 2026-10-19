@@ -86,7 +86,15 @@ pub(crate) enum Op {
         bytes: Vec<u8>,
         name: String,
     },
-    /// Any page edit but [`PageEdit::Undo`] and [`PageEdit::InsertFile`].
+    /// `count` pages from `first` replaced by another file's pages from `from`.
+    ReplaceFromFile {
+        first: usize,
+        count: usize,
+        from: usize,
+        bytes: Vec<u8>,
+        name: String,
+    },
+    /// Any page edit but [`PageEdit::Undo`] and those that read another file.
     Edit(PageEdit),
     WithChanges(Changes),
 }
@@ -153,7 +161,9 @@ impl Op {
             Self::Tagged | Self::Described(_) => Answer::Tagged(Err(save)),
             Self::CommentsFromFile(_) => Answer::Annotations(Err(message())),
             Self::Compare(_) => Answer::Changes(Err(message())),
-            Self::InsertFile { .. } | Self::Edit(_) | Self::WithChanges(_) => Answer::Revised(Err(save)),
+            Self::InsertFile { .. } | Self::ReplaceFromFile { .. } | Self::Edit(_) | Self::WithChanges(_) => {
+                Answer::Revised(Err(save))
+            }
         }
     }
 }
@@ -252,9 +262,18 @@ pub(crate) fn perform<'a>(
                 .map(|files| files.into_iter().map(|(_, bytes)| bytes).collect()),
         ),
         Op::InsertFile { at, bytes, name } => Answer::Revised(insert_file(doc, at, bytes, &name)),
+        Op::ReplaceFromFile {
+            first,
+            count,
+            from,
+            bytes,
+            name,
+        } => Answer::Revised(replace_from_file(doc, first, count, from, bytes, &name)),
         Op::WithChanges(changes) => Answer::Revised(revision(doc, doc.with_changes(&changes))),
         Op::Edit(edit) => Answer::Revised(match edit {
-            PageEdit::Undo | PageEdit::InsertFile { .. } => Err(SaveError::Damaged),
+            PageEdit::Undo | PageEdit::InsertFile { .. } | PageEdit::ReplaceFromFile { .. } => {
+                Err(SaveError::Damaged)
+            }
             PageEdit::Plan(plan) => revision(doc, doc.rearranged(&plan, &[])),
             PageEdit::Crop { pages, margins } => revision(doc, doc.cropped(&pages, margins)),
             PageEdit::HeaderFooter { pages, marks } => revision(doc, doc.with_header_footer(&pages, &marks)),
@@ -277,7 +296,7 @@ pub(crate) fn perform<'a>(
 /// `doc` with every page of the file in `bytes` inserted before page `at`.
 fn insert_file(doc: &Document, at: usize, bytes: Vec<u8>, name: &str) -> Result<Revision, SaveError> {
     let other = Document::from_bytes(bytes, None, doc.limits())
-        .map_err(|e| SaveError::Io(format!("couldn't open “{name}”: {e}")))?;
+        .map_err(|e| SaveError::OtherFile(format!("Couldn't open “{name}”: {e}")))?;
     let own = doc.page_count();
     let at = at.min(own);
     let page = |doc, index| PageSource::Page { doc, index, turns: 0 };
@@ -287,6 +306,32 @@ fn insert_file(doc: &Document, at: usize, bytes: Vec<u8>, name: &str) -> Result<
         .chain((at..own).map(|i| page(0, i)))
         .collect();
     revision(doc, doc.rearranged(&plan, &[&other]))
+}
+
+/// `doc` with `count` of its pages from `first` replaced by the pages of the file in `bytes`
+/// from `from`.
+fn replace_from_file(
+    doc: &Document,
+    first: usize,
+    count: usize,
+    from: usize,
+    bytes: Vec<u8>,
+    name: &str,
+) -> Result<Revision, SaveError> {
+    let other = Document::from_bytes(bytes, None, doc.limits())
+        .map_err(|e| SaveError::OtherFile(format!("Couldn't open “{name}”: {e}")))?;
+    if count == 0 || first.saturating_add(count) > doc.page_count() {
+        return Err(SaveError::NoSuchPage(first.saturating_add(count)));
+    }
+    if from.saturating_add(count) > other.page_count() {
+        return Err(SaveError::OtherFile(format!(
+            "“{name}” has only {} pages, so it hasn't got pages {} to {}.",
+            other.page_count(),
+            from + 1,
+            from + count
+        )));
+    }
+    revision(doc, doc.with_pages_replaced(&other, first, count, from))
 }
 
 /// A document parsed in the app, for when there's no locked-down process.

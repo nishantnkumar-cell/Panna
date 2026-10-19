@@ -139,6 +139,30 @@ fn files_are_combined() {
 }
 
 #[test]
+fn pages_are_replaced_and_bookmarks_follow_their_replacement() {
+    let doc = open(three_pages(), None);
+    // The other file's pages read "Page 3", "Page 2", "Page 1".
+    let other = open(
+        doc.rearranged(&[page(2, 0), page(1, 0), page(0, 0)], &[])
+            .unwrap(),
+        None,
+    );
+    // The second page, which the bookmark goes to, replaced by "Page 3".
+    let replaced = open(doc.with_pages_replaced(&other, 1, 1, 0).unwrap(), None);
+    assert_eq!(replaced.page_count(), 3);
+    assert!(text(&replaced, 0).contains("Page 1"));
+    assert!(text(&replaced, 1).contains("Page 3"));
+    assert!(text(&replaced, 2).contains("Page 3"));
+    let info = replaced.info().unwrap();
+    assert_eq!(info.outline[0].title, "Second");
+    assert_eq!(info.outline[0].page, Some(1));
+    // Two pages at the end, from the other file's second page.
+    let replaced = open(doc.with_pages_replaced(&other, 1, 2, 1).unwrap(), None);
+    let texts: Vec<String> = (0..3).map(|i| text(&replaced, i)).collect();
+    assert!(texts[0].contains("Page 1") && texts[1].contains("Page 2") && texts[2].contains("Page 1"));
+}
+
+#[test]
 fn password_protection_is_kept() {
     for (name, bytes) in [
         ("RC4", &include_bytes!("fixtures/encrypted-rc4.pdf")[..]),

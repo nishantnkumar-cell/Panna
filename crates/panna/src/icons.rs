@@ -64,6 +64,7 @@ pub enum Icon {
     Stamp,
     PageAdd,
     PageInsertFile,
+    PageReplace,
     PageExtract,
     MoveUp,
     MoveDown,
@@ -182,6 +183,7 @@ impl Icon {
             Icon::Stamp => include_bytes!("../icons/stamp.svg"),
             Icon::PageAdd => include_bytes!("../icons/file-plus.svg"),
             Icon::PageInsertFile => include_bytes!("../icons/file-input.svg"),
+            Icon::PageReplace => include_bytes!("../icons/replace.svg"),
             Icon::PageExtract => include_bytes!("../icons/file-output.svg"),
             Icon::MoveUp => include_bytes!("../icons/arrow-up.svg"),
             Icon::MoveDown => include_bytes!("../icons/arrow-down.svg"),
@@ -333,7 +335,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 113] = [
+    const ALL: [Icon; 114] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -390,6 +392,7 @@ mod tests {
         Icon::Stamp,
         Icon::PageAdd,
         Icon::PageInsertFile,
+        Icon::PageReplace,
         Icon::PageExtract,
         Icon::MoveUp,
         Icon::MoveDown,

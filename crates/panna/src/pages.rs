@@ -20,6 +20,8 @@ pub enum Op {
     InsertBlank,
     /// Asks for a PDF and puts its pages after the current one.
     InsertFile,
+    /// Asks for a PDF and which pages of it replace which pages here.
+    Replace,
     /// Asks which pages to save as new files.
     Extract,
     /// Asks how much to trim from the page edges.
@@ -104,6 +106,11 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             Icon::PageInsertFile,
             "Insert pages from another PDF after this one",
             ev(Op::InsertFile, true)
+        ),
+        icons::button(
+            Icon::PageReplace,
+            "Replace pages with pages from another PDF",
+            ev(Op::Replace, true)
         ),
         icons::button(
             Icon::PageExtract,
@@ -559,6 +566,109 @@ pub fn flatten_card<'a>(state: Flattening) -> Element<'a, Message> {
         ]
         .spacing(10)
         .width(380),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
+/// Replacing pages with another file's: the pages here, from 1, and the other file's page
+/// they start from, as typed.
+#[derive(Debug, Clone)]
+pub struct Replacing {
+    pub path: std::path::PathBuf,
+    pub first: String,
+    pub last: String,
+    pub from: String,
+    /// Pages in this document.
+    pub count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum ReplaceEvent {
+    First(String),
+    Last(String),
+    From(String),
+    Go,
+    Cancel,
+}
+
+impl Replacing {
+    pub fn new(path: std::path::PathBuf, current: usize, count: usize) -> Self {
+        let page = (current + 1).to_string();
+        Self {
+            path,
+            first: page.clone(),
+            last: page,
+            from: "1".into(),
+            count,
+        }
+    }
+
+    /// The first page replaced and how many, from 0, and the other file's page they start
+    /// from, from 0; `None` while what's typed isn't a range of this document's pages.
+    pub fn range(&self) -> Option<(usize, usize, usize)> {
+        let number = |s: &str| s.trim().parse::<usize>().ok().filter(|n| *n >= 1);
+        let (first, last, from) = (number(&self.first)?, number(&self.last)?, number(&self.from)?);
+        (first <= last && last <= self.count).then(|| (first - 1, last - first + 1, from - 1))
+    }
+}
+
+pub fn replace_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("replace-first")
+}
+
+/// The Replace pages card.
+pub fn replace_card(state: &Replacing) -> Element<'_, Message> {
+    let ev = Message::Replace;
+    let name = state
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let field = |value: &str, on: fn(String) -> ReplaceEvent| {
+        text_input("", value)
+            .on_input(move |s| ev(on(s)))
+            .on_submit(ev(ReplaceEvent::Go))
+            .width(60)
+    };
+    let ok = state.range().is_some();
+    container(
+        column![
+            text("Replace pages").size(16),
+            row![
+                text("Pages"),
+                field(&state.first, ReplaceEvent::First).id(replace_input_id()),
+                text("to"),
+                field(&state.last, ReplaceEvent::Last),
+                text(format!("of {}", state.count)),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+            row![
+                text(format!("with pages from “{name}” starting at page")),
+                field(&state.from, ReplaceEvent::From),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+            text(
+                "Bookmarks and links to the replaced pages go to the new ones. Undo brings \
+                 the old pages back until you save."
+            )
+            .size(13)
+            .style(text::secondary),
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(ReplaceEvent::Cancel)),
+                button("Replace").on_press_maybe(ok.then_some(ev(ReplaceEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(420),
     )
     .padding(16)
     .style(container::rounded_box)

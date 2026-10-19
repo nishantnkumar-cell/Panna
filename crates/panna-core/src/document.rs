@@ -481,6 +481,25 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with `count` of its pages from `first` replaced by `other`'s pages from
+    /// `from`, as a new file. Bookmarks and links to a replaced page go to its replacement.
+    pub fn with_pages_replaced(
+        &self,
+        other: &Document,
+        first: usize,
+        count: usize,
+        from: usize,
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let docs: [crate::edit::Input<'_>; 2] = [
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                (&other.pdf, other.bytes.as_slice(), other.password.as_str()),
+            ];
+            crate::edit::replace(&docs, self.page_count(), first, count, from)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The document with the pages at `pages` cropped by `margins` (top, right, bottom, left
     /// as shown, in points), as a new file.
     pub fn cropped(&self, pages: &[usize], margins: crate::Margins) -> Result<Vec<u8>, crate::SaveError> {

@@ -48,6 +48,13 @@ pub enum PageEdit {
     Plan(Vec<PageSource>),
     /// Every page of another file, inserted before page `at`.
     InsertFile { at: usize, path: PathBuf },
+    /// `count` pages from `first` replaced by another file's pages from `from`.
+    ReplaceFromFile {
+        first: usize,
+        count: usize,
+        from: usize,
+        path: PathBuf,
+    },
     /// Trims margins (top, right, bottom, left as shown, in points) from these pages.
     Crop {
         pages: Vec<usize>,
@@ -812,28 +819,43 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
             }
             Swap::Pages(edit, reply) => {
                 let undoing = matches!(edit, PageEdit::Undo);
-                let result = match edit {
-                    PageEdit::Undo => {
-                        history.pop().ok_or(SaveError::Damaged).and_then(|earlier| {
+                let result =
+                    match edit {
+                        PageEdit::Undo => history.pop().ok_or(SaveError::Damaged).and_then(|earlier| {
                             match engine.call(&earlier, None, Op::Info) {
                                 Answer::Info(Ok(info)) => Ok((earlier, info)),
                                 _ => Err(SaveError::Damaged),
                             }
-                        })
-                    }
-                    PageEdit::InsertFile { at, path } => {
-                        let name = path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned();
-                        match Document::read_file(&path, current.limits) {
-                            Ok(bytes) => revised(&current, ask!(Op::InsertFile { at, bytes, name }, Revised)),
-                            Err(e) => Err(SaveError::Io(format!("couldn't open “{name}”: {e}"))),
-                        }
-                    }
-                    edit => revised(&current, ask!(Op::Edit(edit), Revised)),
-                };
+                        }),
+                        PageEdit::InsertFile { at, path } => match other_file(&path, current.limits) {
+                            Ok((bytes, name)) => {
+                                revised(&current, ask!(Op::InsertFile { at, bytes, name }, Revised))
+                            }
+                            Err(e) => Err(e),
+                        },
+                        PageEdit::ReplaceFromFile {
+                            first,
+                            count,
+                            from,
+                            path,
+                        } => match other_file(&path, current.limits) {
+                            Ok((bytes, name)) => revised(
+                                &current,
+                                ask!(
+                                    Op::ReplaceFromFile {
+                                        first,
+                                        count,
+                                        from,
+                                        bytes,
+                                        name
+                                    },
+                                    Revised
+                                ),
+                            ),
+                            Err(e) => Err(e),
+                        },
+                        edit => revised(&current, ask!(Op::Edit(edit), Revised)),
+                    };
                 match result {
                     Ok((doc, info)) => {
                         // Unsaved changes are now part of the document; undo goes back to it
@@ -872,6 +894,18 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
 }
 
 /// The new version an edit of `current` made, and how it's laid out.
+/// The bytes of another file to take pages from, and its name for messages.
+fn other_file(path: &Path, limits: Limits) -> Result<(Vec<u8>, String), SaveError> {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    Document::read_file(path, limits)
+        .map(|bytes| (bytes, name.clone()))
+        .map_err(|e| SaveError::OtherFile(format!("Couldn't open “{name}”: {e}")))
+}
+
 fn revised(current: &Doc, revision: Result<Revision, SaveError>) -> Result<(Doc, DocumentInfo), SaveError> {
     let revision = revision?;
     let doc = Doc::new(revision.bytes, revision.password, current.limits);

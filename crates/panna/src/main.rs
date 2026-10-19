@@ -188,6 +188,8 @@ enum Message {
     Export(export::Event),
     /// The Flatten card.
     Flatten(pages::FlattenEvent),
+    ReplaceFileChosen(Option<PathBuf>),
+    Replace(pages::ReplaceEvent),
     /// The Password protection card.
     Protect(protect::Event),
     /// The Remove hidden information card.
@@ -478,6 +480,7 @@ struct App {
     exporting: Option<export::Exporting>,
     /// Choosing what to flatten.
     flattening: Option<pages::Flattening>,
+    replacing: Option<pages::Replacing>,
     /// Choosing password protection.
     protecting: Option<protect::Protecting>,
     signing: Option<signing::Signing>,
@@ -875,6 +878,7 @@ impl App {
             watermarking: None,
             exporting: None,
             flattening: None,
+            replacing: None,
             protecting: None,
             signing: None,
             cleaning: None,
@@ -1384,6 +1388,8 @@ impl App {
                     self.exporting = None;
                 } else if self.flattening.is_some() {
                     self.flattening = None;
+                } else if self.replacing.is_some() {
+                    self.replacing = None;
                 } else if self.protecting.is_some() {
                     self.protecting = None;
                 } else if self.signing.is_some() {
@@ -2787,6 +2793,44 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ReplaceFileChosen(Some(path)) => {
+                let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                self.replacing = Some(pages::Replacing::new(path, self.current_page(), count));
+                operation::focus(pages::replace_input_id())
+                    .chain(operation::select_all(pages::replace_input_id()))
+            }
+            Message::Replace(event) => {
+                let Some(state) = &mut self.replacing else {
+                    return Task::none();
+                };
+                match event {
+                    pages::ReplaceEvent::First(s) => state.first = s,
+                    pages::ReplaceEvent::Last(s) => state.last = s,
+                    pages::ReplaceEvent::From(s) => state.from = s,
+                    pages::ReplaceEvent::Cancel => self.replacing = None,
+                    pages::ReplaceEvent::Go => {
+                        let Some((first, count, from)) = state.range() else {
+                            return Task::none();
+                        };
+                        let path = state.path.clone();
+                        self.replacing = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        return self.edit_pages(
+                            PageEdit::ReplaceFromFile {
+                                first,
+                                count,
+                                from,
+                                path,
+                            },
+                            first,
+                            false,
+                        );
+                    }
+                }
+                Task::none()
+            }
             Message::FromPictures => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -3078,9 +3122,10 @@ impl App {
                 }
                 self.write_extracted(files)
             }
-            Message::InsertFileChosen(None) | Message::ExtractChosen(None) | Message::ExtractFolder(None) => {
-                Task::none()
-            }
+            Message::InsertFileChosen(None)
+            | Message::ReplaceFileChosen(None)
+            | Message::ExtractChosen(None)
+            | Message::ExtractFolder(None) => Task::none(),
             Message::StampPicture => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -3480,6 +3525,17 @@ impl App {
                         .map(|f| f.path().to_path_buf())
                 },
                 Message::InsertFileChosen,
+            ),
+            pages::Op::Replace => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Replace pages with pages from")
+                        .add_filter("PDF documents", &["pdf", "PDF"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::ReplaceFileChosen,
             ),
             pages::Op::Flatten => {
                 self.flattening = Some(pages::Flattening {
@@ -5443,6 +5499,12 @@ impl App {
             layers.push(modal(
                 pages::flatten_card(state),
                 Message::Flatten(pages::FlattenEvent::Cancel),
+            ));
+        }
+        if let Some(state) = &self.replacing {
+            layers.push(modal(
+                pages::replace_card(state),
+                Message::Replace(pages::ReplaceEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.exporting, &self.doc) {

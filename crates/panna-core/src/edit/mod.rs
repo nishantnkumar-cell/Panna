@@ -95,6 +95,8 @@ pub enum SaveError {
     NothingRecognised(bool),
     /// The text recognition engine failed, and why.
     Recognition(String),
+    /// Another file to take pages from couldn't be used, and why, as a sentence.
+    OtherFile(String),
 }
 
 impl fmt::Display for SaveError {
@@ -132,7 +134,7 @@ impl fmt::Display for SaveError {
                 "This PDF is already signed, so it can't be certified: only the first signature \
                  can certify a document."
             ),
-            Self::Certificate(why) => write!(f, "{why}"),
+            Self::Certificate(why) | Self::OtherFile(why) => write!(f, "{why}"),
             Self::TaggingProtected => write!(
                 f,
                 "Panna can't add tags to a password-protected PDF. Remove the protection first, \
@@ -348,6 +350,40 @@ pub(crate) type Input<'a> = (&'a Pdf, &'a [u8], &'a str);
 /// changed, whose catalog, document information and password the new file keeps).
 pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u8>, SaveError> {
     rebuild_from(docs, plan, &[], Output::Keep, Cleanup::default())
+}
+
+/// The first document with `count` of its pages from `first` replaced by the second's pages
+/// from `from`. Bookmarks and links to a replaced page go to the page that replaced it.
+pub(crate) fn replace(
+    docs: &[Input<'_>],
+    own: usize,
+    first: usize,
+    count: usize,
+    from: usize,
+) -> Result<Vec<u8>, SaveError> {
+    let mut plan = Vec::with_capacity(own);
+    let mut extras = Vec::with_capacity(own);
+    for index in 0..own {
+        let replaced = index >= first && index - first < count;
+        plan.push(if replaced {
+            PageSource::Page {
+                doc: 1,
+                index: from + (index - first),
+                turns: 0,
+            }
+        } else {
+            PageSource::Page {
+                doc: 0,
+                index,
+                turns: 0,
+            }
+        });
+        extras.push(rebuild::Extra {
+            stands_for: replaced.then_some(index),
+            ..rebuild::Extra::default()
+        });
+    }
+    rebuild_from(docs, &plan, &extras, Output::Keep, Cleanup::default())
 }
 
 /// Every page of `doc`, unchanged and unturned.
