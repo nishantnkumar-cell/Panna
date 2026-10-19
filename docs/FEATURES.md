@@ -125,39 +125,57 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Screen reader support for the app UI | Later | Depends on iced accessibility support |
 | Tag PDF, reading order, accessibility checker | Later | Checker done: All tools › Check accessibility lists what gets in the way of screen readers (no tags, language or title, title not shown, no bookmarks in long documents, pages that are only pictures, figures without alternate text, tables without header cells, fields without a description, untagged comments and links, tab order, fonts without Unicode mapping), each with its page. Adding tags done: on an untagged document the report offers Save a tagged copy…, which tags each run of text as a paragraph, or a heading where the type is larger, in the order it's drawn, and sets the tab order. Pictures become figures (drawn and inline pictures; drawings stay untagged). Describing figures done: in the report, each figure without alternate text has a box to type a description, and Save descriptions writes them into the tagged copy (or, for a document already tagged, a described copy). Changing the reading order by hand isn't done yet |
 
-## 9. Backlog: more offline Acrobat features (not started)
+## 9. Backlog
 
-Found by comparing Acrobat's offline features with this list and the code on 2026-10-19. All
-are in scope. Security work still to do is listed separately, in
-[THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-priority-order).
+Found by comparing Acrobat's offline features with this list and the code on 2026-10-19. Security
+work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-priority-order).
+
+### 9.1 Planned for 1.0
 
 | Feature | Area | Notes |
 |---|---|---|
 | Add, rename, move and delete bookmarks | Navigation | Bookmarks can only be viewed today |
 | Hand tool (drag to scroll) | Navigation | |
-| Marquee zoom (drag a box to zoom into it), loupe, pan & zoom window | Navigation | |
-| Auto-scroll | Navigation | |
-| Rulers, grids and guides | Navigation | |
+| Marquee zoom (drag a box to zoom into it) | Navigation | |
 | Initial view: how a file opens (page, zoom, panels), saved into the PDF | Navigation | |
 | Replace pages from another PDF | Pages | |
 | Create a blank PDF; PDF from a screenshot or the clipboard | Pages | |
 | Edit page labels (i, ii, iii then 1, 2, 3) | Pages | They're read, but can't be changed |
 | Split by bookmarks or by file size | Pages | Splitting by page ranges is done |
-| PDF Portfolios (several files shown as one bundle) | Pages | |
 | Comment summary: a printable list of comments with their pages | Comments | |
 | Print with comments shown | Comments | |
-| Spell check in comments and form fields | Comments | Offline dictionaries only |
-| Export to HTML, RTF and EPUB | Convert | Word, Excel, PowerPoint, text and images are done |
-| Output preview, colour separations, ink coverage, fix hairlines | Print production | Acrobat Pro features |
-| Embedded video, audio and 3D models | Multimedia | Show as attachments rather than play inline, given the risk |
-| Default PDF app on Windows and macOS, through an installer | Desktop | The Linux menu entry already registers for PDFs |
-| Page thumbnails and previews in Windows Explorer and macOS Finder | Desktop | Explorer and Finder would run Panna's renderer: needs the process isolation in THREAT_MODEL.md first |
-| Preferences window; customisable keyboard shortcuts | Desktop | |
-| Translations, and right-to-left languages (Arabic, Hebrew) in the interface | Desktop | |
-| Touch and pen: pinch to zoom, swipe between pages, pen-only drawing | Desktop | |
+| Default PDF app on Windows and macOS, through an installer | Desktop | Unsigned for now; the Linux menu entry already registers for PDFs |
+| Preferences window | Desktop | |
 | Action Wizard: run the same steps (OCR, compress, watermark…) over a folder of PDFs | Batch | |
-| Search across a folder of PDFs, with a saved index | Batch | |
 
+### 9.2 Future enhancements (after 1.0)
+
+Agreed with the owner on 2026-10-19: worth doing, but not needed for 1.0, mostly because
+they're large for how often they're used. Each has a GitHub issue labelled
+`future enhancement` with what it is, why it waits and a rough size.
+
+| Feature | Issue |
+|---|---|
+| Print production tools: output preview, colour separations, ink coverage, fix hairlines | [#18](https://github.com/nishantnkumar-cell/Panna/issues/18) |
+| Page thumbnails and previews in Windows Explorer and macOS Finder | [#19](https://github.com/nishantnkumar-cell/Panna/issues/19) |
+| Interface translations and right-to-left languages | [#20](https://github.com/nishantnkumar-cell/Panna/issues/20) |
+| PDF Portfolios | [#21](https://github.com/nishantnkumar-cell/Panna/issues/21) |
+| Embedded video, audio and 3D models | [#22](https://github.com/nishantnkumar-cell/Panna/issues/22) |
+| Touch and pen input | [#23](https://github.com/nishantnkumar-cell/Panna/issues/23) |
+| Rulers, grids and guides | [#24](https://github.com/nishantnkumar-cell/Panna/issues/24) |
+| Auto-scroll | [#25](https://github.com/nishantnkumar-cell/Panna/issues/25) |
+| Loupe and pan-and-zoom window | [#26](https://github.com/nishantnkumar-cell/Panna/issues/26) |
+| Export to HTML, RTF and EPUB | [#27](https://github.com/nishantnkumar-cell/Panna/issues/27) |
+| Search across a folder of PDFs, with a saved index | [#28](https://github.com/nishantnkumar-cell/Panna/issues/28) |
+| Spell check in comments and form fields | [#29](https://github.com/nishantnkumar-cell/Panna/issues/29) |
+| Convert documents to PDF/X | [#30](https://github.com/nishantnkumar-cell/Panna/issues/30) |
+| Customisable keyboard shortcuts | [#31](https://github.com/nishantnkumar-cell/Panna/issues/31) |
+| Word export: keep pictures, tables and layout | [#32](https://github.com/nishantnkumar-cell/Panna/issues/32) |
+| Embed missing fonts when converting to PDF/A | [#33](https://github.com/nishantnkumar-cell/Panna/issues/33) |
+| Edit the reading order by hand | [#34](https://github.com/nishantnkumar-cell/Panna/issues/34) |
+| Screen-reader support for Panna's own interface | [#35](https://github.com/nishantnkumar-cell/Panna/issues/35) |
+| Sign with the macOS keychain and Linux NSS | [#36](https://github.com/nishantnkumar-cell/Panna/issues/36) |
+| Code-signed and notarised releases | [#37](https://github.com/nishantnkumar-cell/Panna/issues/37) |
 ## 10. Online-only (always Skip)
 
 Adobe Document Cloud storage and sync, sharing links, shared review, Adobe Sign, the AI Assistant,
