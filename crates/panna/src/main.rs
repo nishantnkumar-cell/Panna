@@ -16,6 +16,7 @@ mod export;
 mod find;
 mod form;
 mod icons;
+mod initial;
 mod layout;
 mod links;
 mod measure;
@@ -45,8 +46,8 @@ use std::sync::Arc;
 
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
-    Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, scrollable,
-    space, stack, text, text_input,
+    Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, rule,
+    scrollable, space, stack, text, text_input,
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
@@ -243,6 +244,7 @@ enum Message {
     CloseOverlays,
     Sidebar(sidebar::Event),
     Bookmarks(bookmarks::Event),
+    InitialView(initial::Event),
     GoToPage(usize),
     /// Scroll to a comment, from the comments list.
     /// Scrolls to a comment, and selects it when it can be changed.
@@ -510,10 +512,14 @@ struct App {
     /// A page change is being made; the tools wait for it.
     pages_busy: bool,
     bookmarks: bookmarks::Editor,
+    initial: initial::Editor,
     /// The bookmark to select once a bookmark change is made.
     bookmark_select: Option<usize>,
-    /// The change being made is to bookmarks only, so the pages stay as they are.
-    bookmarks_only: bool,
+    /// The change being made leaves the pages as they are (bookmarks, how the file opens).
+    pages_kept: bool,
+    /// The page and zoom a file just opened asks for, applied once the pages' viewport is
+    /// measured.
+    opening: Option<panna_core::InitialView>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -652,6 +658,8 @@ struct OpenDoc {
     texts: Vec<TextSlot>,
     /// Whether each layer is shown.
     layers_shown: Vec<bool>,
+    /// The page layout the file asks for, until the user picks another.
+    spread: Option<Spread>,
 }
 
 #[derive(Default)]
@@ -686,7 +694,11 @@ fn page_box_id() -> iced::widget::Id {
 }
 
 /// A card listing document properties, centred over the page view. Clicking outside closes it.
-fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
+fn properties_view<'a>(
+    info: &'a DocumentInfo,
+    initial: &'a initial::Editor,
+    busy: bool,
+) -> Element<'a, Message> {
     let rows = info.properties.iter().map(|(label, value)| {
         row![
             text(label.as_ref()).width(110).style(text::secondary),
@@ -699,6 +711,8 @@ fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
         column![
             text("Document properties").size(18),
             iced::widget::Column::with_children(rows).spacing(6),
+            rule::horizontal(1),
+            initial.view(&info.initial_view, busy),
             button("Close").on_press(Message::ToggleProperties),
         ]
         .spacing(14)
@@ -839,8 +853,10 @@ impl App {
             page_edits: 0,
             pages_busy: false,
             bookmarks: bookmarks::Editor::default(),
+            initial: initial::Editor::default(),
             bookmark_select: None,
-            bookmarks_only: false,
+            pages_kept: false,
+            opening: None,
             show_properties: false,
             find: find::Find::default(),
             selection: None,
@@ -1007,12 +1023,37 @@ impl App {
                         self.settings.add_recent(doc.path.clone());
                         self.settings.save();
                         self.rotation = 0;
-                        doc.layout = PageLayout::new(&info.pages, self.settings.spread);
+                        let view = info.initial_view;
+                        doc.spread = match view.layout {
+                            panna_core::OpenLayout::Default => None,
+                            panna_core::OpenLayout::Single => Some(Spread::Single),
+                            panna_core::OpenLayout::Two => Some(Spread::Two),
+                            panna_core::OpenLayout::TwoCover => Some(Spread::TwoCover),
+                        };
+                        doc.layout = PageLayout::new(&info.pages, doc.spread.unwrap_or(self.settings.spread));
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
                         doc.thumb_layout = ThumbLayout::new(&info.pages);
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
                         doc.texts = info.pages.iter().map(|_| TextSlot::default()).collect();
                         doc.layers_shown = info.layers.iter().map(|l| l.shown).collect();
+                        // The panel the file asks for, for this time only.
+                        let panel = match view.panel {
+                            panna_core::OpenPanel::Bookmarks if !info.outline.is_empty() => {
+                                Some(sidebar::Tab::Bookmarks)
+                            }
+                            panna_core::OpenPanel::Pages => Some(sidebar::Tab::Thumbnails),
+                            panna_core::OpenPanel::Attachments if !info.attachments.is_empty() => {
+                                Some(sidebar::Tab::Files)
+                            }
+                            panna_core::OpenPanel::Layers if !info.layers.is_empty() => {
+                                Some(sidebar::Tab::Layers)
+                            }
+                            _ => None,
+                        };
+                        if let Some(tab) = panel {
+                            self.sidebar.open = true;
+                            self.sidebar.tab = tab;
+                        }
                         // Signed documents open on their signatures, as in Acrobat.
                         if !info.signatures.is_empty() {
                             self.sidebar.open = true;
@@ -1027,13 +1068,20 @@ impl App {
                         self.status = Status::Idle;
                         self.zoom = 1.0;
                         self.viewport.offset_y = 0.0;
-                        let shown = Task::batch([
+                        let mut shown = Task::batch([
                             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y: 0.0 }),
                             self.request_visible(),
                             self.request_thumbnails(),
                             self.request_search_text(),
                             self.request_comment_text(),
                         ]);
+                        // Then the page and zoom the file asks for, once the viewport's size is
+                        // known, and full screen.
+                        self.opening =
+                            (view.page > 0 || view.zoom != panna_core::OpenZoom::Default).then_some(view);
+                        if view.full_screen && matches!(self.screen, Screen::Windowed) {
+                            shown = Task::batch([shown, self.update(Message::ToggleFullScreen)]);
+                        }
                         match self.to_open.pop() {
                             Some(next) => Task::batch([shown, self.open(next, None)]),
                             None => shown,
@@ -1098,7 +1146,10 @@ impl App {
                     height: bounds.height,
                 };
                 self.page_input.clear();
-                self.request_visible()
+                match self.opening.take() {
+                    Some(view) => self.open_at(view),
+                    None => self.request_visible(),
+                }
             }
             Message::ZoomIn => {
                 let next = ZOOM_STEPS.iter().copied().find(|z| *z > self.zoom + 0.001);
@@ -1141,7 +1192,8 @@ impl App {
                 Task::batch([self.request_visible(), self.request_thumbnails()])
             }
             Message::NextSpread => {
-                self.settings.spread = self.settings.spread.next();
+                let current = self.doc.as_mut().and_then(|d| d.spread.take());
+                self.settings.spread = current.unwrap_or(self.settings.spread).next();
                 self.settings.save();
                 self.relayout()
             }
@@ -1244,8 +1296,44 @@ impl App {
             }
             Message::ToggleProperties => {
                 self.show_properties = !self.show_properties && self.doc.is_some();
+                if let (true, Some(doc)) = (self.show_properties, &self.doc) {
+                    self.initial.load(doc.info.initial_view, doc.info.pages.len());
+                }
                 Task::none()
             }
+            Message::InitialView(event) => match self.initial.update(event) {
+                initial::Outcome::None => Task::none(),
+                initial::Outcome::UseCurrent => {
+                    let Some(doc) = &self.doc else { return Task::none() };
+                    let panel = match (self.sidebar.open, self.sidebar.tab) {
+                        (false, _) => panna_core::OpenPanel::None,
+                        (true, sidebar::Tab::Bookmarks) => panna_core::OpenPanel::Bookmarks,
+                        (true, sidebar::Tab::Files) => panna_core::OpenPanel::Attachments,
+                        (true, sidebar::Tab::Layers) => panna_core::OpenPanel::Layers,
+                        (true, _) => panna_core::OpenPanel::Pages,
+                    };
+                    let layout = match doc.spread.unwrap_or(self.settings.spread) {
+                        Spread::Single => panna_core::OpenLayout::Single,
+                        Spread::Two => panna_core::OpenLayout::Two,
+                        Spread::TwoCover => panna_core::OpenLayout::TwoCover,
+                    };
+                    let view = panna_core::InitialView {
+                        page: self.current_page(),
+                        zoom: panna_core::OpenZoom::Scale((self.zoom * 100.0).round() / 100.0),
+                        panel,
+                        layout,
+                        full_screen: !matches!(self.screen, Screen::Windowed),
+                        show_title: doc.info.initial_view.show_title,
+                    };
+                    self.initial.load(view, doc.info.pages.len());
+                    Task::none()
+                }
+                initial::Outcome::Apply(view) => {
+                    self.pages_kept = true;
+                    let page = self.current_page();
+                    self.edit_pages(PageEdit::InitialView(view), page, false)
+                }
+            },
             Message::CloseOverlays => {
                 if matches!(self.screen, Screen::Present { .. }) {
                     return self.stop_presenting();
@@ -1346,7 +1434,7 @@ impl App {
                         .chain(operation::select_all(bookmarks::name_id())),
                     bookmarks::Outcome::Save(list, select) => {
                         self.bookmark_select = select;
-                        self.bookmarks_only = true;
+                        self.pages_kept = true;
                         self.edit_pages(PageEdit::Bookmarks(list), page, false)
                     }
                 }
@@ -3115,16 +3203,17 @@ impl App {
             } => {
                 self.pages_busy = false;
                 let recognised = std::mem::take(&mut self.recognising);
-                let bookmarks_only = std::mem::take(&mut self.bookmarks_only);
+                let pages_kept = std::mem::take(&mut self.pages_kept);
                 let select = self.bookmark_select.take();
                 let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
                     return Task::none();
                 };
                 // Only the bookmarks changed: the pages on screen stay as they are.
-                if bookmarks_only {
+                if pages_kept {
                     match result {
                         Ok(info) if info.pages == open.info.pages => {
                             self.bookmarks.reloaded(&info.outline, select);
+                            self.initial.load(info.initial_view, info.pages.len());
                             open.info = info;
                             self.page_edits += 1;
                             return if self.bookmarks.renaming() {
@@ -3172,7 +3261,7 @@ impl App {
                 };
                 // Unsaved comments and form entries are now part of the document.
                 let sizes = rotated_sizes(&info.pages, self.rotation);
-                open.layout = PageLayout::new(&sizes, self.settings.spread);
+                open.layout = PageLayout::new(&sizes, open.spread.unwrap_or(self.settings.spread));
                 open.pages = info.pages.iter().map(|_| Slot::default()).collect();
                 open.thumb_layout = ThumbLayout::new(&sizes);
                 open.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
@@ -4686,6 +4775,7 @@ impl App {
                 attachments: Vec::new(),
                 layers: Vec::new(),
                 signatures: Vec::new(),
+                initial_view: panna_core::InitialView::default(),
             },
             worker,
             layout: PageLayout::default(),
@@ -4694,6 +4784,7 @@ impl App {
             thumbs: Vec::new(),
             texts: Vec::new(),
             layers_shown: Vec::new(),
+            spread: None,
         });
         Task::perform(rx, move |result| {
             Message::Opened(id, result.unwrap_or(Err(OpenError::EngineCrashed)))
@@ -4778,7 +4869,7 @@ impl App {
             return Task::none();
         };
         let sizes = doc.layout.sizes().to_vec();
-        doc.layout = PageLayout::new(&sizes, self.settings.spread);
+        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
         self.go_to_page(page)
     }
 
@@ -4789,7 +4880,7 @@ impl App {
         };
         self.rotation = (self.rotation + turns) % 4;
         let sizes = rotated_sizes(&doc.info.pages, self.rotation);
-        doc.layout = PageLayout::new(&sizes, self.settings.spread);
+        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
         doc.thumb_layout = ThumbLayout::new(&sizes);
         doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
         doc.thumbs.iter_mut().for_each(|thumb| *thumb = Thumb::default());
@@ -4830,6 +4921,19 @@ impl App {
         let page = self.current_page();
         let target = self.doc.as_ref().map_or(page, |d| d.layout.step(page, forward));
         self.go_to_page(target)
+    }
+
+    /// Shows the page at the zoom a file asks to open at. The page comes first so zooming
+    /// keeps it in place.
+    fn open_at(&mut self, view: panna_core::InitialView) -> Task<Message> {
+        let page = self.go_to_page(view.page);
+        let zoomed = match view.zoom {
+            panna_core::OpenZoom::Default => Task::none(),
+            panna_core::OpenZoom::FitPage => self.update(Message::FitPage),
+            panna_core::OpenZoom::FitWidth => self.update(Message::FitWidth),
+            panna_core::OpenZoom::Scale(zoom) => self.set_zoom(zoom),
+        };
+        page.chain(zoomed)
     }
 
     fn go_to_page(&mut self, index: usize) -> Task<Message> {
@@ -4995,6 +5099,11 @@ impl App {
         let gap = || space().width(10).height(10).into();
         let on = |m: Message| has_doc.then_some(m);
         let m = icons::MOD;
+        let spread = self
+            .doc
+            .as_ref()
+            .and_then(|d| d.spread)
+            .unwrap_or(self.settings.spread);
         let items: Vec<Element<'_, Message>> = vec![
             icons::button(
                 Icon::Sidebar,
@@ -5061,12 +5170,12 @@ impl App {
             icons::button(Icon::RotateCcw, "Rotate left", on(Message::RotateCcw)),
             icons::button(Icon::RotateCw, "Rotate right", on(Message::RotateCw)),
             icons::button(
-                match self.settings.spread {
+                match spread {
                     Spread::Single => Icon::SinglePage,
                     Spread::Two => Icon::TwoPages,
                     Spread::TwoCover => Icon::CoverPage,
                 },
-                match self.settings.spread {
+                match spread {
                     Spread::Single => format!("Single page: click for two pages side by side ({m}Shift+T)"),
                     Spread::Two => format!("Two pages: click to show the cover page alone ({m}Shift+T)"),
                     Spread::TwoCover => format!("Two pages with cover: click for single page ({m}Shift+T)"),
@@ -5283,7 +5392,7 @@ impl App {
             );
         }
         if let (Some(doc), true) = (&self.doc, self.show_properties) {
-            layers.push(properties_view(&doc.info));
+            layers.push(properties_view(&doc.info, &self.initial, self.pages_busy));
         }
         if let Some(card) = self.annotate.editor() {
             layers.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));

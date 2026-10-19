@@ -186,3 +186,44 @@ fn bookmarks_can_be_added_to_a_file_without_any() {
         .collect();
     assert_eq!(shown, [("Start".into(), 0, Some(0)), ("End".into(), 1, Some(2))]);
 }
+
+#[test]
+fn how_a_file_opens_is_read_and_saved() {
+    use panna_core::{InitialView, OpenLayout, OpenPanel, OpenZoom};
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OpenAction [4 0 R /FitH 700] /PageMode /UseThumbs \
+         /PageLayout /TwoColumnRight /ViewerPreferences << /HideToolbar true >> >>",
+    ];
+    objects.extend(PAGES);
+    let doc = Document::from_bytes(build(&objects), None, Limits::default()).unwrap();
+    let view = doc.info().unwrap().initial_view;
+    assert_eq!(
+        view,
+        InitialView {
+            page: 1,
+            zoom: OpenZoom::FitWidth,
+            panel: OpenPanel::Pages,
+            layout: OpenLayout::TwoCover,
+            full_screen: false,
+            show_title: false,
+        }
+    );
+
+    let wanted = InitialView {
+        page: 2,
+        zoom: OpenZoom::Scale(1.5),
+        panel: OpenPanel::Bookmarks,
+        layout: OpenLayout::Single,
+        full_screen: false,
+        show_title: true,
+    };
+    let bytes = doc.with_initial_view(&wanted).unwrap();
+    // Other viewer preferences stay.
+    assert!(String::from_utf8_lossy(&bytes).contains("/HideToolbar true"));
+    assert_eq!(doc.reopen(bytes).unwrap().info().unwrap().initial_view, wanted);
+
+    // Asking for nothing in particular takes the entries away.
+    let bytes = doc.with_initial_view(&InitialView::default()).unwrap();
+    let again = doc.reopen(bytes).unwrap().info().unwrap().initial_view;
+    assert_eq!(again, InitialView::default());
+}

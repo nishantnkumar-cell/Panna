@@ -46,6 +46,8 @@ pub struct DocumentInfo {
     pub layers: Vec<crate::Layer>,
     /// Digital signatures, each checked.
     pub signatures: Vec<crate::Signature>,
+    /// How the document asks to be shown when it opens.
+    pub initial_view: crate::InitialView,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -415,6 +417,7 @@ impl Document {
             let signatures = self.signatures();
             DocumentInfo {
                 signatures,
+                initial_view: crate::InitialView::read(&self.pdf),
                 fields,
                 links,
                 protected,
@@ -976,6 +979,14 @@ impl Document {
             }
         }))
         .unwrap_or_default()
+    }
+
+    /// The document set to open as `view` says, as an incremental update.
+    pub fn with_initial_view(&self, view: &crate::InitialView) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::with_initial_view(&self.pdf, &self.bytes, view)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
     /// The document with its bookmarks replaced by `items`, in reading order, as an

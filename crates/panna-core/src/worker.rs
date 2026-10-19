@@ -60,6 +60,8 @@ pub enum PageEdit {
     },
     /// Replaces the bookmarks with these, in reading order.
     Bookmarks(Vec<crate::OutlineItem>),
+    /// Sets how the document opens.
+    InitialView(crate::InitialView),
     /// Draws a watermark or background on these pages.
     Watermark {
         pages: Vec<usize>,

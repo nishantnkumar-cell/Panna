@@ -30,6 +30,7 @@ mod preflight;
 mod remote;
 mod sig;
 mod text;
+mod view;
 mod worker;
 
 pub use access::{AccessFinding, AccessRule};
@@ -56,4 +57,5 @@ pub use preflight::{Finding, Rule, Standard};
 pub use remote::Isolated;
 pub use sig::{Cert, DigitalId, HeldKey, SigStatus, SignDigest, Signature, trusted_by};
 pub use text::{FindOptions, PageText, Paragraph, TextBox};
+pub use view::{InitialView, OpenLayout, OpenPanel, OpenZoom};
 pub use worker::{PageEdit, RenderWorker, describe_file};

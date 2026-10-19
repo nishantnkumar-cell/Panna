@@ -9,6 +9,8 @@ mod marks;
 mod new_field;
 mod outline;
 pub(crate) use outline::with_outline;
+mod view;
+pub(crate) use view::with_initial_view;
 mod pack;
 mod pdfa;
 mod picture;

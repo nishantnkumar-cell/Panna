@@ -158,17 +158,55 @@ pub(crate) fn destination(ctx: &Ctx<'_>, item: &Dict<'_>) -> Option<usize> {
 }
 
 fn resolve_dest(ctx: &Ctx<'_>, dest: Object<'_>, hops: u8) -> Option<usize> {
+    page_of(ctx, &resolve_array(ctx, dest, hops)?)
+}
+
+/// The explicit destination (`[page /Fit]` and the like) that `dest` names.
+fn resolve_array<'a>(ctx: &Ctx<'a>, dest: Object<'a>, hops: u8) -> Option<Array<'a>> {
     if hops > 2 {
         return None;
     }
     match dest {
-        Object::Array(array) => page_of(ctx, &array),
+        Object::Array(array) => Some(array),
         // A named destination's value can be an array or a dictionary with /D.
-        Object::Dict(dict) => resolve_dest(ctx, dict.get::<Object<'_>>(b"D")?, hops + 1),
-        Object::Name(name) => resolve_dest(ctx, named(ctx, name.as_str().as_bytes())?, hops + 1),
-        Object::String(s) => resolve_dest(ctx, named(ctx, s.as_bytes())?, hops + 1),
+        Object::Dict(dict) => resolve_array(ctx, dict.get::<Object<'a>>(b"D")?, hops + 1),
+        Object::Name(name) => resolve_array(ctx, named(ctx, name.as_str().as_bytes())?, hops + 1),
+        Object::String(s) => resolve_array(ctx, named(ctx, s.as_bytes())?, hops + 1),
         _ => None,
     }
+}
+
+/// Where the document opens (its `/OpenAction`, when that goes to a page): the page, and
+/// the destination's kind (`Fit`, `XYZ`…) with its zoom for `XYZ`.
+pub(crate) fn opening(pdf: &Pdf) -> Option<(usize, String, Option<f32>)> {
+    let ctx = Ctx::new(pdf)?;
+    let dest = match ctx.catalog.get::<Object<'_>>(b"OpenAction")? {
+        Object::Dict(action) => {
+            let kind = action.get::<hayro::hayro_syntax::object::Name<'_>>(b"S")?;
+            if kind.as_str() != "GoTo" {
+                return None;
+            }
+            action.get::<Object<'_>>(b"D")?
+        }
+        dest => dest,
+    };
+    let array = resolve_array(&ctx, dest, 0)?;
+    let page = page_of(&ctx, &array)?;
+    let mut rest = array.iter::<Object<'_>>().skip(1);
+    let kind = match rest.next() {
+        Some(Object::Name(name)) => name.as_str().to_owned(),
+        _ => String::new(),
+    };
+    // [page /XYZ left top zoom]: a zoom of 0 or null keeps the current one.
+    let zoom = (kind == "XYZ")
+        .then(|| rest.nth(2))
+        .flatten()
+        .and_then(|z| match z {
+            Object::Number(n) => Some(n.as_f64() as f32),
+            _ => None,
+        })
+        .filter(|z| z.is_finite() && *z > 0.0);
+    Some((page, kind, zoom))
 }
 
 /// The first element of an explicit destination is a page reference (or, in some files, a

@@ -137,7 +137,7 @@ work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-pr
 | Add, rename, move and delete bookmarks | Navigation | Done (see section 1) |
 | Hand tool (drag to scroll) | Navigation | Done: the hand button beside the zoom buttons; Esc turns it off |
 | Marquee zoom (drag a box to zoom into it) | Navigation | Done: the zoom tool beside the hand; a click zooms in a step |
-| Initial view: how a file opens (page, zoom, panels), saved into the PDF | Navigation | |
+| Initial view: how a file opens (page, zoom, panels), saved into the PDF | Navigation | Done: "When this file opens" in Document properties (Ctrl+D) |
 | Replace pages from another PDF | Pages | |
 | Create a blank PDF; PDF from a screenshot or the clipboard | Pages | |
 | Edit page labels (i, ii, iii then 1, 2, 3) | Pages | They're read, but can't be changed |
