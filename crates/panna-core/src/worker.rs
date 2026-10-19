@@ -5,6 +5,7 @@ use std::thread;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::remote::{Answer, Doc, Engine, Op, Revision};
 use crate::{
     Changes, Comment, Document, DocumentInfo, Limits, OpenError, PageSource, PageText, RenderError,
     RenderedPage, SaveError,
@@ -41,7 +42,7 @@ type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 const MAX_PAGE_UNDO: usize = 20;
 
 /// A change to the document's pages. Unsaved changes are made part of the document first.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PageEdit {
     /// The new page list (see [`Document::rearranged`]).
     Plan(Vec<PageSource>),
@@ -530,40 +531,41 @@ enum Swap {
     Promote,
 }
 
-/// Writes to a temporary file next to `path`, then renames it over `path`, so a failed write
-/// never leaves a half-written PDF behind.
-/// Writes the pages `export` asks for.
-fn export_pages<'a>(
+/// The files the pages `export` asks for make, each with where it goes.
+pub(crate) fn export_files<'a>(
     doc: &'a Document,
     cache: &hayro::RenderCache<'a>,
     export: &crate::Export,
-) -> Result<(), SaveError> {
+) -> Result<Vec<(PathBuf, Vec<u8>)>, SaveError> {
     use crate::ExportFormat;
     match export.format {
         ExportFormat::Text => {
             let Some((_, path)) = export.pages.first() else {
-                return Ok(());
+                return Ok(Vec::new());
             };
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
-            write_atomically(path, crate::export::text(doc, &pages)?.as_bytes())
+            Ok(vec![(
+                path.clone(),
+                crate::export::text(doc, &pages)?.into_bytes(),
+            )])
         }
         ExportFormat::Word => {
             let Some((_, path)) = export.pages.first() else {
-                return Ok(());
+                return Ok(Vec::new());
             };
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
-            write_atomically(path, &crate::office::docx(doc, &pages)?)
+            Ok(vec![(path.clone(), crate::office::docx(doc, &pages)?)])
         }
         ExportFormat::Excel => {
             let Some((_, path)) = export.pages.first() else {
-                return Ok(());
+                return Ok(Vec::new());
             };
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
-            write_atomically(path, &crate::office::xlsx(doc, &pages)?)
+            Ok(vec![(path.clone(), crate::office::xlsx(doc, &pages)?)])
         }
         ExportFormat::PowerPoint => {
             let Some((_, path)) = export.pages.first() else {
-                return Ok(());
+                return Ok(Vec::new());
             };
             let mut slides = Vec::with_capacity(export.pages.len());
             for (index, _) in &export.pages {
@@ -574,14 +576,18 @@ fn export_pages<'a>(
                 let png = crate::export::picture(&page, ExportFormat::Png)?;
                 slides.push((png, f64::from(size.width), f64::from(size.height)));
             }
-            write_atomically(path, &crate::office::pptx(&slides)?)
+            Ok(vec![(path.clone(), crate::office::pptx(&slides)?)])
         }
-        format => export.pages.iter().try_for_each(|(index, path)| {
-            let page = doc
-                .render_page(cache, *index, export.dpi / 72.0)
-                .map_err(|_| SaveError::NoSuchPage(*index))?;
-            write_atomically(path, &crate::export::picture(&page, format)?)
-        }),
+        format => export
+            .pages
+            .iter()
+            .map(|(index, path)| {
+                let page = doc
+                    .render_page(cache, *index, export.dpi / 72.0)
+                    .map_err(|_| SaveError::NoSuchPage(*index))?;
+                Ok((path.clone(), crate::export::picture(&page, format)?))
+            })
+            .collect(),
     }
 }
 
@@ -593,12 +599,20 @@ pub fn describe_file(
     target: &Path,
     alts: &[((u32, u16), String)],
 ) -> Result<Vec<crate::AccessFinding>, SaveError> {
-    let doc = Document::open(source, None, crate::Limits::default()).map_err(|_| SaveError::Damaged)?;
-    let copy = doc.reopen(doc.described(alts)?).map_err(|_| SaveError::Damaged)?;
-    write_atomically(target, copy.bytes())?;
-    Ok(copy.accessibility())
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, _) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    match doc.call(Op::Described(alts.to_vec())) {
+        Answer::Tagged(result) => result.and_then(|(bytes, findings)| {
+            write_atomically(target, &bytes)?;
+            Ok(findings)
+        }),
+        _ => Err(SaveError::EngineCrashed),
+    }
 }
 
+/// Writes to a temporary file next to `path`, then renames it over `path`, so a failed write
+/// never leaves a half-written PDF behind.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
     let io = |e: std::io::Error| SaveError::Io(e.to_string());
     let dir = path
@@ -626,49 +640,43 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
 }
 
 fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenReply, queue: Receiver<Job>) {
-    // The document keeps its own copy; this one is wiped as soon as it has been used.
-    let password = password.map(zeroize::Zeroizing::new);
-    let document = Document::open(&path, password.as_deref().map(String::as_str), limits);
-    drop(password);
-    let document = match document {
-        Ok(document) => document,
+    // Only the bytes are kept here; they're parsed in a locked-down process when there is
+    // one (see `remote`).
+    let bytes = match Document::read_file(&path, limits) {
+        Ok(bytes) => bytes,
         Err(e) => return on_open(Err(e)),
     };
-    match document.info() {
-        Ok(info) => on_open(Ok(info)),
-        Err(e) => return on_open(Err(e)),
+    let mut engine = Engine::default();
+    let opened = Doc::new(
+        bytes,
+        zeroize::Zeroizing::new(password.unwrap_or_default()),
+        limits,
+    );
+    match engine.call(&opened, None, Op::Info) {
+        Answer::Info(Ok(info)) => on_open(Ok(info)),
+        Answer::Info(Err(e)) => return on_open(Err(e)),
+        _ => return on_open(Err(OpenError::EngineCrashed)),
     }
 
     // `base` is the document as last saved; `live` adds the unsaved annotations to it.
-    let mut base = document;
-    let mut live: Option<Document> = None;
+    let mut base = opened;
+    let mut live: Option<Doc> = None;
     let mut pending: Vec<Job> = Vec::new();
-    let mut history: Vec<Document> = Vec::new();
+    let mut history: Vec<Doc> = Vec::new();
     let mut hidden: Option<Vec<crate::ObjRef>> = None;
-    // Pages are drawn in a renderer process when the app provides one (see `isolate`).
-    let mut renderer: Option<crate::isolate::Renderer> = None;
-    let mut version: u64 = 0;
     loop {
-        version += 1;
-        let current = live.as_ref().unwrap_or(&base);
-        // What's shown: the document with the layers the user hid, when they've chosen.
-        let with_layers = hidden.as_ref().and_then(|h| current.with_layers_hidden(h).ok());
-        let view = with_layers.as_ref().unwrap_or(current);
-        let cache = view.new_cache();
-        let mut draw = |index: usize, scale: f32| {
-            if renderer.is_none() {
-                renderer = crate::isolate::Renderer::start();
-            }
-            match renderer.as_mut() {
-                Some(r) => r.render(view, version, index, scale).unwrap_or_else(|()| {
-                    // Crashed, stuck or out of memory: a fresh one draws the next page.
-                    renderer = None;
-                    Err(RenderError::EngineCrashed)
-                }),
-                None => view.render_page(&cache, index, scale),
-            }
-        };
-        // Render from `current` until an edit or save needs to swap documents.
+        let current = live.as_ref().unwrap_or(&base).clone();
+        let shown = hidden.as_deref();
+        // Asks about the document as it is now; the answer is always the kind asked for.
+        macro_rules! ask {
+            ($op:expr, $kind:ident) => {
+                match engine.call(&current, shown, $op) {
+                    Answer::$kind(answer) => answer,
+                    _ => unreachable!("an answer of another kind"),
+                }
+            };
+        }
+        // Serve from `current` until an edit or save needs to swap documents.
         let swap = loop {
             if pending.is_empty() {
                 match queue.recv() {
@@ -699,59 +707,59 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     rotation,
                     reply,
                 } => {
-                    let page = draw(job.index, scale);
+                    let page = engine.render(&current, shown, job.index, scale);
                     reply(page.map(|p| p.rotated(rotation)));
                 }
-                Reply::Text(reply) => reply(view.page_text(job.index)),
+                Reply::Text(reply) => reply(ask!(Op::Text(job.index), Text)),
                 Reply::Save(path, reply) => {
-                    let result = write_atomically(&path, current.bytes()).map(|()| current.comments());
+                    let result =
+                        write_atomically(&path, &current.bytes).map(|()| ask!(Op::Comments, Comments));
                     let saved = result.is_ok();
                     reply(result);
                     if saved && live.is_some() {
                         break Swap::Promote;
                     }
                 }
-                Reply::Print(reply) => reply(current.print_copy()),
+                Reply::Print(reply) => reply(ask!(Op::PrintCopy, Bytes)),
                 Reply::ExportComments(path, format, name, reply) => {
-                    reply(write_atomically(&path, &current.comments_file(format, &name)));
+                    reply(
+                        ask!(Op::CommentsFile(format, name), Bytes)
+                            .and_then(|bytes| write_atomically(&path, &bytes)),
+                    );
                 }
                 Reply::Compact(path, pictures, reply) => {
-                    reply(current.compacted(pictures).and_then(|bytes| {
+                    reply(ask!(Op::Compacted(pictures), Bytes).and_then(|bytes| {
                         write_atomically(&path, &bytes)?;
-                        Ok((current.bytes().len() as u64, bytes.len() as u64))
+                        Ok((current.bytes.len() as u64, bytes.len() as u64))
                     }))
                 }
-                Reply::Pictures(page, reply) => reply(current.pictures(page)),
-                Reply::Leftovers(areas, reply) => reply(current.leftovers(&areas)),
-                Reply::DetectFields(reply) => reply(current.detect_fields()),
-                Reply::Preflight(standard, reply) => reply(match standard {
-                    crate::Standard::PdfA => current.preflight(),
-                    crate::Standard::PdfX => current.preflight_x(),
-                }),
-                Reply::Accessibility(reply) => reply(current.accessibility()),
-                Reply::Archive(path, reply) => reply(current.archived().and_then(|bytes| {
-                    let copy = current.reopen(bytes).map_err(|_| SaveError::Damaged)?;
-                    write_atomically(&path, copy.bytes())?;
-                    Ok(copy.preflight())
+                Reply::Pictures(page, reply) => reply(ask!(Op::Pictures(page), Boxes)),
+                Reply::Leftovers(areas, reply) => reply(ask!(Op::Leftovers(areas), Leftovers)),
+                Reply::DetectFields(reply) => reply(ask!(Op::DetectFields, Fields)),
+                Reply::Preflight(standard, reply) => reply(ask!(Op::Preflight(standard), Findings)),
+                Reply::Accessibility(reply) => reply(ask!(Op::Accessibility, Access)),
+                Reply::Archive(path, reply) => {
+                    reply(ask!(Op::Archived, Archived).and_then(|(bytes, findings)| {
+                        write_atomically(&path, &bytes)?;
+                        Ok(findings)
+                    }))
+                }
+                Reply::Tag(path, reply) => reply(ask!(Op::Tagged, Tagged).and_then(|(bytes, findings)| {
+                    write_atomically(&path, &bytes)?;
+                    Ok(findings)
                 })),
-                Reply::Tag(path, reply) => reply(current.tagged().and_then(|bytes| {
-                    let copy = current.reopen(bytes).map_err(|_| SaveError::Damaged)?;
-                    write_atomically(&path, copy.bytes())?;
-                    Ok(copy.accessibility())
-                })),
+                // Signing needs the key, which may be in the system's certificate store, so
+                // it's done here. Only on the user's request, for a file they chose to sign.
                 Reply::Sign(job, reply) => reply(
                     current
-                        .signed_by(&job.id, &job.options)
+                        .parse()
+                        .map_err(|_| SaveError::Damaged)
+                        .and_then(|doc| doc.signed_by(&job.id, &job.options))
                         .and_then(|bytes| write_atomically(&job.path, &bytes)),
                 ),
-                Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
-                Reply::Compare(path, reply) => reply(match Document::open(&path, None, current.limits()) {
-                    Ok(other) => current
-                        .compare_with(&other)
-                        .map_err(|e| format!("The files couldn't be compared: {e}")),
-                    Err(OpenError::PasswordRequired) => {
-                        Err("That file is password protected, so it can't be compared yet.".into())
-                    }
+                Reply::ReadComments(bytes, reply) => reply(ask!(Op::CommentsFromFile(bytes), Annotations)),
+                Reply::Compare(path, reply) => reply(match Document::read_file(&path, current.limits) {
+                    Ok(bytes) => ask!(Op::Compare(bytes), Changes),
                     Err(e) => Err(format!("That file couldn't be opened: {e}")),
                 }),
                 Reply::Snapshot {
@@ -761,28 +769,36 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     area,
                     reply,
                 } => {
-                    let page = draw(page, scale);
+                    let page = engine.render(&current, shown, page, scale);
                     reply(page.map(|p| p.rotated(rotation).cropped(area)));
                 }
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
                 Reply::Layers(list) => break Swap::Layers(list),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
-                Reply::Export(export, reply) => reply(export_pages(view, &cache, &export)),
-                Reply::Attachment(index, path, reply) => reply(match current.attachment(index) {
-                    Some(bytes) => write_atomically(&path, &bytes),
-                    None => Err(SaveError::Io("the attached file couldn't be read".into())),
-                }),
+                Reply::Export(export, reply) => {
+                    let paths = crate::remote::destinations(&export);
+                    reply(ask!(Op::Export(export), Files).and_then(|files| {
+                        if files.len() != paths.len() {
+                            return Err(SaveError::EngineCrashed);
+                        }
+                        paths
+                            .iter()
+                            .zip(&files)
+                            .try_for_each(|(path, bytes)| write_atomically(path, bytes))
+                    }));
+                }
+                Reply::Attachment(index, path, reply) => {
+                    reply(
+                        ask!(Op::Attachment(index), Bytes).and_then(|bytes| write_atomically(&path, &bytes)),
+                    );
+                }
                 Reply::Extract(files, reply) => {
-                    reply(files.iter().try_for_each(|(pages, path)| {
-                        current
-                            .rearranged(pages, &[])
-                            .and_then(|bytes| write_atomically(path, &bytes))
+                    reply(files.into_iter().try_for_each(|(pages, path)| {
+                        ask!(Op::Rearranged(pages), Bytes).and_then(|bytes| write_atomically(&path, &bytes))
                     }));
                 }
             }
         };
-        drop(draw);
-        drop(cache);
         match swap {
             Swap::Layers(list) => hidden = list,
             Swap::Promote => {
@@ -792,61 +808,30 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
             }
             Swap::Pages(edit, reply) => {
                 let undoing = matches!(edit, PageEdit::Undo);
-                let current = live.as_ref().unwrap_or(&base);
                 let result = match edit {
-                    PageEdit::Undo => match history.pop() {
-                        Some(earlier) => Ok(earlier),
-                        None => Err(SaveError::Damaged),
-                    },
-                    PageEdit::Plan(plan) => current
-                        .rearranged(&plan, &[])
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::InsertFile { at, path } => insert_file(current, at, &path),
-                    PageEdit::Crop { pages, margins } => current
-                        .cropped(&pages, margins)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::HeaderFooter { pages, marks } => current
-                        .with_header_footer(&pages, &marks)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Protect(protection) => {
-                        current
-                            .protected(protection.as_ref())
-                            .and_then(|(bytes, password)| {
-                                Document::from_bytes(bytes, Some(&password), current.limits())
-                                    .map_err(|_| SaveError::Damaged)
-                            })
+                    PageEdit::Undo => {
+                        history.pop().ok_or(SaveError::Damaged).and_then(|earlier| {
+                            match engine.call(&earlier, None, Op::Info) {
+                                Answer::Info(Ok(info)) => Ok((earlier, info)),
+                                _ => Err(SaveError::Damaged),
+                            }
+                        })
                     }
-                    PageEdit::Strengthen => current.strengthened().and_then(|(bytes, password)| {
-                        Document::from_bytes(bytes, Some(&password), current.limits())
-                            .map_err(|_| SaveError::Damaged)
-                    }),
-                    PageEdit::Clean(clean) => current
-                        .cleaned(clean)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Flatten { comments, fields } => current
-                        .flattened(comments, fields)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::FormFields { add, remove } => current
-                        .with_form_fields(&add, &remove)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Pictures { page, changes } => current
-                        .with_pictures_changed(page, &changes)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Redact { areas, scrub } => current
-                        .redacted(&areas, &scrub)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Add { page, additions } => current
-                        .with_additions(page, &additions)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Recognise(pages) => current
-                        .recognised(&pages)
-                        .and_then(|(bytes, _, _)| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Watermark { pages, mark } => current
-                        .with_watermark(&pages, &mark)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
+                    PageEdit::InsertFile { at, path } => {
+                        let name = path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned();
+                        match Document::read_file(&path, current.limits) {
+                            Ok(bytes) => revised(&current, ask!(Op::InsertFile { at, bytes, name }, Revised)),
+                            Err(e) => Err(SaveError::Io(format!("couldn't open “{name}”: {e}"))),
+                        }
+                    }
+                    edit => revised(&current, ask!(Op::Edit(edit), Revised)),
                 };
-                match result.and_then(|doc| Ok((doc.info().map_err(|_| SaveError::Damaged)?, doc))) {
-                    Ok((info, doc)) => {
+                match result {
+                    Ok((doc, info)) => {
                         // Unsaved changes are now part of the document; undo goes back to it
                         // as it was, those changes included.
                         let before = std::mem::replace(&mut base, doc);
@@ -869,35 +854,22 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     continue;
                 }
                 // The password goes along: an encrypted file stays encrypted with it.
-                let result = base
-                    .with_changes(&list)
-                    .and_then(|bytes| base.reopen(bytes).map_err(|_| SaveError::Damaged));
-                match result {
-                    Ok(doc) => {
-                        live = Some(doc);
+                match engine.call(&base, None, Op::WithChanges(list)) {
+                    Answer::Revised(Ok(revision)) => {
+                        live = Some(base.revised(revision.bytes));
                         reply(Ok(()));
                     }
-                    Err(e) => reply(Err(e)),
+                    Answer::Revised(Err(e)) => reply(Err(e)),
+                    _ => reply(Err(SaveError::EngineCrashed)),
                 }
             }
         }
     }
 }
 
-/// `current` with every page of the file at `path` inserted before page `at`.
-fn insert_file(current: &Document, at: usize, path: &Path) -> Result<Document, SaveError> {
-    let other = Document::open(path, None, current.limits()).map_err(|e| {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        SaveError::Io(format!("couldn't open “{name}”: {e}"))
-    })?;
-    let own = current.page_count();
-    let at = at.min(own);
-    let page = |doc, index| PageSource::Page { doc, index, turns: 0 };
-    let plan: Vec<PageSource> = (0..at)
-        .map(|i| page(0, i))
-        .chain((0..other.page_count()).map(|i| page(1, i)))
-        .chain((at..own).map(|i| page(0, i)))
-        .collect();
-    let bytes = current.rearranged(&plan, &[&other])?;
-    current.reopen(bytes).map_err(|_| SaveError::Damaged)
+/// The new version an edit of `current` made, and how it's laid out.
+fn revised(current: &Doc, revision: Result<Revision, SaveError>) -> Result<(Doc, DocumentInfo), SaveError> {
+    let revision = revision?;
+    let doc = Doc::new(revision.bytes, revision.password, current.limits);
+    Ok((doc, revision.info))
 }

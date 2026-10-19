@@ -5,7 +5,7 @@
 //! same formatting itself.
 
 /// How a text field's value is shown and checked.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Format {
     Number {
         decimals: u8,

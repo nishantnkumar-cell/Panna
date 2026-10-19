@@ -26,7 +26,7 @@ const DESCENT: f64 = -200.0;
 
 /// A character's box in page points: origin at the top left of the page as displayed at
 /// rotation 0 (the page's own `/Rotate` already applied), y growing downwards.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct TextBox {
     pub x0: f32,
     pub y0: f32,
@@ -62,7 +62,7 @@ impl TextBox {
 }
 
 /// The text of one page in content order, with one box per `char`.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PageText {
     chars: Vec<char>,
     boxes: Vec<TextBox>,
@@ -83,7 +83,7 @@ pub(crate) struct Line {
 }
 
 /// A paragraph of a page's text (see [`PageText::paragraph_at`]).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Paragraph {
     pub text: String,
     pub area: TextBox,
@@ -93,7 +93,7 @@ pub struct Paragraph {
 }
 
 /// Options for [`PageText::find`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FindOptions {
     pub match_case: bool,
     pub whole_word: bool,

@@ -39,7 +39,7 @@ pub(crate) use tag::{describe, tag};
 use crate::{CommentId, FieldValue, ObjRef};
 
 /// Unsaved changes to a document's comments.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Changes {
     /// New annotations, oldest first.
     pub add: Vec<Annotation>,
@@ -55,7 +55,7 @@ impl Changes {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SaveError {
     /// The file's structure is too damaged to append to safely.
     Damaged,
@@ -515,7 +515,7 @@ pub(crate) fn watermark(
 }
 
 /// A change to a picture a page draws.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PictureChange {
     /// To this box, in the same space as [`crate::TextBox`] page text.
     Move(crate::TextBox),
@@ -555,7 +555,7 @@ pub(crate) fn page_shapes(pdf: &Pdf, page: usize) -> (Vec<crate::TextBox>, Vec<c
 }
 
 /// A form field to make.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NewField {
     pub page: usize,
     /// Where it goes, in the same space as [`crate::TextBox`] page text.
@@ -567,7 +567,7 @@ pub struct NewField {
     pub kind: NewFieldKind,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NewFieldKind {
     Text {
         multiline: bool,
@@ -583,7 +583,7 @@ pub enum NewFieldKind {
 }
 
 /// One button of a new radio group.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RadioButton {
     /// What the group's value is when this button is on.
     pub choice: String,
@@ -626,7 +626,7 @@ pub(crate) fn form_fields(
 
 /// Something added to a page itself, rather than as a comment. Places are in points from the
 /// top-left corner of the page as shown (the same space as [`crate::TextBox`]).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Addition {
     /// Lines of text in Helvetica, the first line's top-left corner at `at`.
     Text {

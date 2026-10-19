@@ -14,19 +14,19 @@ use hayro::{PixmapSettings, RenderCache, RenderSettings};
 use crate::Limits;
 
 /// Size of a page in PDF points (1/72 inch), after applying the page's rotation.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PageSize {
     pub width: f32,
     pub height: f32,
 }
 
 /// What the UI needs to lay out a document before any page is rendered.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DocumentInfo {
     pub pages: Vec<PageSize>,
     pub title: Option<String>,
     /// Label/value pairs for a document properties dialog, in display order.
-    pub properties: Vec<(&'static str, String)>,
+    pub properties: Vec<(std::borrow::Cow<'static, str>, String)>,
     /// Bookmarks, flattened in reading order.
     pub outline: Vec<crate::OutlineItem>,
     /// Comments already in the file, in page order.
@@ -49,7 +49,7 @@ pub struct DocumentInfo {
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RenderedPage {
     pub width: u32,
     pub height: u32,
@@ -126,7 +126,7 @@ impl fmt::Debug for RenderedPage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OpenError {
     Io(String),
     TooLarge {
@@ -199,7 +199,7 @@ impl fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RenderError {
     NoSuchPage(usize),
     BadPageSize,
@@ -219,7 +219,7 @@ impl fmt::Display for RenderError {
 impl std::error::Error for RenderError {}
 
 /// Where text about to be redacted still appears outside the pages.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Leftovers {
     /// The redacted text, one phrase per marked area, in lower case.
     pub phrases: Vec<String>,
@@ -242,6 +242,11 @@ pub struct Document {
 impl Document {
     /// Reads and parses a file, refusing anything over `limits.max_file_bytes`.
     pub fn open(path: &Path, password: Option<&str>, limits: Limits) -> Result<Self, OpenError> {
+        Self::from_bytes(Self::read_file(path, limits)?, password, limits)
+    }
+
+    /// The bytes of the file at `path`, if it's within `limits`.
+    pub(crate) fn read_file(path: &Path, limits: Limits) -> Result<Vec<u8>, OpenError> {
         let file = File::open(path).map_err(|e| OpenError::Io(e.to_string()))?;
         let len = file.metadata().map_err(|e| OpenError::Io(e.to_string()))?.len();
         if len > limits.max_file_bytes {
@@ -261,7 +266,7 @@ impl Document {
                 limit: limits.max_file_bytes,
             });
         }
-        Self::from_bytes(bytes, password, limits)
+        Ok(bytes)
     }
 
     /// Parses PDF bytes that are already in memory.
@@ -418,7 +423,7 @@ impl Document {
                 layers,
                 pages,
                 title,
-                properties,
+                properties: properties.into_iter().map(|(l, v)| (l.into(), v)).collect(),
                 outline,
                 comments,
             }

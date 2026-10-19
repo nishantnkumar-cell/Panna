@@ -1,6 +1,6 @@
 /// Resource caps applied to every document. They protect against files crafted to exhaust
 /// memory (huge page boxes, absurd page counts) rather than to exploit memory bugs.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Limits {
     /// Largest file that will be read into memory, in bytes.
     pub max_file_bytes: u64,

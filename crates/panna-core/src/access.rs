@@ -19,7 +19,7 @@ const MAX_PER_RULE: usize = 20;
 const BOOKMARKS_AFTER: usize = 20;
 
 /// What a rule is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum AccessRule {
     NotTagged,
     NoLanguage,
@@ -56,7 +56,7 @@ impl AccessRule {
 }
 
 /// One thing that makes the document harder to use with assistive technology.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AccessFinding {
     pub rule: AccessRule,
     /// Where or what, such as a field's name.

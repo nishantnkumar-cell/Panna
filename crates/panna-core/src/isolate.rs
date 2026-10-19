@@ -1,11 +1,13 @@
-//! Drawing pages in a separate process. The app starts a copy of itself with [`ARG`], which
+//! Reading PDFs in a separate process. The app starts a copy of itself with [`ARG`], which
 //! locks itself down (no files, no network, limited memory; see the panna-sandbox crate)
-//! and then [`serve`]s: it's sent the document's bytes and asked for pages, and sends back
-//! bitmaps. A bug in a decoder's `unsafe` code, a page that never finishes, or a page that
-//! eats memory then takes down only that process: the page shows as not drawn, and the next
-//! page starts a fresh one.
+//! and then [`serve`]s: it's sent the document's bytes and asked for pages, which it sends
+//! back as bitmaps, or for anything else the app needs of a document (see `remote`). A bug
+//! in a decoder's `unsafe` code, a request that never finishes, or one that eats memory then
+//! takes down only that process: the request fails, and the next one starts a fresh one.
 //!
-//! Messages both ways are a tag byte, a little-endian `u64` length and that many bytes.
+//! Messages both ways are a tag byte, a little-endian `u64` length and that many bytes;
+//! requests other than pages, and their answers, are postcard-encoded. Answers come from the
+//! locked-down process, so the app treats them as untrusted, like the PDF itself.
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
@@ -13,7 +15,8 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::time::Duration;
 
-use crate::{Document, Limits, RenderError, RenderedPage};
+use crate::remote::{Answer, Doc, Op};
+use crate::{Document, Limits, ObjRef, RenderError, RenderedPage};
 
 /// The argument that starts a renderer.
 pub const ARG: &str = "--panna-render";
@@ -22,6 +25,9 @@ pub const ARG: &str = "--panna-render";
 const PAGE_TIME: Duration = Duration::from_secs(30);
 /// How long a document may take to load in a renderer.
 const LOAD_TIME: Duration = Duration::from_secs(60);
+/// How long anything else asked of a document may take (recognising text in many pages,
+/// compacting a large file).
+const CALL_TIME: Duration = Duration::from_secs(15 * 60);
 
 const LOAD: u8 = 1;
 const RENDER: u8 = 2;
@@ -29,6 +35,8 @@ const PAGE: u8 = 3;
 const FAILED: u8 = 4;
 const LOADED: u8 = 5;
 const READY: u8 = 6;
+const CALL: u8 = 7;
+const ANSWER: u8 = 8;
 
 /// How long a renderer may take to start and check itself.
 const START_TIME: Duration = Duration::from_secs(15);
@@ -125,7 +133,8 @@ pub(crate) struct Renderer {
     _child: panna_sandbox::Contained,
     to: BufWriter<Box<dyn std::io::Write + Send>>,
     from: Receiver<std::io::Result<(u8, Vec<u8>)>>,
-    loaded: Option<u64>,
+    /// The version it has, and the layers hidden in it.
+    loaded: Option<(u64, Option<Vec<ObjRef>>)>,
 }
 
 impl Renderer {
@@ -153,8 +162,10 @@ impl Renderer {
         std::thread::Builder::new()
             .name("panna-renderer-reader".into())
             .spawn(move || {
-                // A bitmap no larger than the limits allow, and a message.
-                let max = Limits::default().max_bitmap_pixels.saturating_mul(4) + 64;
+                // A bitmap no larger than the limits allow, or a new version of a file.
+                let limits = Limits::default();
+                let max = (limits.max_bitmap_pixels.saturating_mul(4) + 64)
+                    .max(limits.max_file_bytes.saturating_mul(2));
                 loop {
                     let frame = read_frame(&mut stdout, max);
                     let failed = frame.is_err();
@@ -184,24 +195,66 @@ impl Renderer {
         }
     }
 
-    /// Draws a page of `doc` (version `version`); `Err(())` when the renderer has to go.
+    /// Sends `doc`, shown with `hidden` layers hidden, unless it has it already. `Err(true)`
+    /// when the renderer has to go, `Err(false)` when it couldn't open the document.
+    fn load(&mut self, doc: &Doc, hidden: Option<&[ObjRef]>) -> Result<(), bool> {
+        let key = (doc.version, hidden.map(<[ObjRef]>::to_vec));
+        if self.loaded.as_ref() == Some(&key) {
+            return Ok(());
+        }
+        self.loaded = None;
+        let password = doc.password.as_bytes();
+        let limits = limits_bytes(&doc.limits);
+        let len = (password.len() as u64).to_le_bytes();
+        let hidden = postcard::to_stdvec(&key.1).map_err(|_| true)?;
+        let hidden_len = (hidden.len() as u64).to_le_bytes();
+        write_frame(
+            &mut self.to,
+            LOAD,
+            &[&len, password, &limits, &hidden_len, &hidden, &doc.bytes],
+        )
+        .map_err(|_| true)?;
+        match self.wait(LOAD_TIME).map_err(|()| true)? {
+            (LOADED, _) => {
+                self.loaded = Some(key);
+                Ok(())
+            }
+            (FAILED, _) => Err(false),
+            _ => Err(true),
+        }
+    }
+
+    /// Does `op` on `doc`; `Err(true)` when the renderer has to go, `Err(false)` when the
+    /// document couldn't be read or the request failed.
+    pub(crate) fn call(&mut self, doc: &Doc, hidden: Option<&[ObjRef]>, op: &Op) -> Result<Answer, bool> {
+        self.load(doc, hidden)?;
+        let request = postcard::to_stdvec(op).map_err(|_| false)?;
+        write_frame(&mut self.to, CALL, &[&request]).map_err(|_| true)?;
+        let time = match op {
+            Op::Text(_) => PAGE_TIME,
+            Op::Info => LOAD_TIME,
+            _ => CALL_TIME,
+        };
+        match self.wait(time).map_err(|()| true)? {
+            (ANSWER, body) => postcard::from_bytes(&body).map_err(|_| true),
+            (FAILED, _) => Err(false),
+            _ => Err(true),
+        }
+    }
+
+    /// Draws page `index` of `doc`, shown with `hidden` layers hidden; `Err(())` when the
+    /// renderer has to go.
     pub(crate) fn render(
         &mut self,
-        doc: &Document,
-        version: u64,
+        doc: &Doc,
+        hidden: Option<&[ObjRef]>,
         index: usize,
         scale: f32,
     ) -> Result<Result<RenderedPage, RenderError>, ()> {
-        if self.loaded != Some(version) {
-            self.loaded = None;
-            let password = doc.password().as_bytes();
-            let limits = limits_bytes(&doc.limits());
-            let len = (password.len() as u64).to_le_bytes();
-            write_frame(&mut self.to, LOAD, &[&len, password, &limits, doc.bytes()]).map_err(|_| ())?;
-            match self.wait(LOAD_TIME)? {
-                (LOADED, _) => self.loaded = Some(version),
-                _ => return Err(()),
-            }
+        match self.load(doc, hidden) {
+            Ok(()) => {}
+            Err(false) => return Ok(Err(RenderError::EngineCrashed)),
+            Err(true) => return Err(()),
         }
         let request = [
             (index as u64).to_le_bytes(),
@@ -254,20 +307,30 @@ pub fn serve() {
     let mut next = read_frame(&mut input, max_load);
     loop {
         let Ok((LOAD, mut body)) = next else { return };
-        let doc = numbers::<1>(&body).and_then(|([pw_len], rest)| {
+        let loaded = numbers::<1>(&body).and_then(|([pw_len], rest)| {
             let (password, rest) = rest.split_at_checked(usize::try_from(pw_len).ok()?)?;
             let password = std::str::from_utf8(password).ok()?;
-            let (limits, bytes) = limits_from(rest)?;
-            std::panic::catch_unwind(|| Document::from_bytes(bytes.to_vec(), Some(password), limits).ok())
-                .ok()
-                .flatten()
+            let (limits, rest) = limits_from(rest)?;
+            let ([hidden_len], rest) = numbers::<1>(rest)?;
+            let (hidden, bytes) = rest.split_at_checked(usize::try_from(hidden_len).ok()?)?;
+            let hidden: Option<Vec<ObjRef>> = postcard::from_bytes(hidden).ok()?;
+            std::panic::catch_unwind(|| {
+                let doc = Document::from_bytes(bytes.to_vec(), Some(password), limits).ok()?;
+                let view = match &hidden {
+                    Some(hidden) => Some(doc.with_layers_hidden(hidden).ok()?),
+                    None => None,
+                };
+                Some((doc, view))
+            })
+            .ok()
+            .flatten()
         });
         // The document keeps its own copy of the password, which it wipes when dropped.
         let password_end = numbers::<1>(&body).map_or(0, |([pw_len], _)| 8 + pw_len as usize);
         if let Some(password) = body.get_mut(8..password_end) {
             zeroize::Zeroize::zeroize(password);
         }
-        let Some(doc) = doc else {
+        let Some((doc, view)) = loaded else {
             let _ = write_frame(&mut output, FAILED, &[&[3]]);
             next = read_frame(&mut input, max_load);
             continue;
@@ -276,36 +339,56 @@ pub fn serve() {
             return;
         }
         drop(body);
-        let cache = doc.new_cache();
+        let view = view.as_ref().unwrap_or(&doc);
+        let cache = view.new_cache();
         next = loop {
             let frame = read_frame(&mut input, max_load);
-            let Ok((RENDER, request)) = frame else { break frame };
-            let Some(([index, scale], _)) = numbers::<2>(&request) else {
-                return;
-            };
-            let scale = f32::from_bits(u32::try_from(scale).unwrap_or(0));
-            let page = usize::try_from(index)
-                .map_err(|_| RenderError::NoSuchPage(usize::MAX))
-                .and_then(|index| doc.render_page(&cache, index, scale));
-            let sent = match page {
-                Ok(page) => {
-                    let head = [
-                        u64::from(page.width).to_le_bytes(),
-                        u64::from(page.height).to_le_bytes(),
-                    ]
-                    .concat();
-                    write_frame(&mut output, PAGE, &[&head, &page.rgba])
+            let sent = match frame {
+                Ok((RENDER, request)) => {
+                    let Some(([index, scale], _)) = numbers::<2>(&request) else {
+                        return;
+                    };
+                    let scale = f32::from_bits(u32::try_from(scale).unwrap_or(0));
+                    let page = usize::try_from(index)
+                        .map_err(|_| RenderError::NoSuchPage(usize::MAX))
+                        .and_then(|index| view.render_page(&cache, index, scale));
+                    send_page(&mut output, page)
                 }
-                Err(RenderError::NoSuchPage(i)) => {
-                    write_frame(&mut output, FAILED, &[&[1], &(i as u64).to_le_bytes()])
+                Ok((CALL, request)) => {
+                    let Ok(op) = postcard::from_bytes::<Op>(&request) else {
+                        return;
+                    };
+                    drop(request);
+                    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        postcard::to_stdvec(&crate::remote::perform(&doc, view, &cache, op))
+                    }));
+                    match answer {
+                        Ok(Ok(answer)) => write_frame(&mut output, ANSWER, &[&answer]),
+                        _ => write_frame(&mut output, FAILED, &[&[0]]),
+                    }
                 }
-                Err(RenderError::BadPageSize) => write_frame(&mut output, FAILED, &[&[2]]),
-                Err(_) => write_frame(&mut output, FAILED, &[&[0]]),
+                _ => break frame,
             };
             if sent.is_err() {
                 return;
             }
         };
+    }
+}
+
+fn send_page(output: &mut impl Write, page: Result<RenderedPage, RenderError>) -> std::io::Result<()> {
+    match page {
+        Ok(page) => {
+            let head = [
+                u64::from(page.width).to_le_bytes(),
+                u64::from(page.height).to_le_bytes(),
+            ]
+            .concat();
+            write_frame(output, PAGE, &[&head, &page.rgba])
+        }
+        Err(RenderError::NoSuchPage(i)) => write_frame(output, FAILED, &[&[1], &(i as u64).to_le_bytes()]),
+        Err(RenderError::BadPageSize) => write_frame(output, FAILED, &[&[2]]),
+        Err(_) => write_frame(output, FAILED, &[&[0]]),
     }
 }
 

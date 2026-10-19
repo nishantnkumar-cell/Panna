@@ -667,7 +667,7 @@ fn page_box_id() -> iced::widget::Id {
 fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
     let rows = info.properties.iter().map(|(label, value)| {
         row![
-            text(*label).width(110).style(text::secondary),
+            text(label.as_ref()).width(110).style(text::secondary),
             text(value.as_str()).width(Fill)
         ]
         .spacing(12)

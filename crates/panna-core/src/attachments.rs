@@ -13,7 +13,7 @@ const MAX_NODES: usize = 10_000;
 const MAX_FILES: usize = 10_000;
 
 /// An attached file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Attachment {
     /// Its file name.
     pub name: String,

@@ -19,7 +19,7 @@ use super::lex;
 use crate::ObjRef;
 
 /// Where one page of the new file comes from.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PageSource {
     /// Page `index` of document `doc` (0 is the document being changed), turned clockwise by
     /// `turns` quarter turns.
@@ -292,7 +292,7 @@ pub(crate) struct Extra {
 }
 
 /// Hidden information to leave out of the new file.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cleanup {
     /// The document information (title, author, dates, software) and XMP metadata.
     pub metadata: bool,

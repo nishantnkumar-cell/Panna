@@ -322,7 +322,7 @@ impl Crypt {
 }
 
 /// Password protection to give a file: AES-256 (revision 6, ISO 32000-2).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Protection {
     /// Needed to open the file; empty opens it without one.
     pub open_password: zeroize::Zeroizing<String>,

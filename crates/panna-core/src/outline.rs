@@ -11,7 +11,7 @@ use hayro::hayro_syntax::object::{Array, Dict, MaybeRef, Object, ObjectIdentifie
 use crate::document::decode_text_string;
 
 /// One bookmark. `depth` 0 is a top-level entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OutlineItem {
     pub title: String,
     pub depth: u16,

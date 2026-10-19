@@ -38,7 +38,10 @@ rsa = { version = "0.9", default-features = false, features = ["std", "sha2"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 sha1 = "0.10"
 # Passwords and file keys are wiped from memory when dropped.
-zeroize = "1"
+zeroize = { version = "1", features = ["serde"] }
+# Requests and replies between the app and its locked-down document process (see isolate).
+serde = { version = "1", features = ["derive", "rc"] }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 # Recognising text in scanned pages (OCR), offline, with the models in models/.
 ocrs = { version = "0.13", default-features = false, features = ["rten"] }
 rten = { version = "0.26", default-features = false, features = ["rten_format"] }

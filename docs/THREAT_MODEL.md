@@ -61,7 +61,7 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 | Threat | Status | How |
 |---|---|---|
 | Memory bugs in PDF parsing (the main source of PDF-reader CVEs) | Mitigated | `panna` and `panna-core` `#![forbid(unsafe_code)]`. The PDF engine is pure Rust: hayro, hayro-interpret, hayro-jpeg2000, hayro-jbig2, hayro-ccitt, hayro-cmap, skrifa and read-fonts (fonts), vello_cpu, png, miniz_oxide and roxmltree all forbid `unsafe` |
-| Memory bugs in the `unsafe` code that untrusted data still reaches | Partly | Checked by reading each crate's source. hayro's SIMD image scaling (`pic-scale`) is **turned off in this review**, for about 25 ms more per full-page photo. What remains: zune-jpeg's SIMD kernels (IDCT, colour conversion, upsampling), switched on by the `image` crate's defaults, which can't be overridden; hayro-syntax's `unsafe` feature (memchr, flate2 over miniz_oxide, JBIG2 SIMD), which hayro-interpret always enables; and one documented lifetime transmute in hayro-syntax. All are widely used and fuzzed upstream, and our fuzzers reach them. Pages on screen are now drawn in a locked-down renderer process (section 7), so a bug there can't reach files or the network on Linux, Windows (AppContainer) or macOS (Seatbelt). Text extraction, export and editing still parse in the app's own process |
+| Memory bugs in the `unsafe` code that untrusted data still reaches | Partly | Checked by reading each crate's source. hayro's SIMD image scaling (`pic-scale`) is **turned off in this review**, for about 25 ms more per full-page photo. What remains: zune-jpeg's SIMD kernels (IDCT, colour conversion, upsampling), switched on by the `image` crate's defaults, which can't be overridden; hayro-syntax's `unsafe` feature (memchr, flate2 over miniz_oxide, JBIG2 SIMD), which hayro-interpret always enables; and one documented lifetime transmute in hayro-syntax. All are widely used and fuzzed upstream, and our fuzzers reach them. PDF data is now parsed in a locked-down process (section 7), so a bug there can't reach files or the network on Linux, Windows (AppContainer) or macOS (Seatbelt). Only signing still parses in the app's own process |
 | Memory bugs in other dependencies (GPU stack, windowing, OS dialogs) | Accepted | They don't see PDF data, only the app's own UI and bitmaps already bounded by `Limits` |
 | PDF JavaScript, Launch and Run actions, auto-opening attachments | Mitigated | Not supported at all. Form calculations are evaluated without a script engine (`calc.rs`). Link reading keeps only page jumps and http/https/mailto (`links.rs`) |
 | Opening a link runs something else | Mitigated | Only http, https and mailto with no quotes, spaces or control characters (`safe_uri`); the user confirms; the address is one argument, never a shell; `rundll32` is run by full System32 path |
@@ -139,19 +139,24 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 
 ## 7. Open items, in priority order
 
-1. **Process isolation: done for drawing pages on screen; still to do for the rest.** The app
-   starts a copy of itself as a renderer (`panna_core::isolate`), which locks itself down
-   before reading PDF data (`panna-sandbox`): on Linux, Landlock takes away all file access,
-   seccomp refuses sockets, starting programs and reaching into other processes, and the
-   address space is capped at 4 GB; on Windows it starts in an AppContainer with no
-   capabilities (no network, no access to the user's files; it falls back to low integrity
-   if Windows refuses the container) and joins a job object with a 4 GB memory cap, no
-   child processes and no clipboard or desktop access; on
-   macOS the system sandbox (Seatbelt) denies everything except drawing: no files, network,
-   other services or programs. It draws a
-   test page once locked down; if that fails, pages are drawn in the app as before. Each page
-   has 30 seconds. Still in the app's process: text extraction, thumbnails' text, export,
-   printing, editing and the checks. Moving those needs the same protocol for more requests.
+1. **Process isolation: done.** The app starts a copy of itself as a document process
+   (`panna_core::isolate`), which locks itself down before reading PDF data
+   (`panna-sandbox`): on Linux, Landlock takes away all file access, seccomp refuses
+   sockets, starting programs and reaching into other processes, and the address space is
+   capped at 4 GB; on Windows it starts in an AppContainer with no capabilities (no network,
+   no access to the user's files; it falls back to low integrity if Windows refuses the
+   container) and joins a job object with a 4 GB memory cap, no child processes and no
+   clipboard or desktop access; on macOS the system sandbox (Seatbelt) denies everything
+   except drawing: no files, network, other services or programs. The app keeps only each
+   version's bytes and sends them there (`panna_core::remote`): drawing pages, text, export,
+   printing, editing, the checks and comparing all parse in that process, and the app reads
+   and writes the files itself, at paths it chose, so the process can't pick where anything
+   is written. A page has 30 seconds and any other request 15 minutes; a process that
+   crashes, hangs or runs out of memory is replaced, and the request fails without the app
+   parsing the file instead. If no locked-down process can be started at all (it draws a
+   test page first), documents are parsed in the app as before. Still parsed in the app:
+   signing (the key may be in the system's certificate store), on the user's request only,
+   and form data files (FDF, XFDF), which are small, safe-Rust parsers.
 2. **Code-signed and notarised releases: set up, on hold at the owner's request**
    ([#37](https://github.com/nishantnkumar-cell/Panna/issues/37)). A version tag
    builds every platform into a draft release with `SHA256SUMS`. Windows builds are signed

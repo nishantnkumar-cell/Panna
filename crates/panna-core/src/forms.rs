@@ -23,7 +23,7 @@ const MAX_OPTIONS: usize = 2_000;
 const MAX_TEXT: usize = 32_000;
 
 /// What sort of field it is, with what it allows.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FieldKind {
     Text {
         multiline: bool,
@@ -43,7 +43,7 @@ pub enum FieldKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChoiceOption {
     /// The value saved in the file.
     pub export: String,
@@ -52,7 +52,7 @@ pub struct ChoiceOption {
 }
 
 /// A field's value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FieldValue {
     /// Text fields and choices.
     Text(String),
@@ -61,7 +61,7 @@ pub enum FieldValue {
 }
 
 /// One place a field shows on a page.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Widget {
     pub page: usize,
     pub annot: ObjRef,
@@ -71,7 +71,7 @@ pub struct Widget {
     pub on: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Field {
     /// The field's own object, which holds its value.
     pub id: ObjRef,

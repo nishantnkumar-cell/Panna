@@ -20,7 +20,7 @@ const MAX_TEXT: usize = 2_000;
 const MAX_AREAS: usize = 500;
 
 /// What sort of comment it is, for the list's icon and label.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CommentKind {
     Highlight,
     Underline,
@@ -82,7 +82,7 @@ impl CommentKind {
 }
 
 /// A review status set on a comment, as in Acrobat's review workflow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ReviewState {
     None,
     Accepted,
@@ -130,7 +130,7 @@ impl std::fmt::Display for ReviewState {
 }
 
 /// A PDF object reference, `number generation R`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ObjRef {
     pub number: u32,
     pub generation: u16,
@@ -146,7 +146,7 @@ impl ObjRef {
 }
 
 /// Which saved annotation a comment is, so it can be removed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CommentId {
     pub page: usize,
     pub annot: ObjRef,
@@ -155,7 +155,7 @@ pub struct CommentId {
 }
 
 /// One comment in the file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Comment {
     /// Set for comments saved in the file as their own objects (nearly all of them).
     pub id: Option<CommentId>,

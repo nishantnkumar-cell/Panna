@@ -15,7 +15,7 @@ use crate::ObjRef;
 pub(crate) const ROOM: usize = 24 * 1024;
 
 /// What the signature says besides who signed it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SignOptions {
     pub reason: String,
     pub location: String,
@@ -27,14 +27,14 @@ pub struct SignOptions {
 }
 
 /// A signature shown in a corner of a page: who signed, when, and why.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Visible {
     pub page: usize,
     pub corner: Corner,
 }
 
 /// A corner of the page as it's shown, whichever way the page is turned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Corner {
     TopLeft,
     TopRight,

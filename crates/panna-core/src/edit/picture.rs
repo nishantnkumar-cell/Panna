@@ -12,14 +12,14 @@ const MAX_SIDE: u32 = 8000;
 const MAX_BYTES: usize = 50 * 1024 * 1024;
 
 /// A picture for an image stamp, decoded and compressed for the PDF.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StampImage {
     pub width: u32,
     pub height: u32,
     data: Arc<Encoded>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Encoded {
     /// RGB samples, zlib-compressed.
     rgb: Vec<u8>,

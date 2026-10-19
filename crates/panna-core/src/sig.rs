@@ -27,7 +27,7 @@ const MAX_SIGNATURE_LEN: usize = 1 << 20;
 const MAX_DEPTH: u8 = 32;
 
 /// How a signature checks out.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SigStatus {
     /// The signed bytes are unchanged and the signature matches the certificate.
     Valid,
@@ -38,7 +38,7 @@ pub enum SigStatus {
 }
 
 /// A signature in the document.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Signature {
     pub field: String,
     pub page: Option<usize>,
@@ -64,7 +64,7 @@ pub struct Signature {
 }
 
 /// A certificate: whose it is, who issued it, and its SHA-256 fingerprint.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cert {
     pub name: String,
     /// Empty when the certificate issued itself.

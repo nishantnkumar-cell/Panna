@@ -164,7 +164,7 @@ fn old_protection_is_redone_with_aes_256_keeping_both_passwords() {
         let again = open(&bytes, "secret");
         let shown = again.info().unwrap().properties;
         assert!(
-            shown.contains(&("Password protection", "Yes (AES-256)".to_owned())),
+            shown.contains(&("Password protection".into(), "Yes (AES-256)".to_owned())),
             "{name}"
         );
         assert!(open(&bytes, "owner").info().is_ok());

@@ -18,7 +18,7 @@ use hayro::hayro_syntax::object::{Array, Dict, Name, Object, ObjectIdentifier, S
 use crate::Limits;
 
 /// Why a document was refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Refusal {
     /// One stream decodes to more than the limit.
     Stream { bytes: u64, limit: u64 },

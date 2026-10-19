@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::{Document, RenderedPage, SaveError};
 
 /// What pages become.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExportFormat {
     /// One text file, pages one after another.
     Text,
@@ -40,7 +40,7 @@ impl ExportFormat {
 }
 
 /// Pages to save and where.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Export {
     pub format: ExportFormat,
     /// Pictures' resolution, in dots per inch.

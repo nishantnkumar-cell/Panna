@@ -12,7 +12,7 @@ use crate::document::decode_text_string;
 const MAX_LAYERS: usize = 2_000;
 
 /// A layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Layer {
     pub id: ObjRef,
     pub name: String,

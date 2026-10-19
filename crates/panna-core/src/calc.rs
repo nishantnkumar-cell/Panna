@@ -10,7 +10,7 @@ const MAX_NAMES: usize = 200;
 /// How deep brackets nest at most.
 const MAX_DEPTH: usize = 32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CalcOp {
     Sum,
     Product,
@@ -19,7 +19,7 @@ pub enum CalcOp {
     Max,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Number(f64),
     /// A field's value, by its full name.
@@ -29,7 +29,7 @@ pub enum Expr {
     Op(Box<Expr>, char, Box<Expr>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Formula {
     /// One operation over these fields' values (a group's name takes in all its fields).
     Simple(CalcOp, Vec<String>),
@@ -38,7 +38,7 @@ pub enum Formula {
 }
 
 /// A field's value worked out from others.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Calculation {
     /// Its place in the form's calculation order: lower ones are worked out first.
     pub order: usize,

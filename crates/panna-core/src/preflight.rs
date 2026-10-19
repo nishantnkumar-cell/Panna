@@ -17,7 +17,7 @@ const MAX_DEPTH: u8 = 12;
 const MAX_PER_RULE: usize = 20;
 
 /// What a rule is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Rule {
     Encrypted,
     NoFileId,
@@ -38,7 +38,7 @@ pub enum Rule {
 }
 
 /// Which standard to check against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Standard {
     /// PDF/A-2b, for archiving.
     PdfA,
@@ -73,7 +73,7 @@ impl Rule {
 }
 
 /// One thing that doesn't meet PDF/A.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Finding {
     pub rule: Rule,
     /// Where or what, such as a font's name.

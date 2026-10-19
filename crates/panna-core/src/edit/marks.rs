@@ -11,7 +11,7 @@ use super::annot::{Color, literal, n, text_width, win_ansi};
 /// Text for the top and bottom of pages. In the text, `{page}` is the page's number,
 /// `{page:6}` the same padded with zeros to six digits (for Bates numbers), `{pages}` the
 /// number of pages marked and `{date}` today's date.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct HeaderFooter {
     /// The header's left, centre and right text, then the footer's.
     pub text: [String; 6],
@@ -92,7 +92,7 @@ pub(crate) struct Lines {
 
 /// Text across the middle of pages, such as DRAFT or CONFIDENTIAL, and a colour for the whole
 /// page behind its content. The text may use the fields headers and footers do.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Watermark {
     pub text: String,
     /// Text size in points; 0 or less fits the text to the page.
