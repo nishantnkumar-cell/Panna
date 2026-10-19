@@ -162,3 +162,17 @@ fn a_shown_signature_is_drawn_in_the_corner_as_the_page_is_shown() {
         );
     }
 }
+
+#[test]
+fn rsa_pss_signatures_check_out() {
+    let sigs = open("signed-rsa-pss.pdf").signatures();
+    assert_eq!(sigs[0].status, SigStatus::Valid);
+    assert_eq!(sigs[0].signer, "Test Signer");
+    // One changed byte in the signed part (the page's size) makes it fail.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/signed-rsa-pss.pdf");
+    let mut bytes = std::fs::read(path).unwrap();
+    let at = bytes.windows(15).position(|w| w == b"MediaBox [0 0 2").unwrap() + 14;
+    bytes[at] = b'3';
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    assert!(matches!(doc.signatures()[0].status, SigStatus::Invalid(_)));
+}

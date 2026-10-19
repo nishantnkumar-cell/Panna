@@ -3,6 +3,7 @@ self-signed certificate for "Test Signer" made on the spot.
 
 - signed-rsa.pdf: RSA 2048 with SHA-256 (adbe.pkcs7.detached)
 - signed-ecdsa.pdf: ECDSA P-256 with SHA-256 (ETSI.CAdES.detached)
+- signed-rsa-pss.pdf: RSA 2048 with RSA-PSS and SHA-256
 - signed-then-changed.pdf: signed-rsa.pdf with an incremental update added after signing
 - signer-rsa.p12, signer-ec.p12: certificate files for "Pat Example" to sign with, password
   "secret"
@@ -52,7 +53,7 @@ def pdf(subfilter):
     return out, start, end
 
 
-def sign(subfilter, key_args, name):
+def sign(subfilter, key_args, name, extra=()):
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
         key, cert, data, sig = (tmp / n for n in ("key.pem", "cert.pem", "data", "sig.der"))
@@ -67,7 +68,7 @@ def sign(subfilter, key_args, name):
         subprocess.run(
             ["openssl", "cms", "-sign", "-binary", "-in", str(data), "-signer", str(cert),
              "-inkey", str(key), "-outform", "DER", "-out", str(sig), "-md", "sha256",
-             "-nosmimecap"],
+             "-nosmimecap", *extra],
             check=True,
         )
         hexsig = sig.read_bytes().hex().upper().encode()
@@ -79,6 +80,8 @@ def sign(subfilter, key_args, name):
 
 rsa = sign(b"adbe.pkcs7.detached", ["-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"],
            "signed-rsa.pdf")
+sign(b"adbe.pkcs7.detached", ["-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"],
+     "signed-rsa-pss.pdf", ["-keyopt", "rsa_padding_mode:pss"])
 sign(b"ETSI.CAdES.detached", ["-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"],
      "signed-ecdsa.pdf")
 

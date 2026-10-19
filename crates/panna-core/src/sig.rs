@@ -9,7 +9,7 @@ use cms::cert::CertificateChoices;
 use cms::content_info::ContentInfo;
 use cms::signed_data::{SignedData, SignerIdentifier, SignerInfo};
 use der::asn1::{ObjectIdentifier, OctetString, UintRef};
-use der::{Decode, Encode, Reader, SliceReader};
+use der::{Decode, Encode, Reader, SliceReader, Tagged};
 use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::{Array, Dict, Name, Object};
 use num_bigint::BigUint;
@@ -306,6 +306,114 @@ fn rsa_verifies(n: &[u8], e: &[u8], sig: &[u8], hash: Hash, digest: &[u8]) -> bo
     em == expected
 }
 
+/// RSASSA-PSS's settings: the hash of the message, the hash MGF1 masks with, and the salt's
+/// length in bytes.
+struct Pss {
+    hash: Hash,
+    mask_hash: Hash,
+    salt: usize,
+}
+
+/// The RSASSA-PSS-params of a signature algorithm, with their defaults (SHA-1, MGF1 with
+/// SHA-1, 20 bytes of salt).
+fn pss_params(params: Option<&der::Any>) -> Result<Pss, String> {
+    let bad = || "The RSA-PSS settings can't be read".to_owned();
+    let mut pss = Pss {
+        hash: Hash::Sha1,
+        mask_hash: Hash::Sha1,
+        salt: 20,
+    };
+    let Some(params) = params else { return Ok(pss) };
+    let mut r = SliceReader::new(params.value()).map_err(|_| bad())?;
+    while !r.is_finished() {
+        let item = der::Any::decode(&mut r).map_err(|_| bad())?;
+        let der::Tag::ContextSpecific { number, .. } = item.tag() else {
+            return Err(bad());
+        };
+        let alg = || spki::AlgorithmIdentifierOwned::from_der(item.value()).map_err(|_| bad());
+        match number.value() {
+            0 => pss.hash = Hash::from_oid(&alg()?.oid).ok_or_else(bad)?,
+            1 => {
+                let mgf = alg()?;
+                if mgf.oid.to_string() != "1.2.840.113549.1.1.8" {
+                    return Err("The RSA-PSS signature masks in a way Panna doesn't know".into());
+                }
+                let inner = mgf
+                    .parameters
+                    .as_ref()
+                    .and_then(|p| p.decode_as::<spki::AlgorithmIdentifierOwned>().ok())
+                    .ok_or_else(bad)?;
+                pss.mask_hash = Hash::from_oid(&inner.oid).ok_or_else(bad)?;
+            }
+            2 => {
+                let salt = u32::from_der(item.value()).map_err(|_| bad())?;
+                pss.salt = usize::try_from(salt).map_err(|_| bad())?;
+            }
+            3 if u32::from_der(item.value()) == Ok(1) => {}
+            _ => return Err(bad()),
+        }
+    }
+    Ok(pss)
+}
+
+/// MGF1 with `hash`: `len` bytes of mask from `seed`.
+fn mgf1(hash: Hash, seed: &[u8], len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(len + 64);
+    let mut counter = 0u32;
+    while out.len() < len {
+        out.extend(hash.digest(&[seed, &counter.to_be_bytes()]));
+        counter += 1;
+    }
+    out.truncate(len);
+    out
+}
+
+/// RSASSA-PSS (RFC 8017, EMSA-PSS-VERIFY): whether `sig` is `digest`, the message's hash,
+/// signed with the key `(n, e)`.
+fn rsa_pss_verifies(n: &[u8], e: &[u8], sig: &[u8], pss: &Pss, digest: &[u8]) -> bool {
+    let n = BigUint::from_bytes_be(n);
+    let e = BigUint::from_bytes_be(e);
+    let k = n.to_bytes_be().len();
+    let s = BigUint::from_bytes_be(sig);
+    if sig.len() != k || s >= n || !(64..=2048).contains(&k) {
+        return false;
+    }
+    let em_bits = (n.bits() - 1) as usize;
+    let em_len = em_bits.div_ceil(8);
+    let m = s.modpow(&e, &n).to_bytes_be();
+    let h_len = digest.len();
+    if m.len() > em_len || em_len < h_len + pss.salt + 2 {
+        return false;
+    }
+    let mut em = vec![0u8; em_len - m.len()];
+    em.extend(m);
+    if em.last() != Some(&0xbc) {
+        return false;
+    }
+    let (masked, rest) = em.split_at(em_len - h_len - 1);
+    let h = rest.get(..h_len).unwrap_or_default();
+    // The bits above em_bits must be clear.
+    let spare = 8 * em_len - em_bits;
+    let top = 0xffu8.checked_shr(spare as u32).unwrap_or(0);
+    if masked.first().is_some_and(|b| b & !top != 0) {
+        return false;
+    }
+    let mut db: Vec<u8> = masked
+        .iter()
+        .zip(mgf1(pss.mask_hash, h, masked.len()))
+        .map(|(a, b)| a ^ b)
+        .collect();
+    if let Some(first) = db.first_mut() {
+        *first &= top;
+    }
+    let pad = em_len - h_len - pss.salt - 2;
+    if db.get(..pad).is_none_or(|z| z.iter().any(|&b| b != 0)) || db.get(pad) != Some(&1) {
+        return false;
+    }
+    let salt = db.get(pad + 1..).unwrap_or_default();
+    pss.hash.digest(&[&[0u8; 8], digest, salt]) == h
+}
+
 /// Whether `sig` over `message` was made with the certificate's key.
 fn verifies(
     cert: &Certificate,
@@ -328,14 +436,17 @@ fn verifies(
     let hash = named.unwrap_or(digest_hash);
     let digest = hash.digest(&[message]);
     match spki.algorithm.oid.to_string().as_str() {
-        "1.2.840.113549.1.1.1" => {
-            if alg == "1.2.840.113549.1.1.10" {
-                return Err("RSA-PSS signatures aren't supported yet".into());
-            }
+        // An RSA key, or one only for RSA-PSS.
+        "1.2.840.113549.1.1.1" | "1.2.840.113549.1.1.10" => {
             let mut reader = SliceReader::new(key).map_err(|e| e.to_string())?;
             let (n, e) = reader
                 .sequence(|r| Ok((UintRef::decode(r)?, UintRef::decode(r)?)))
                 .map_err(|_| "The certificate's RSA key can't be read".to_owned())?;
+            if alg == "1.2.840.113549.1.1.10" {
+                let pss = pss_params(info.signature_algorithm.parameters.as_ref())?;
+                let digest = pss.hash.digest(&[message]);
+                return Ok(rsa_pss_verifies(n.as_bytes(), e.as_bytes(), sig, &pss, &digest));
+            }
             Ok(rsa_verifies(n.as_bytes(), e.as_bytes(), sig, hash, &digest))
         }
         "1.2.840.10045.2.1" => {
