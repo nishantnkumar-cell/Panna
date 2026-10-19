@@ -3189,6 +3189,7 @@ dependencies = [
  "p12-keystore",
  "p256",
  "p384",
+ "panna-sandbox",
  "rand_core 0.6.4",
  "roxmltree",
  "rsa",

@@ -4,12 +4,17 @@
 //! - Linux: Landlock takes away every file-system access (files already open, such as the
 //!   pipes to the app, still work), seccomp refuses network sockets and starting programs,
 //!   and the address space is capped.
-//! - Windows: the process drops to low integrity, so it can't write to the user's files or
+//! - Windows: the app starts it in an AppContainer with no capabilities (see `spawn`), so it
+//!   can't read the user's files or use the network; failing that, it drops to low integrity, so it can't write to the user's files or
 //!   reach other programs' windows, and a job object caps its memory, stops it starting
 //!   programs and keeps it off the clipboard and desktop.
 //! - macOS: the address space is capped. The system sandbox isn't applied yet.
 //!
 //! Only the Windows calls need `unsafe`; they're in their own module.
+
+mod spawn;
+
+pub use spawn::{Contained, spawn, spawn_plain};
 
 /// Most memory the process may use, in bytes.
 pub const MEMORY: u64 = 4 * 1024 * 1024 * 1024;
@@ -128,8 +133,8 @@ mod system {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
     use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
     use windows_sys::Win32::Security::{
-        PSID, SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_MANDATORY_LABEL,
-        TOKEN_QUERY, TokenIntegrityLevel,
+        GetTokenInformation, PSID, SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
+        TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel, TokenIsAppContainer,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -147,7 +152,35 @@ mod system {
 
     pub(super) fn lock_down() -> Result<(), String> {
         job()?;
+        // An AppContainer (see `spawn`) already runs at low integrity, and more besides.
+        if in_app_container() {
+            return Ok(());
+        }
         low_integrity()
+    }
+
+    /// Whether this process was started in an AppContainer.
+    fn in_app_container() -> bool {
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: the current-process pseudo handle, and a place for the token handle.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            return false;
+        }
+        let mut is: u32 = 0;
+        let mut len = 0u32;
+        // SAFETY: an open token, and a u32 the size this class returns.
+        let ok = unsafe {
+            GetTokenInformation(
+                token,
+                TokenIsAppContainer,
+                (&raw mut is).cast(),
+                size_of::<u32>() as u32,
+                &mut len,
+            ) != 0
+        };
+        // SAFETY: opened above and not used again.
+        unsafe { CloseHandle(token) };
+        ok && is != 0
     }
 
     fn job() -> Result<(), String> {

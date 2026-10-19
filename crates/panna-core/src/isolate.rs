@@ -9,7 +9,6 @@
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::time::Duration;
@@ -122,8 +121,9 @@ fn limits_from(bytes: &[u8]) -> Option<(Limits, &[u8])> {
 
 /// A renderer process, and which document it has.
 pub(crate) struct Renderer {
-    child: Child,
-    to: BufWriter<ChildStdin>,
+    /// Kept so the process lives as long as this, and stops when this is dropped.
+    _child: panna_sandbox::Contained,
+    to: BufWriter<Box<dyn std::io::Write + Send>>,
     from: Receiver<std::io::Result<(u8, Vec<u8>)>>,
     loaded: Option<u64>,
 }
@@ -132,15 +132,21 @@ impl Renderer {
     /// Starts one, if the app said how.
     pub(crate) fn start() -> Option<Self> {
         let program = PROGRAM.get()?;
-        let mut child = Command::new(program)
-            .arg(ARG)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let to = BufWriter::new(child.stdin.take()?);
-        let mut stdout = BufReader::new(child.stdout.take()?);
+        let child = panna_sandbox::spawn(program, ARG).ok()?;
+        let contained = child.app_container;
+        match Self::ready(child) {
+            Some(renderer) => Some(renderer),
+            // An AppContainer can be refused things a plain process isn't (a policy, an
+            // older system); the renderer still locks itself down without one.
+            None if contained => Self::ready(panna_sandbox::spawn_plain(program, ARG).ok()?),
+            None => None,
+        }
+    }
+
+    /// The renderer `child` once it says it's ready, or `None` (and it stopped).
+    fn ready(mut child: panna_sandbox::Contained) -> Option<Self> {
+        let to = BufWriter::new(std::mem::replace(&mut child.stdin, Box::new(std::io::sink())));
+        let mut stdout = BufReader::new(std::mem::replace(&mut child.stdout, Box::new(std::io::empty())));
         // Replies are read on their own thread, so a renderer that stops answering can be
         // given up on.
         let (tx, from) = sync_channel(1);
@@ -159,7 +165,7 @@ impl Renderer {
             })
             .ok()?;
         let mut renderer = Self {
-            child,
+            _child: child,
             to,
             from,
             loaded: None,
@@ -229,13 +235,6 @@ impl Renderer {
             })),
             _ => Err(()),
         }
-    }
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
