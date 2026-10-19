@@ -144,7 +144,7 @@ work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-pr
 | Split by bookmarks or by file size | Pages | Done: in Extract pages, save a PDF for each top-level bookmark, or PDFs of at most a chosen size |
 | Comment summary: a printable list of comments with their pages | Comments | Done: the summary button in the Comments tab, or All tools, saves the comments by page as a PDF and opens it; highlights quote the words they mark |
 | Print with comments shown | Comments | Done: the print button in the Comments tab, or All tools, prints each commented page followed by a list of its comments |
-| Default PDF app on Windows and macOS, through an installer | Desktop | Unsigned for now; the Linux menu entry already registers for PDFs |
+| Default PDF app on Windows and macOS, through an installer | Desktop | Done, unsigned: a Windows installer that registers Panna and opens Default apps at its entry, and a macOS disk image; the Mac app now opens files from Finder. The Linux menu entry already registers for PDFs |
 | Preferences window | Desktop | |
 | Action Wizard: run the same steps (OCR, compress, watermark…) over a folder of PDFs | Batch | |
 

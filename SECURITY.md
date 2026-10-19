@@ -8,8 +8,8 @@ class and how it's handled, and what's still open) is in
 ## What we guarantee
 
 - **Memory safety in our own code.** `panna` and `panna-core` use `#![forbid(unsafe_code)]`.
-  The only `unsafe` we wrote is the Windows print dialog in `panna-print`, kept small and
-  commented.
+  The only `unsafe` we wrote is in `panna-print`: the Windows and macOS print dialogs, and on
+  macOS receiving the files opened from Finder. It is kept small and commented.
 - **No network access.** The app never connects to the internet. There are no updates, no
   telemetry and no cloud features. Links in documents open in your browser only after you
   agree.

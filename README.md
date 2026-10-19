@@ -56,6 +56,16 @@ CI builds Linux (x86_64 and ARM64), Windows (x86_64 and ARM64), a universal macO
 Flatpak on every push. The macOS app is ad-hoc signed. Opening it the first time needs
 right-click → Open until it's notarised with an Apple developer account.
 
+To make Panna the default PDF app:
+
+- **Windows:** run `panna-windows-…-setup.exe`. It installs for you alone, with no administrator
+  rights needed, and its last page opens Settings → Default apps at Panna's entry, since
+  Windows lets only you choose the default.
+- **macOS:** open `panna-macos-universal.dmg` and drag Panna to Applications. Then select any
+  PDF in Finder, choose File → Get Info, pick Panna under "Open with" and click Change All.
+- **Linux:** the menu entry registers Panna for PDFs; choose it as the default in your
+  desktop's settings (Default Applications in KDE, Default Apps in GNOME).
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

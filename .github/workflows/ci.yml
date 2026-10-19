@@ -173,6 +173,21 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/panna.exe panna-${{ matrix.name }}/
           Compress-Archive panna-${{ matrix.name }} panna-${{ matrix.name }}.zip
 
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $arch = if ('${{ matrix.target }}'.StartsWith('aarch64')) { 'arm64' } else { 'x64compatible' }
+          $exe = Join-Path $PWD 'target/${{ matrix.target }}/release/panna.exe'
+          & $iscc "/DAppVersion=$version" "/DArch=$arch" "/DExe=$exe" "/DName=${{ matrix.name }}" "/O$PWD" packaging/windows/panna.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build and bundle macOS app (Apple Silicon + Intel)
         if: matrix.target == 'universal'
         run: |
@@ -227,12 +242,22 @@ jobs:
         if: matrix.target == 'universal'
         run: ditto -c -k --keepParent Panna.app panna-${{ matrix.name }}.zip
 
+      - name: Make macOS disk image
+        if: matrix.target == 'universal'
+        run: |
+          mkdir dmg
+          cp -R Panna.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname Panna -srcfolder dmg -ov -format UDZO panna-${{ matrix.name }}.dmg
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: panna-${{ matrix.name }}
           path: |
             panna-${{ matrix.name }}.tar.gz
             panna-${{ matrix.name }}.zip
+            panna-${{ matrix.name }}-setup.exe
+            panna-${{ matrix.name }}.dmg
           if-no-files-found: error
 
   release:

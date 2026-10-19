@@ -50,8 +50,9 @@ without iced.
 See [SECURITY.md](../SECURITY.md) for the policy and [THREAT_MODEL.md](THREAT_MODEL.md) for the full\nthreat model. The technical controls are:
 
 1. `#![forbid(unsafe_code)]` in every crate we write, except `panna-print`, which calls the
-   Windows and macOS print dialogs. It never sees the original file, only the password-free
-   copy made for printing, and each `unsafe` block there says why it is sound.
+   Windows and macOS print dialogs and, on macOS, receives the files opened from Finder. The
+   print code never sees the original file, only the password-free copy made for printing; the
+   Finder code passes on file paths only. Each `unsafe` block there says why it is sound.
 2. Input limits: maximum file size, maximum page count, a cap on render bitmap dimensions and
    total pixels. These stop "decompression bomb" style PDFs from exhausting memory.
 3. Panic containment around all engine calls.

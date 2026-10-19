@@ -15,6 +15,8 @@ mod compare;
 mod create;
 mod export;
 mod find;
+#[cfg(target_os = "macos")]
+mod finder;
 mod form;
 mod icons;
 mod initial;
@@ -89,6 +91,8 @@ fn main() -> iced::Result {
     if let Ok(program) = std::env::current_exe() {
         panna_core::isolate::use_renderer(program);
     }
+    #[cfg(target_os = "macos")]
+    finder::install();
     iced::application(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
@@ -1030,6 +1034,8 @@ impl App {
             _ => None,
         });
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
+        #[cfg(target_os = "macos")]
+        subs.push(finder::subscription());
         if self.hand {
             // The hand follows the pointer anywhere in the window, as the pages move under it.
             subs.push(event::listen_with(|event, _status, _window| match event {
