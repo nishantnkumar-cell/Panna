@@ -10,6 +10,11 @@ pub struct Limits {
     pub max_bitmap_side: u32,
     /// Total pixels in one rendered bitmap.
     pub max_bitmap_pixels: u64,
+    /// Most bytes one stream, or one page's content streams together, may decode to.
+    /// Stops "decompression bombs": tiny files that inflate to gigabytes.
+    pub max_decoded_bytes: u64,
+    /// Most pixels one image in the document may claim to have.
+    pub max_image_pixels: u64,
 }
 
 impl Default for Limits {
@@ -19,6 +24,10 @@ impl Default for Limits {
             max_pages: 100_000,
             max_bitmap_side: 12_000,
             max_bitmap_pixels: 64 * 1024 * 1024,
+            // A 600 dpi colour scan of an A2 sheet decodes to about 420 MB.
+            max_decoded_bytes: 512 * 1024 * 1024,
+            // About 16 000 × 16 000 pixels; a 600 dpi A2 scan is about 140 million.
+            max_image_pixels: 256 * 1024 * 1024,
         }
     }
 }

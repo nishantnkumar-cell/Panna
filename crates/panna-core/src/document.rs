@@ -126,17 +126,46 @@ impl fmt::Debug for RenderedPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenError {
     Io(String),
-    TooLarge { bytes: u64, limit: u64 },
-    TooManyPages { pages: usize, limit: usize },
+    TooLarge {
+        bytes: u64,
+        limit: u64,
+    },
+    TooManyPages {
+        pages: usize,
+        limit: usize,
+    },
     PasswordRequired,
     UnsupportedEncryption,
     Invalid,
     EngineCrashed,
+    /// The file holds data built to exhaust memory when decoded.
+    Hostile(crate::guard::Refusal),
 }
 
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use crate::guard::Refusal;
+        // Limits are set in binary units (512 MiB), so they're shown that way: 512 MB.
+        let mb = |b: &u64| b >> 20;
         match self {
+            Self::Hostile(Refusal::Stream { limit, .. }) => write!(
+                f,
+                "This file wasn't opened: part of it expands to more than {} MB when unpacked. \
+                 Files built like this are used to crash PDF readers.",
+                mb(limit)
+            ),
+            Self::Hostile(Refusal::Page { page, limit, .. }) => write!(
+                f,
+                "This file wasn't opened: page {} expands to more than {} MB when unpacked. \
+                 Files built like this are used to crash PDF readers.",
+                page + 1,
+                mb(limit)
+            ),
+            Self::Hostile(Refusal::Image { width, height, .. }) => write!(
+                f,
+                "This file wasn't opened: it has a picture that claims to be {width} × {height} \
+                 pixels, too large to show safely."
+            ),
             Self::Io(e) => write!(f, "Couldn't read the file: {e}"),
             Self::TooLarge { bytes, limit } => write!(
                 f,
@@ -243,6 +272,9 @@ impl Document {
                 limit: limits.max_pages,
             });
         }
+        catch_unwind(AssertUnwindSafe(|| crate::guard::check(&pdf, &limits)))
+            .map_err(|_| OpenError::EngineCrashed)?
+            .map_err(OpenError::Hostile)?;
         Ok(Self {
             pdf,
             bytes,
@@ -944,9 +976,13 @@ impl Document {
 
     /// The contents of attached file `index` (in [`DocumentInfo::attachments`]).
     pub fn attachment(&self, index: usize) -> Option<Vec<u8>> {
-        catch_unwind(AssertUnwindSafe(|| crate::attachments::data(&self.pdf, index)))
-            .ok()
-            .flatten()
+        // An attachment may be as large as a file Panna would open, but no larger.
+        let limit = self.limits.max_file_bytes;
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::attachments::data(&self.pdf, index, limit)
+        }))
+        .ok()
+        .flatten()
     }
 
     /// The whole document, without password protection, for the printing system. Fails when
@@ -1101,21 +1137,31 @@ fn decryption_error(e: hayro::hayro_syntax::DecryptionError) -> OpenError {
 /// Decodes a PDF text string:UTF-16BE or UTF-8 with a byte-order mark, otherwise
 /// PDFDocEncoding.
 pub(crate) fn decode_text_string(bytes: &[u8]) -> String {
-    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+    let text: String = if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         let units = rest
             .as_chunks::<2>()
             .0
             .iter()
             .map(|pair| u16::from_be_bytes(*pair));
-        return char::decode_utf16(units)
+        char::decode_utf16(units)
             .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
-            .collect();
-    }
-    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        return String::from_utf8_lossy(rest).into_owned();
-    }
-    // ponytail: Latin-1 approximation of PDFDocEncoding; only 0x18–0x1F and 0x80–0x9F differ.
-    bytes.iter().map(|&b| char::from(b)).collect()
+            .collect()
+    } else if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        String::from_utf8_lossy(rest).into_owned()
+    } else {
+        // ponytail: Latin-1 approximation of PDFDocEncoding; only 0x18–0x1F and 0x80–0x9F differ.
+        bytes.iter().map(|&b| char::from(b)).collect()
+    };
+    without_overrides(&text)
+}
+
+/// `text` without Unicode's direction overrides, embeddings and isolates, which can make text
+/// from a file show as something else (a signer's name, a file name, a bookmark). The marks
+/// right-to-left languages use (U+200E, U+200F) stay.
+pub(crate) fn without_overrides(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+        .collect()
 }
 
 fn format_date(d: &hayro::hayro_syntax::object::DateTime) -> String {
@@ -1187,6 +1233,15 @@ mod tests {
         assert_eq!(decode_text_string(&[0xFE, 0xFF, 0x00, 0x48, 0x00, 0xE9]), "Hé");
         assert_eq!(decode_text_string(&[0xEF, 0xBB, 0xBF, 0xC3, 0xA9]), "é");
         assert_eq!(decode_text_string(&[0xE9]), "é");
+        // A right-to-left override is dropped; a right-to-left mark is kept.
+        let utf16 = |s: &str| {
+            [0xFE, 0xFF]
+                .into_iter()
+                .chain(s.encode_utf16().flat_map(u16::to_be_bytes))
+                .collect::<Vec<u8>>()
+        };
+        assert_eq!(decode_text_string(&utf16("Bank\u{202E}cba")), "Bankcba");
+        assert_eq!(decode_text_string(&utf16("\u{200F}abc")), "\u{200F}abc");
         // Lone surrogate and odd trailing byte don't panic.
         assert_eq!(decode_text_string(&[0xFE, 0xFF, 0xD8, 0x00, 0x41]), "\u{FFFD}");
     }

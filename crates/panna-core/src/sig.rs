@@ -16,6 +16,7 @@ use num_bigint::BigUint;
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use x509_cert::Certificate;
+use x509_cert::ext::pkix::BasicConstraints;
 use x509_cert::name::Name as X509Name;
 
 /// Signature fields looked at at most.
@@ -368,11 +369,11 @@ fn common_name(name: &X509Name) -> String {
     for rdn in name.0.iter() {
         for atv in rdn.0.iter() {
             if atv.oid.to_string() == "2.5.4.3" {
-                return String::from_utf8_lossy(atv.value.value()).into_owned();
+                return crate::document::without_overrides(&String::from_utf8_lossy(atv.value.value()));
             }
         }
     }
-    name.to_string()
+    crate::document::without_overrides(&name.to_string())
 }
 
 fn unix_date(t: x509_cert::time::Time) -> String {
@@ -593,10 +594,36 @@ fn cert_signed_by(child: &Certificate, parent: &Certificate) -> bool {
     if child.tbs_certificate.issuer != parent.tbs_certificate.subject {
         return false;
     }
+    // Only a certificate authority may vouch for another certificate; otherwise anyone the
+    // user trusts could issue certificates in other people's names. And a SHA-1 link isn't
+    // trusted: chosen-prefix collisions make forged CA certificates practical.
+    if !may_issue(parent) || is_sha1(&child.signature_algorithm) {
+        return false;
+    }
     let (Ok(tbs), Some(sig)) = (child.tbs_certificate.to_der(), child.signature.as_bytes()) else {
         return false;
     };
     verifies(parent, &child.signature_algorithm, sig, Hash::Sha256, &tbs).unwrap_or(false)
+}
+
+/// Whether `cert` may issue certificates: its basic constraints say it's a CA, or it's an old
+/// self-signed root with no extensions at all (version 1 certificates predate them).
+fn may_issue(cert: &Certificate) -> bool {
+    let tbs = &cert.tbs_certificate;
+    let Some(exts) = tbs.extensions.as_ref() else {
+        return tbs.issuer == tbs.subject;
+    };
+    exts.iter()
+        .find(|e| e.extn_id.to_string() == "2.5.29.19")
+        .and_then(|e| BasicConstraints::from_der(e.extn_value.as_bytes()).ok())
+        .is_some_and(|bc| bc.ca)
+}
+
+fn is_sha1(algorithm: &spki::AlgorithmIdentifierOwned) -> bool {
+    matches!(
+        algorithm.oid.to_string().as_str(),
+        "1.2.840.113549.1.1.5" | "1.2.840.10045.4.1" | "1.3.14.3.2.29"
+    )
 }
 
 /// What a signature's CMS data says: who signed, when the signer says it was, how it checks
@@ -1114,5 +1141,28 @@ impl Signer {
         }
         .to_der()
         .map_err(fail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cert(name: &str) -> Cert {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        Cert::from_file(&std::fs::read(path).unwrap_or_default()).unwrap_or_else(|e| panic!("{name}: {e}"))
+    }
+
+    /// Both leaves have the same key and name; only their issuers differ. The fixtures were
+    /// made with openssl (see the `.pem` files in tests/fixtures).
+    #[test]
+    fn only_certificate_authorities_can_vouch_for_others() {
+        let ca = cert("chain-ca.pem");
+        let not_ca = cert("not-a-ca.pem");
+        assert!(cert("issued-by-chain-ca.pem").issued_by(&ca));
+        // Its signature checks out, but a certificate marked CA:FALSE can't issue others.
+        assert!(!cert("issued-by-not-a-ca.pem").issued_by(&not_ca));
     }
 }

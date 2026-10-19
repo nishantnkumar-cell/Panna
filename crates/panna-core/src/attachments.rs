@@ -24,6 +24,25 @@ pub struct Attachment {
     pub page: Option<usize>,
 }
 
+impl Attachment {
+    /// Whether the file is a program or script that would run if opened, so the user can be
+    /// warned before saving it. Trailing dots and spaces, which Windows drops, are ignored.
+    pub fn is_program(&self) -> bool {
+        const RISKY: &[&str] = &[
+            "exe", "com", "scr", "pif", "cpl", "msi", "msp", "msc", "bat", "cmd", "ps1", "psm1", "vbs",
+            "vbe", "js", "jse", "wsf", "wsh", "hta", "lnk", "url", "reg", "dll", "jar", "app", "command",
+            "sh", "desktop", "appimage", "docm", "xlsm", "pptm", "iso", "img", "vhd", "vhdx",
+        ];
+        let name = self.name.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+        name.rsplit_once('.').is_some_and(|(_, ext)| RISKY.contains(&ext))
+    }
+}
+
+/// Unicode's explicit text-direction marks, embeddings, overrides and isolates.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 /// Every attached file's specification, with the page it's on: the document's first, then
 /// each page's in order.
 fn specs(pdf: &Pdf) -> Vec<(Dict<'_>, Option<usize>)> {
@@ -111,13 +130,17 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<Attachment> {
                     .map(|s| decode_text_string(s.as_bytes()))
             };
             let name = text(b"UF").or_else(|| text(b"F")).unwrap_or_default();
-            // Only the last part of the name: it becomes a file name when saved.
-            let name = name
+            // Only the last part of the name: it becomes a file name when saved. Control and
+            // text-direction characters go too: an override (U+202E) can make "invoice<U+202E>fdp.exe" show
+            // as "invoiceexe.pdf".
+            let name: String = name
                 .rsplit(['/', '\\', ':'])
                 .next()
                 .unwrap_or_default()
-                .trim()
-                .to_owned();
+                .chars()
+                .filter(|c| !c.is_control() && !is_bidi_control(*c))
+                .collect();
+            let name = name.trim().to_owned();
             let size = stream
                 .dict()
                 .get::<Dict<'_>>(b"Params")
@@ -138,12 +161,15 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<Attachment> {
         .collect()
 }
 
-/// The contents of the attached file at `index` in [`read`]'s list.
-pub(crate) fn data(pdf: &Pdf, index: usize) -> Option<Vec<u8>> {
+/// The contents of the attached file at `index` in [`read`]'s list, if it unpacks to no more
+/// than `limit` bytes (measured first, so a decompression bomb is never unpacked).
+pub(crate) fn data(pdf: &Pdf, index: usize, limit: u64) -> Option<Vec<u8>> {
     let spec = specs(pdf)
         .into_iter()
         .filter(|(spec, _)| file(spec).is_some())
         .nth(index)?
         .0;
-    file(&spec)?.decoded().ok().map(|d| d.into_owned())
+    let stream = file(&spec)?;
+    crate::guard::decoded_size(&stream, limit).ok()?;
+    stream.decoded().ok().map(|d| d.into_owned())
 }

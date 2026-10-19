@@ -525,6 +525,14 @@ fn files(attachments: &[Attachment]) -> Element<'_, Message> {
                 None => Element::from(line),
             });
         }
+        if file.is_program() {
+            about = about.push(
+                text("This is a program or script. It could harm your computer if you open it.")
+                    .size(12)
+                    .style(text::danger)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
         if !file.description.trim().is_empty() {
             about = about.push(
                 text(file.description.as_str())

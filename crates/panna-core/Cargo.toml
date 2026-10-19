@@ -9,7 +9,9 @@ license.workspace = true
 [dependencies]
 aes = "0.8"
 getrandom = "0.3"
-hayro = "0.8"
+# Without the default "simd" feature: its image scaling uses hand-written SIMD (unsafe) on
+# picture data from the PDF. Safe scaling costs about 25 ms per full-page photo.
+hayro = { version = "0.8", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
 # Image stamps: the PNG and JPEG decoders and the compressor hayro already brings in.
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }

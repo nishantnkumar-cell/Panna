@@ -125,7 +125,40 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Screen reader support for the app UI | Later | Depends on iced accessibility support |
 | Tag PDF, reading order, accessibility checker | Later | Checker done: All tools › Check accessibility lists what gets in the way of screen readers (no tags, language or title, title not shown, no bookmarks in long documents, pages that are only pictures, figures without alternate text, tables without header cells, fields without a description, untagged comments and links, tab order, fonts without Unicode mapping), each with its page. Adding tags done: on an untagged document the report offers Save a tagged copy…, which tags each run of text as a paragraph, or a heading where the type is larger, in the order it's drawn, and sets the tab order. Pictures become figures (drawn and inline pictures; drawings stay untagged). Describing figures done: in the report, each figure without alternate text has a box to type a description, and Save descriptions writes them into the tagged copy (or, for a document already tagged, a described copy). Changing the reading order by hand isn't done yet |
 
-## 9. Online-only (always Skip)
+## 9. Backlog: more offline Acrobat features (not started)
+
+Found by comparing Acrobat's offline features with this list and the code on 2026-10-19. All
+are in scope. Security work still to do is listed separately, in
+[THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-priority-order).
+
+| Feature | Area | Notes |
+|---|---|---|
+| Add, rename, move and delete bookmarks | Navigation | Bookmarks can only be viewed today |
+| Hand tool (drag to scroll) | Navigation | |
+| Marquee zoom (drag a box to zoom into it), loupe, pan & zoom window | Navigation | |
+| Auto-scroll | Navigation | |
+| Rulers, grids and guides | Navigation | |
+| Initial view: how a file opens (page, zoom, panels), saved into the PDF | Navigation | |
+| Replace pages from another PDF | Pages | |
+| Create a blank PDF; PDF from a screenshot or the clipboard | Pages | |
+| Edit page labels (i, ii, iii then 1, 2, 3) | Pages | They're read, but can't be changed |
+| Split by bookmarks or by file size | Pages | Splitting by page ranges is done |
+| PDF Portfolios (several files shown as one bundle) | Pages | |
+| Comment summary: a printable list of comments with their pages | Comments | |
+| Print with comments shown | Comments | |
+| Spell check in comments and form fields | Comments | Offline dictionaries only |
+| Export to HTML, RTF and EPUB | Convert | Word, Excel, PowerPoint, text and images are done |
+| Output preview, colour separations, ink coverage, fix hairlines | Print production | Acrobat Pro features |
+| Embedded video, audio and 3D models | Multimedia | Show as attachments rather than play inline, given the risk |
+| Default PDF app on Windows and macOS, through an installer | Desktop | The Linux menu entry already registers for PDFs |
+| Page thumbnails and previews in Windows Explorer and macOS Finder | Desktop | Explorer and Finder would run Panna's renderer: needs the process isolation in THREAT_MODEL.md first |
+| Preferences window; customisable keyboard shortcuts | Desktop | |
+| Translations, and right-to-left languages (Arabic, Hebrew) in the interface | Desktop | |
+| Touch and pen: pinch to zoom, swipe between pages, pen-only drawing | Desktop | |
+| Action Wizard: run the same steps (OCR, compress, watermark…) over a folder of PDFs | Batch | |
+| Search across a folder of PDFs, with a saved index | Batch | |
+
+## 10. Online-only (always Skip)
 
 Adobe Document Cloud storage and sync, sharing links, shared review, Adobe Sign, the AI Assistant,
 generative summaries, online export/convert services, Acrobat web, and any telemetry. **The app

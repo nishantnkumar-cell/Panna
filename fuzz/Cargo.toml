@@ -17,3 +17,17 @@ path = "fuzz_targets/open_render.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "analyse"
+path = "fuzz_targets/analyse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_data"
+path = "fuzz_targets/import_data.rs"
+test = false
+doc = false
+bench = false
