@@ -145,7 +145,8 @@ pub enum OpenError {
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use crate::guard::Refusal;
-        let mb = |b: &u64| b / 1_000_000;
+        // Limits are set in binary units (512 MiB), so they're shown that way: 512 MB.
+        let mb = |b: &u64| b >> 20;
         match self {
             Self::Hostile(Refusal::Stream { limit, .. }) => write!(
                 f,
