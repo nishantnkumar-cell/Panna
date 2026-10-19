@@ -1,9 +1,10 @@
 //! Tagging an untagged document for screen readers, as an incremental update: each run of
 //! text on each page becomes a paragraph or, where the type is larger, a heading, in the
-//! order it's drawn. Pictures and drawings are left untagged.
+//! order it's drawn. Pictures become figures, for descriptions to be given to them (see
+//! [`describe`]); drawings are left untagged.
 
 use hayro::hayro_syntax::Pdf;
-use hayro::hayro_syntax::object::Dict;
+use hayro::hayro_syntax::object::{Dict, Name};
 
 use super::{SaveError, lex, rewrite, update};
 
@@ -37,21 +38,38 @@ pub(crate) fn tag(pdf: &Pdf, original: &[u8]) -> Result<Vec<u8>, SaveError> {
     for page in pages.iter() {
         let raw = page.raw();
         let content = super::rebuild::page_content(raw);
-        let blocks = super::redact::text_blocks(&content).unwrap_or_default();
+        let res = page.resources();
+        // Drawn XObjects are kept only when they're pictures.
+        let blocks: Vec<_> = super::redact::text_blocks(&content)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|b| {
+                b.drawn.as_ref().is_none_or(|name| {
+                    name.is_empty()
+                        || Name::new(name)
+                            .and_then(|n| res.get_x_object(&n))
+                            .is_some_and(|x| {
+                                x.dict()
+                                    .get::<Name<'_>>(b"Subtype")
+                                    .is_some_and(|s| s.as_ref() == b"Image")
+                            })
+                })
+            })
+            .collect();
         total += blocks.len();
         if total > MAX_ELEMENTS {
             break;
         }
         found.push((raw, content, blocks));
     }
-    if found.iter().all(|(_, _, b)| b.is_empty()) {
+    if found.iter().all(|(_, _, b)| b.iter().all(|b| b.drawn.is_some())) {
         return Err(SaveError::NothingToTag);
     }
 
     // The body's size is the one most text is in; larger runs are headings.
     let mut sizes: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
     for (_, _, blocks) in &found {
-        for b in blocks {
+        for b in blocks.iter().filter(|b| b.drawn.is_none()) {
             *sizes.entry((b.size * 2.0).round() as i64).or_default() += b.shown.max(1);
         }
     }
@@ -89,7 +107,11 @@ pub(crate) fn tag(pdf: &Pdf, original: &[u8]) -> Result<Vec<u8>, SaveError> {
         let mut at = 0;
         let mut elements = Vec::new();
         for (mcid, block) in blocks.iter().enumerate() {
-            let s = role(block.size);
+            let s = if block.drawn.is_some() {
+                "Figure"
+            } else {
+                role(block.size)
+            };
             marked.extend_from_slice(content.get(at..block.range.start).ok_or(SaveError::Damaged)?);
             marked.extend_from_slice(format!("\n/{s} <</MCID {mcid}>> BDC\n").as_bytes());
             marked.extend_from_slice(content.get(block.range.clone()).ok_or(SaveError::Damaged)?);
@@ -159,5 +181,39 @@ pub(crate) fn tag(pdf: &Pdf, original: &[u8]) -> Result<Vec<u8>, SaveError> {
             ],
         )?,
     );
+    Ok(out.finish(original))
+}
+
+/// The document with descriptions (alternate text) given to figures, by their structure
+/// elements' object numbers, as an incremental update. An empty description takes one
+/// away.
+pub(crate) fn describe(
+    pdf: &Pdf,
+    original: &[u8],
+    alts: &[((u32, u16), String)],
+) -> Result<Vec<u8>, SaveError> {
+    let trailer = update::read_trailer(original)?;
+    if trailer.encrypt.is_some() {
+        return Err(SaveError::TaggingProtected);
+    }
+    let mut out = update::Update::new(trailer);
+    for ((number, generation), alt) in alts {
+        let id = hayro::hayro_syntax::object::ObjectIdentifier::new(
+            i32::try_from(*number).map_err(|_| SaveError::Damaged)?,
+            i32::from(*generation),
+        );
+        let elem = pdf.xref().get::<Dict<'_>>(id).ok_or(SaveError::Damaged)?;
+        // Only structure elements: anything else named here is left as it is.
+        if !elem.contains_key(b"S") || !elem.contains_key(b"P") {
+            continue;
+        }
+        let alt: String = alt.chars().filter(|c| !c.is_control()).take(2_000).collect();
+        let value = if alt.trim().is_empty() {
+            "null".to_owned()
+        } else {
+            super::annot::text_string(alt.trim())
+        };
+        out.put_copied(*number, *generation, rewrite(elem.data(), &vec![("Alt", value)])?);
+    }
     Ok(out.finish(original))
 }

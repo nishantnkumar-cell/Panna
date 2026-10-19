@@ -697,6 +697,15 @@ impl Document {
             .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with descriptions (alternate text) given to figures, by the structure
+    /// elements the accessibility check names, as an incremental update.
+    pub fn described(&self, alts: &[((u32, u16), String)]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::describe(&self.pdf, &self.bytes, alts)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// What makes the document harder to use with screen readers and other assistive
     /// technology: an empty list when the main checks pass.
     pub fn accessibility(&self) -> Vec<crate::AccessFinding> {

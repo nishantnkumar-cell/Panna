@@ -1,8 +1,11 @@
 //! The reports of the PDF/A, PDF/X and accessibility checks: what keeps the document from being
 //! archival PDF, or from working well with screen readers, grouped by rule, each with the
-//! page it's on.
+//! page it's on. Figures without a description can be given one there.
 
-use iced::widget::{Column, button, column, container, row, scrollable, space, text};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use iced::widget::{Column, button, column, container, row, scrollable, space, text, text_input};
 use iced::{Element, Fill, Theme};
 use panna_core::{AccessFinding, AccessRule, Finding};
 
@@ -21,6 +24,10 @@ pub enum Event {
     Tag,
     /// Close the report and show this page.
     Show(usize),
+    /// A figure's description typed.
+    Alt((u32, u16), String),
+    /// Save the descriptions typed.
+    Describe,
     Close,
 }
 
@@ -37,6 +44,8 @@ struct Item {
     rule: &'static str,
     detail: String,
     page: Option<usize>,
+    /// A figure to describe.
+    element: Option<(u32, u16)>,
 }
 
 #[derive(Debug)]
@@ -47,6 +56,11 @@ pub struct Report {
     saved: Option<String>,
     /// The document has no tags, which Panna can add.
     untagged: bool,
+    /// Where the tagged copy just saved is, so descriptions go into it.
+    pub copy: Option<PathBuf>,
+    /// Descriptions typed for figures.
+    pub alts: HashMap<(u32, u16), String>,
+    pub busy: bool,
 }
 
 impl Report {
@@ -68,10 +82,14 @@ impl Report {
                     rule: f.rule.title(),
                     detail: f.detail,
                     page: f.page,
+                    element: None,
                 })
                 .collect(),
             saved: None,
             untagged: false,
+            copy: None,
+            alts: HashMap::new(),
+            busy: false,
         }
     }
 
@@ -93,18 +111,35 @@ impl Report {
                     rule: f.rule.title(),
                     detail: f.detail,
                     page: f.page,
+                    element: f.element,
                 })
                 .collect(),
             saved: None,
+            copy: None,
+            alts: HashMap::new(),
+            busy: false,
         }
     }
 
-    /// The accessibility check of a tagged copy just saved as `name`.
-    pub fn tagged(name: String, findings: Vec<AccessFinding>) -> Self {
+    /// The accessibility check of a tagged copy just saved as `name` at `path`.
+    pub fn tagged(name: String, path: PathBuf, findings: Vec<AccessFinding>) -> Self {
         Self {
             saved: Some(name),
+            copy: Some(path),
             ..Self::accessibility(findings)
         }
+    }
+
+    /// The descriptions typed, to save.
+    pub fn descriptions(&self) -> Vec<((u32, u16), String)> {
+        let mut alts: Vec<_> = self
+            .alts
+            .iter()
+            .filter(|(_, alt)| !alt.trim().is_empty())
+            .map(|(e, alt)| (*e, alt.clone()))
+            .collect();
+        alts.sort();
+        alts
     }
 
     pub fn card(&self) -> Element<'_, Message> {
@@ -166,14 +201,29 @@ impl Report {
         let mut rules: Vec<&str> = self.items.iter().map(|f| f.rule).collect();
         rules.dedup();
         // Tall enough for the list, up to a point; beyond it, it scrolls.
-        let height = (rules.len() as f32 * 30.0 + self.items.len() as f32 * 20.0).min(360.0);
+        let lines: f32 = self
+            .items
+            .iter()
+            .map(|i| if i.element.is_some() { 32.0 } else { 20.0 })
+            .sum();
+        let height = (rules.len() as f32 * 30.0 + lines).min(360.0);
         for rule in rules {
             let mut group = Column::new().spacing(2).push(text(rule).size(14));
             for item in self.items.iter().filter(|f| f.rule == rule) {
                 let detail = text(item.detail.as_str()).size(12).style(text::secondary);
+                let detail = match item.element {
+                    Some(element) => {
+                        let typed = self.alts.get(&element).map_or("", String::as_str);
+                        let input = text_input("Describe what it shows", typed)
+                            .size(12)
+                            .on_input(move |v| Message::Preflight(Event::Alt(element, v)));
+                        Element::from(row![detail.width(80), input].spacing(6).align_y(iced::Center))
+                    }
+                    None => detail.into(),
+                };
                 let line: Element<'_, Message> = match item.page {
                     Some(page) => row![
-                        detail.width(Fill),
+                        container(detail).width(Fill),
                         button(text(format!("Page {}", page + 1)).size(12))
                             .padding([1, 6])
                             .style(button::text)
@@ -181,7 +231,7 @@ impl Report {
                     ]
                     .spacing(6)
                     .into(),
-                    None => detail.into(),
+                    None => detail,
                 };
                 group = group.push(line);
             }
@@ -195,6 +245,19 @@ impl Report {
                     .on_press_maybe(
                         (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::Convert)),
                     ),
+            );
+        }
+        if self.items.iter().any(|i| i.element.is_some()) {
+            let label = if self.copy.is_some() {
+                "Save descriptions"
+            } else {
+                "Save a described copy…"
+            };
+            buttons = buttons.push(
+                button(label).style(button::secondary).on_press_maybe(
+                    (!self.busy && !self.descriptions().is_empty())
+                        .then_some(Message::Preflight(Event::Describe)),
+                ),
             );
         }
         if self.untagged && self.saved.is_none() {

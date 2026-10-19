@@ -33,7 +33,7 @@ pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
 pub(crate) use sign::prepare as prepare_signature;
 pub use sign::{Corner, SignOptions, Visible};
-pub(crate) use tag::tag;
+pub(crate) use tag::{describe, tag};
 
 use crate::{CommentId, FieldValue, ObjRef};
 

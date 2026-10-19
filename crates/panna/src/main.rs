@@ -289,6 +289,14 @@ enum Message {
     Tagged {
         doc: u64,
         name: String,
+        path: PathBuf,
+        result: Result<Vec<panna_core::AccessFinding>, SaveError>,
+    },
+    DescribeTo(Option<PathBuf>),
+    Described {
+        doc: u64,
+        name: String,
+        path: PathBuf,
         result: Result<Vec<panna_core::AccessFinding>, SaveError>,
     },
     Signing(signing::Event),
@@ -1900,21 +1908,109 @@ impl App {
                     |n| n.to_string_lossy().into_owned(),
                 );
                 let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.save_tagged(path, move |result| {
+                doc.worker.save_tagged(path.clone(), move |result| {
                     let _ = tx.send(result);
                 });
                 let id = doc.id;
                 Task::perform(rx, move |result| Message::Tagged {
                     doc: id,
-                    name,
+                    name: name.clone(),
+                    path: path.clone(),
                     result: result.unwrap_or(Err(SaveError::EngineCrashed)),
                 })
             }
-            Message::Tagged { doc, name, result } => {
+            Message::Tagged {
+                doc,
+                name,
+                path,
+                result,
+            } => {
                 if self.doc.as_ref().is_some_and(|d| d.id == doc) {
                     match result {
-                        Ok(findings) => self.preflight = Some(preflight::Report::tagged(name, findings)),
+                        Ok(findings) => {
+                            self.preflight = Some(preflight::Report::tagged(name, path, findings))
+                        }
                         Err(e) => self.notice = Some(e.to_string()),
+                    }
+                }
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Alt(element, typed)) => {
+                if let Some(report) = &mut self.preflight {
+                    let typed: String = typed.chars().filter(|c| !c.is_control()).take(2_000).collect();
+                    report.alts.insert(element, typed);
+                }
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Describe) => {
+                let Some(report) = &self.preflight else {
+                    return Task::none();
+                };
+                // Into the tagged copy just saved, or a new copy of the file as it's saved.
+                if let Some(copy) = report.copy.clone() {
+                    return self.update(Message::DescribeTo(Some(copy)));
+                }
+                if self.dirty() {
+                    self.notice =
+                        Some("Save your changes first: descriptions are added to the saved file.".into());
+                    return Task::none();
+                }
+                let name = format!("{} (described).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a described copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::DescribeTo,
+                )
+            }
+            Message::DescribeTo(None) => Task::none(),
+            Message::DescribeTo(Some(target)) => {
+                let (Some(doc), Some(report)) = (&self.doc, &mut self.preflight) else {
+                    return Task::none();
+                };
+                let source = report.copy.clone().unwrap_or_else(|| doc.path.clone());
+                let alts = report.descriptions();
+                report.busy = true;
+                let name = target.file_name().map_or_else(
+                    || target.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                let path = target.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(panna_core::describe_file(&source, &path, &alts));
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::Described {
+                    doc: id,
+                    name: name.clone(),
+                    path: target.clone(),
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::Described {
+                doc,
+                name,
+                path,
+                result,
+            } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    match result {
+                        Ok(findings) => {
+                            self.preflight = Some(preflight::Report::tagged(name, path, findings))
+                        }
+                        Err(e) => {
+                            if let Some(report) = &mut self.preflight {
+                                report.busy = false;
+                            }
+                            self.notice = Some(e.to_string());
+                        }
                     }
                 }
                 Task::none()

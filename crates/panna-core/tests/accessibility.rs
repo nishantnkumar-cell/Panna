@@ -145,4 +145,71 @@ fn tags_are_added_to_an_untagged_file() {
         .filter(|r| text.contains(r))
         .collect();
     assert_eq!(roles, ["/S /H1", "/S /P"]);
+
+    // The picture is a figure, which then needs a description; given one, it's described.
+    let figures: Vec<_> = tagged
+        .accessibility()
+        .into_iter()
+        .filter(|f| f.rule == AccessRule::FigureNoAlt)
+        .collect();
+    assert_eq!(figures.len(), 1);
+    assert_eq!(figures[0].page, Some(0));
+    let element = figures[0].element.unwrap();
+    let described = tagged
+        .reopen(
+            tagged
+                .described(&[(element, "A small grey square".into())])
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(!rules(&described).contains(&AccessRule::FigureNoAlt));
+    assert_eq!(described.page_text(0).unwrap().len(), after.len());
+}
+
+#[test]
+fn drawn_pictures_become_figures_and_forms_do_not() {
+    let content = "BT /F1 11 Tf 20 160 Td (Text first.) Tj ET\n\
+                   q 50 0 0 50 20 80 cm /Im1 Do Q\n\
+                   q /Fm1 Do Q\n\
+                   q 50 0 0 50 100 80 cm /Im1 Do Q";
+    let bytes = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Lang (en-GB) >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
+             /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R /Fm1 7 0 R >> >> >>",
+            &stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            &stream(
+                "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8",
+                "x",
+            ),
+            &stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 0 5 5 re f"),
+        ],
+        "",
+    );
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    let tagged = doc.reopen(doc.tagged().unwrap()).unwrap();
+    let figures: Vec<_> = tagged
+        .accessibility()
+        .into_iter()
+        .filter(|f| f.rule == AccessRule::FigureNoAlt)
+        .collect();
+    assert_eq!(figures.len(), 2, "{figures:?}");
+    assert_ne!(figures[0].element, figures[1].element);
+    let text = String::from_utf8_lossy(tagged.bytes()).into_owned();
+    assert_eq!(text.matches("/S /Figure").count(), 2);
+    // Both described at once; an empty description leaves one undescribed.
+    let alts = [
+        (figures[0].element.unwrap(), "Left".to_owned()),
+        (figures[1].element.unwrap(), "  ".to_owned()),
+    ];
+    let described = tagged.reopen(tagged.described(&alts).unwrap()).unwrap();
+    let left: Vec<_> = described
+        .accessibility()
+        .into_iter()
+        .filter(|f| f.rule == AccessRule::FigureNoAlt)
+        .collect();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].element, figures[1].element);
 }

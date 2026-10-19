@@ -996,10 +996,14 @@ pub(crate) struct TextBlock {
     pub range: std::ops::Range<usize>,
     pub size: f64,
     pub shown: usize,
+    /// For an XObject drawn (`Do`) rather than text: its name in the resources; empty for
+    /// a picture written inline.
+    pub drawn: Option<Vec<u8>>,
 }
 
-/// The text objects `content` shows text in, in order; or `None` when it's already marked
-/// up (it has marked content of its own) or can't be read.
+/// The text objects `content` shows text in, and the XObjects it draws outside them, in
+/// order; or `None` when it's already marked up (it has marked content of its own) or
+/// can't be read.
 pub(crate) fn text_blocks(content: &[u8]) -> Option<Vec<TextBlock>> {
     let mut lex = Lexer {
         data: content,
@@ -1014,6 +1018,7 @@ pub(crate) fn text_blocks(content: &[u8]) -> Option<Vec<TextBlock>> {
     // of text shown.
     let mut open: Option<(usize, f64, usize)> = None;
     let mut start = 0;
+    let mut inline_start = 0;
     let scale = |m: Matrix| (m[0] * m[3] - m[1] * m[2]).abs().sqrt();
     loop {
         lex.skip();
@@ -1057,6 +1062,7 @@ pub(crate) fn text_blocks(content: &[u8]) -> Option<Vec<TextBlock>> {
                         range: from..lex.pos,
                         size,
                         shown,
+                        drawn: None,
                     });
                 }
             }
@@ -1099,7 +1105,28 @@ pub(crate) fn text_blocks(content: &[u8]) -> Option<Vec<TextBlock>> {
                         .sum::<usize>();
                 }
             }
-            b"ID" => lex.inline_image()?,
+            b"BI" => inline_start = start,
+            b"ID" => {
+                lex.inline_image()?;
+                if open.is_none() {
+                    out.push(TextBlock {
+                        range: inline_start..lex.pos,
+                        size: 0.0,
+                        shown: 0,
+                        drawn: Some(Vec::new()),
+                    });
+                }
+            }
+            b"Do" if open.is_none() => {
+                if let [Operand::Name(name)] = operands.as_slice() {
+                    out.push(TextBlock {
+                        range: start..lex.pos,
+                        size: 0.0,
+                        shown: 0,
+                        drawn: Some(name.clone()),
+                    });
+                }
+            }
             _ => {}
         }
         operands.clear();

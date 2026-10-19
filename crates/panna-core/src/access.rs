@@ -62,6 +62,9 @@ pub struct AccessFinding {
     /// Where or what, such as a field's name.
     pub detail: String,
     pub page: Option<usize>,
+    /// For a figure without a description, its structure element (object number and
+    /// generation), to give one to with [`crate::Document::described`].
+    pub element: Option<(u32, u16)>,
 }
 
 /// What the checker can't read from the objects alone.
@@ -84,15 +87,30 @@ struct Check {
 
 impl Check {
     fn add(&mut self, rule: AccessRule, detail: impl Into<String>, page: Option<usize>) {
+        self.add_for(rule, detail, page, None);
+    }
+
+    fn add_for(
+        &mut self,
+        rule: AccessRule,
+        detail: impl Into<String>,
+        page: Option<usize>,
+        element: Option<(u32, u16)>,
+    ) {
         let detail = detail.into();
         let same = self.out.iter().filter(|f| f.rule == rule).count();
         if same < MAX_PER_RULE
             && !self
                 .out
                 .iter()
-                .any(|f| f.rule == rule && f.detail == detail && f.page == page)
+                .any(|f| f.rule == rule && f.detail == detail && f.page == page && f.element == element)
         {
-            self.out.push(AccessFinding { rule, detail, page });
+            self.out.push(AccessFinding {
+                rule,
+                detail,
+                page,
+                element,
+            });
         }
     }
 
@@ -146,7 +164,13 @@ impl Check {
         };
         if matches!(kind.as_str(), "Figure" | "Formula") && !described(b"Alt") && !described(b"ActualText") {
             let what = if kind == "Figure" { "A figure" } else { "A formula" };
-            self.add(AccessRule::FigureNoAlt, what, page);
+            let element = elem.obj_id().and_then(|id| {
+                Some((
+                    u32::try_from(id.obj_number).ok()?,
+                    u16::try_from(id.gen_number).ok()?,
+                ))
+            });
+            self.add_for(AccessRule::FigureNoAlt, what, page, element);
         }
         let mut header = kind == "TH";
         let mut children = Vec::new();

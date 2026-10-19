@@ -153,7 +153,11 @@ fn a_paragraph_is_found_whole_and_rewrapped_to_its_width() {
                    BT /F1 10 Tf 12 TL 20 140 Td (The first line of the para-) Tj T* \
                    (graph runs on to a second) Tj T* (and ends on the third.) Tj ET\n\
                    BT /F1 10 Tf 20 60 Td (Something else) Tj ET";
-    let doc = made(content, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", None);
+    let doc = made(
+        content,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        None,
+    );
     let text = doc.page_text(0).unwrap();
     // Clicked on the second line, as the page is shown (200 high, so y 60 to 64 or so).
     let found = text.paragraph_at(60.0, 200.0 - 128.0 - 3.0).unwrap();
@@ -185,7 +189,12 @@ fn a_paragraph_is_found_whole_and_rewrapped_to_its_width() {
     let text = doc.page_text(0).unwrap();
     let again = text.paragraph_at(30.0, 200.0 - 140.0 - 3.0).unwrap();
     assert_eq!(again.text, longer);
-    assert!(again.area.x1 <= found.area.x1 * 1.03 + 1.0, "{:?} {:?}", again.area, found.area);
+    assert!(
+        again.area.x1 <= found.area.x1 * 1.03 + 1.0,
+        "{:?} {:?}",
+        again.area,
+        found.area
+    );
     assert!((again.leading.unwrap() - 12.0).abs() < 0.5);
     assert!(again.area.y0 >= found.area.y0 - 1.0);
     let all = text.slice(0..text.len());

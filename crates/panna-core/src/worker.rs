@@ -562,6 +562,20 @@ fn export_pages<'a>(
     }
 }
 
+/// Gives figures in the file at `source` descriptions (see [`Document::described`]),
+/// writes the result to `target` (which may be the same file), and gives the accessibility
+/// check of what was written. Blocks; call it off the interface's thread.
+pub fn describe_file(
+    source: &Path,
+    target: &Path,
+    alts: &[((u32, u16), String)],
+) -> Result<Vec<crate::AccessFinding>, SaveError> {
+    let doc = Document::open(source, None, crate::Limits::default()).map_err(|_| SaveError::Damaged)?;
+    let copy = doc.reopen(doc.described(alts)?).map_err(|_| SaveError::Damaged)?;
+    write_atomically(target, copy.bytes())?;
+    Ok(copy.accessibility())
+}
+
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
     let io = |e: std::io::Error| SaveError::Io(e.to_string());
     let dir = path
