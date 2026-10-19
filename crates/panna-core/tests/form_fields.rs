@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
-use panna_core::{Changes, Document, FieldKind, FieldValue, Limits, NewField, NewFieldKind, TextBox};
+use panna_core::{
+    Changes, Document, FieldKind, FieldValue, Limits, NewField, NewFieldKind, RadioButton, TextBox,
+};
 
 fn build(objects: &[&str]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -177,4 +179,82 @@ fn fields_join_an_existing_encrypted_form() {
     let fields = new.info().unwrap().fields;
     assert_eq!(fields.len(), before + 1);
     assert_eq!(fields.last().unwrap().name, "Extra");
+}
+
+#[test]
+fn list_boxes_and_radio_groups_are_made_and_filled() {
+    let doc = blank();
+    let radio = |choice: &str, rect| RadioButton {
+        choice: choice.into(),
+        rect,
+    };
+    let add = vec![
+        field(
+            0,
+            b(20.0, 20.0, 120.0, 80.0),
+            "Size",
+            NewFieldKind::List(vec!["Small".into(), "Large".into()]),
+        ),
+        field(
+            1,
+            b(0.0, 0.0, 0.0, 0.0),
+            "Pay by",
+            NewFieldKind::Radio(vec![
+                radio("Card", b(20.0, 30.0, 34.0, 44.0)),
+                radio(" Card ", b(20.0, 50.0, 34.0, 64.0)),
+                radio("Off", b(20.0, 70.0, 34.0, 84.0)),
+                radio("Bank (UK)", b(20.0, 90.0, 34.0, 104.0)),
+            ]),
+        ),
+    ];
+    let new = doc.reopen(doc.with_form_fields(&add, &[]).unwrap()).unwrap();
+    let fields = new.info().unwrap().fields;
+    assert_eq!(fields.len(), 2);
+    assert!(matches!(&fields[0].kind, FieldKind::Choice { combo: false, options, .. } if options.len() == 2));
+    let group = &fields[1];
+    assert_eq!((group.name.as_str(), &group.kind), ("Pay by", &FieldKind::Radio));
+    let NewFieldKind::Radio(buttons) = &add[1].kind else {
+        unreachable!()
+    };
+    assert_eq!(group.widgets.len(), 4);
+    for (w, button) in group.widgets.iter().zip(buttons) {
+        assert_eq!(w.page, 1);
+        assert!(close(w.at, button.rect), "{:?} {:?}", w.at, button.rect);
+    }
+    // Repeated, blank-padded and "Off" choices get names of their own.
+    let states: Vec<&str> = group.widgets.iter().map(|w| w.on.as_deref().unwrap()).collect();
+    assert_eq!(states, ["Card", "Card 2", "Off 2", "Bank (UK)"]);
+    assert_eq!(group.value, FieldValue::State(None));
+
+    // Picking one button turns the group to it.
+    let filled = new
+        .with_changes(&Changes {
+            fields: vec![
+                (fields[0].id, FieldValue::Text("Large".into())),
+                (group.id, FieldValue::State(Some("Bank (UK)".into()))),
+            ],
+            ..Changes::default()
+        })
+        .unwrap();
+    let filled = new.reopen(filled).unwrap();
+    let values: Vec<FieldValue> = filled
+        .info()
+        .unwrap()
+        .fields
+        .into_iter()
+        .map(|f| f.value)
+        .collect();
+    assert_eq!(
+        values,
+        [
+            FieldValue::Text("Large".into()),
+            FieldValue::State(Some("Bank (UK)".into()))
+        ]
+    );
+
+    // Deleting the group takes every button off the page.
+    let saved = new.with_form_fields(&[], &[group.id]).unwrap();
+    let widgets = saved.windows(16).filter(|w| w == b"/Subtype /Widget").count();
+    assert_eq!(widgets, 1, "only the list box is left");
+    assert_eq!(new.reopen(saved).unwrap().info().unwrap().fields.len(), 1);
 }

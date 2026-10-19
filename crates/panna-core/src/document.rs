@@ -434,7 +434,8 @@ impl Document {
     }
 
     /// The document with `add` fields added to its form and the fields `remove` taken out,
-    /// as a new file. Added fields named like one already there get a number after the name.
+    /// as a new file. Added fields named like one already there get a number after the name,
+    /// and so do radio buttons whose choice repeats another's in their group.
     pub fn with_form_fields(
         &self,
         add: &[crate::NewField],
@@ -458,7 +459,15 @@ impl Document {
                     i += 1;
                 }
                 taken.insert(name.clone());
-                crate::NewField { name, ..f.clone() }
+                let kind = match &f.kind {
+                    crate::NewFieldKind::Radio(buttons) => crate::NewFieldKind::Radio(radio_choices(buttons)),
+                    kind => kind.clone(),
+                };
+                crate::NewField {
+                    name,
+                    kind,
+                    ..f.clone()
+                }
             })
             .collect();
         let widgets: Vec<(usize, crate::ObjRef)> = fields
@@ -829,6 +838,32 @@ fn format_bytes(n: u64) -> String {
         1_000..1_000_000 => format!("{:.1} KB", n as f64 / 1e3),
         _ => format!("{:.1} MB", n as f64 / 1e6),
     }
+}
+
+/// `buttons` with each choice trimmed, never blank or "Off" (which means none is on), and
+/// different from the others in the group.
+fn radio_choices(buttons: &[crate::RadioButton]) -> Vec<crate::RadioButton> {
+    let mut taken = std::collections::HashSet::from(["Off".to_owned()]);
+    buttons
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let base = b.choice.trim();
+            let base = if base.is_empty() {
+                format!("Choice {}", i + 1)
+            } else {
+                base.to_owned()
+            };
+            let mut choice = base.clone();
+            let mut n = 2;
+            while taken.contains(&choice) {
+                choice = format!("{base} {n}");
+                n += 1;
+            }
+            taken.insert(choice.clone());
+            crate::RadioButton { choice, rect: b.rect }
+        })
+        .collect()
 }
 
 #[cfg(test)]

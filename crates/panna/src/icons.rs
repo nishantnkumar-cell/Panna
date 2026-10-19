@@ -103,6 +103,8 @@ pub enum Icon {
     TextField,
     CheckBoxField,
     DropdownField,
+    ListField,
+    RadioField,
     DataImport,
 }
 
@@ -203,6 +205,8 @@ impl Icon {
             Icon::TextField => include_bytes!("../icons/text-cursor-input.svg"),
             Icon::CheckBoxField => include_bytes!("../icons/square-check.svg"),
             Icon::DropdownField => include_bytes!("../icons/square-chevron-down.svg"),
+            Icon::ListField => include_bytes!("../icons/list.svg"),
+            Icon::RadioField => include_bytes!("../icons/circle-dot.svg"),
             Icon::CommentsExport => include_bytes!("../icons/message-square-share.svg"),
             Icon::DataImport => include_bytes!("../icons/file-up.svg"),
         }
@@ -299,7 +303,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 96] = [
+    const ALL: [Icon; 98] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -395,6 +399,8 @@ mod tests {
         Icon::TextField,
         Icon::CheckBoxField,
         Icon::DropdownField,
+        Icon::ListField,
+        Icon::RadioField,
         Icon::DataImport,
     ];
 

@@ -63,7 +63,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Reset form | V1 | Done: eraser button in the toolbar, with a confirmation; fields return to their /DV defaults |
 | Flatten form | Later | Done: fields are drawn with their values and the form is removed |
 | Import / export form data (FDF, XFDF) | Later | Done: All tools fills in a form from an FDF or XFDF file, or saves its data as either. Scripts in data files are ignored |
-| Create and edit form fields | Done | "Prepare a form" in All tools: click or drag to add text fields (one or several lines), check boxes and drop-down lists, with a name, a hover tip and "must be filled in"; click a field to delete it. Each change is a page change, undone from the page tools. Radio buttons, list boxes and moving or resizing fields are not yet here, and fields inside a group can't be deleted yet |
+| Create and edit form fields | Done | "Prepare a form" in All tools: click or drag to add text fields (one or several lines), check boxes, drop-down lists, list boxes and radio buttons, with a name, a hover tip and "must be filled in"; click a field to delete it. Radio buttons are made as a group, a button for each choice typed: clicked, they go down the page from the click; dragged, they spread evenly along the box. Each change is a page change, undone from the page tools. Moving or resizing fields is not yet here, and fields inside a group can't be deleted yet |
 | Auto-detect form fields | Later | Offline heuristic only |
 | Form JavaScript calculations | Later | **Sandboxed** JS subset only, or skip. JavaScript is a major attack surface in PDF readers |
 | XFA forms (dynamic LiveCycle forms) | Skip | Deprecated, huge attack surface |
