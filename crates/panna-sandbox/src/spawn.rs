@@ -171,14 +171,16 @@ mod windows {
                 &mut sid,
             )
         };
-        if made == ALREADY_EXISTS {
+        // Already made, by an earlier run or by another renderer starting at the same moment
+        // (which can fail the call with another error while the profile is being written):
+        // its SID comes from its name.
+        if made != 0 {
             // SAFETY: as above.
             let found = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
             if found != 0 {
-                return Err(Error::other(format!("AppContainer: {found:#x}")));
+                let code = if made == ALREADY_EXISTS { found } else { made };
+                return Err(Error::other(format!("AppContainer: {code:#x}")));
             }
-        } else if made != 0 {
-            return Err(Error::other(format!("AppContainer: {made:#x}")));
         }
         Ok(Sid(sid))
     }
