@@ -393,11 +393,16 @@ impl Engine {
             return match child.call(doc, hidden, &op) {
                 Ok(answer) => answer,
                 Err(crashed) => {
+                    let why = child.take_open_error();
                     if crashed {
                         // Stuck, out of memory or crashed: the next request starts a new one.
                         self.child = None;
                     }
-                    op.failed(crashed)
+                    match (why, &op) {
+                        // Say why the document wouldn't open: a password, a refused bomb, ...
+                        (Some(why), Op::Info) => Answer::Info(Err(why)),
+                        _ => op.failed(crashed),
+                    }
                 }
             };
         }
@@ -406,7 +411,10 @@ impl Engine {
                 let view = local.view.as_ref().unwrap_or(&local.doc);
                 perform(&local.doc, view, &view.new_cache(), op)
             }
-            Err(_) => op.failed(false),
+            Err(why) => match op {
+                Op::Info => Answer::Info(Err(why)),
+                _ => op.failed(false),
+            },
         }
     }
 

@@ -16,7 +16,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::time::Duration;
 
 use crate::remote::{Answer, Doc, Op};
-use crate::{Document, Limits, ObjRef, RenderError, RenderedPage};
+use crate::{Document, Limits, ObjRef, OpenError, RenderError, RenderedPage};
 
 /// The argument that starts a renderer.
 pub const ARG: &str = "--panna-render";
@@ -135,6 +135,8 @@ pub(crate) struct Renderer {
     from: Receiver<std::io::Result<(u8, Vec<u8>)>>,
     /// The version it has, and the layers hidden in it.
     loaded: Option<(u64, Option<Vec<ObjRef>>)>,
+    /// Why the last document sent couldn't be opened, as the renderer reported it.
+    open_error: Option<OpenError>,
 }
 
 impl Renderer {
@@ -180,6 +182,7 @@ impl Renderer {
             to,
             from,
             loaded: None,
+            open_error: None,
         };
         match renderer.wait(START_TIME) {
             Ok((READY, _)) => Some(renderer),
@@ -219,9 +222,20 @@ impl Renderer {
                 self.loaded = Some(key);
                 Ok(())
             }
-            (FAILED, _) => Err(false),
+            (FAILED, body) => {
+                self.open_error = match body.split_first() {
+                    Some((3, why)) => postcard::from_bytes(why).ok(),
+                    _ => None,
+                };
+                Err(false)
+            }
             _ => Err(true),
         }
+    }
+
+    /// Why the last document sent couldn't be opened, if the renderer said.
+    pub(crate) fn take_open_error(&mut self) -> Option<OpenError> {
+        self.open_error.take()
     }
 
     /// Does `op` on `doc`; `Err(true)` when the renderer has to go, `Err(false)` when the
@@ -307,33 +321,44 @@ pub fn serve() {
     let mut next = read_frame(&mut input, max_load);
     loop {
         let Ok((LOAD, mut body)) = next else { return };
-        let loaded = numbers::<1>(&body).and_then(|([pw_len], rest)| {
-            let (password, rest) = rest.split_at_checked(usize::try_from(pw_len).ok()?)?;
-            let password = std::str::from_utf8(password).ok()?;
-            let (limits, rest) = limits_from(rest)?;
-            let ([hidden_len], rest) = numbers::<1>(rest)?;
-            let (hidden, bytes) = rest.split_at_checked(usize::try_from(hidden_len).ok()?)?;
-            let hidden: Option<Vec<ObjRef>> = postcard::from_bytes(hidden).ok()?;
-            std::panic::catch_unwind(|| {
-                let doc = Document::from_bytes(bytes.to_vec(), Some(password), limits).ok()?;
-                let view = match &hidden {
-                    Some(hidden) => Some(doc.with_layers_hidden(hidden).ok()?),
-                    None => None,
-                };
-                Some((doc, view))
+        let loaded = numbers::<1>(&body)
+            .and_then(|([pw_len], rest)| {
+                let (password, rest) = rest.split_at_checked(usize::try_from(pw_len).ok()?)?;
+                let password = std::str::from_utf8(password).ok()?;
+                let (limits, rest) = limits_from(rest)?;
+                let ([hidden_len], rest) = numbers::<1>(rest)?;
+                let (hidden, bytes) = rest.split_at_checked(usize::try_from(hidden_len).ok()?)?;
+                let hidden: Option<Vec<ObjRef>> = postcard::from_bytes(hidden).ok()?;
+                Some(
+                    std::panic::catch_unwind(|| {
+                        let doc = Document::from_bytes(bytes.to_vec(), Some(password), limits)?;
+                        let view = match &hidden {
+                            Some(hidden) => {
+                                Some(doc.with_layers_hidden(hidden).map_err(|_| OpenError::Invalid)?)
+                            }
+                            None => None,
+                        };
+                        Ok((doc, view))
+                    })
+                    .unwrap_or(Err(OpenError::EngineCrashed)),
+                )
             })
-            .ok()
-            .flatten()
-        });
+            .unwrap_or(Err(OpenError::Invalid));
         // The document keeps its own copy of the password, which it wipes when dropped.
         let password_end = numbers::<1>(&body).map_or(0, |([pw_len], _)| 8 + pw_len as usize);
         if let Some(password) = body.get_mut(8..password_end) {
             zeroize::Zeroize::zeroize(password);
         }
-        let Some((doc, view)) = loaded else {
-            let _ = write_frame(&mut output, FAILED, &[&[3]]);
-            next = read_frame(&mut input, max_load);
-            continue;
+        let (doc, view) = match loaded {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                // Why it couldn't be opened (a password is needed, a bomb was refused, ...),
+                // so the app can say so or ask for the password.
+                let why = postcard::to_stdvec(&e).unwrap_or_default();
+                let _ = write_frame(&mut output, FAILED, &[&[3], &why]);
+                next = read_frame(&mut input, max_load);
+                continue;
+            }
         };
         if write_frame(&mut output, LOADED, &[]).is_err() {
             return;
