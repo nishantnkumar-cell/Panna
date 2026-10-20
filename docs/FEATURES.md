@@ -25,7 +25,8 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Full-screen / presentation mode | Later | Done: full screen keeping the tools (F11), and presenting one page at a time on black (Ctrl+L, as in Acrobat); click, Space or arrows to move, Escape to leave |
 | Night mode / custom page colours (accessibility) | Later | Done: original, dark (hues kept, lightness inverted) and sepia, cycled from the moon button or Ctrl+Shift+D; remembered |
 | Recent files list | V1 | Done; stored locally only |
-| Toolbars dock to any edge or float; position remembered | V1 | Done; icon-only (Lucide, ISC) with hover tips |
+| Toolbars dock to any edge or float; position remembered | V1 | Done: seven bars (File, Page, Zoom, View, Tools, Edit and review, Comment), each floating or snapped to an edge, bottom bars centred or left or right, lockable; icon-only (Lucide, ISC) with hover tips |
+| Menu bar | V1 | Done: File, Edit, View, Comment, Pages, Forms, Protect, Tools, Help, with icons and shortcuts; Alt+letter and F10 open them, arrows and Enter move around |
 | Print | Later | Done: Ctrl+P or the printer button opens the system print dialog: KDE or GNOME through the desktop print portal (also in Flatpak), Windows' print dialog, and macOS's print panel with preview. Prints unsaved changes too, and honours a file's "no printing" permission |
 | Document properties (title, author, page size, PDF version) | V1 | Done (Ctrl+D) |
 | Password-protected (encrypted) PDFs | V1 | Done |

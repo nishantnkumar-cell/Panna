@@ -25,6 +25,7 @@ mod labels;
 mod layout;
 mod links;
 mod measure;
+mod menu;
 mod pages;
 mod pictures;
 mod preferences;
@@ -53,7 +54,7 @@ use std::sync::Arc;
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
     Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, rule,
-    scrollable, space, stack, text, text_input,
+    scrollable, space, text, text_input,
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
@@ -66,7 +67,7 @@ use layout::{PAGE_GAP, PageLayout, Spread};
 use selection::{Caret, PageMap, Selection, TextSlot};
 use settings::Settings;
 use sidebar::{Sidebar, ThumbLayout};
-use toolbar::{Dock, Toolbar};
+use toolbar::{Bar, Bars};
 
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
@@ -270,6 +271,21 @@ enum Message {
     ToolKey(annotate::Tool),
     PageSubmit,
     Toolbar(toolbar::Event),
+    /// Opening, closing and moving around the menus.
+    Menu(menu::Event),
+    /// A movement key while a menu is open.
+    MenuNav(menu::Nav),
+    /// A command picked from a menu: closes the menu, then runs it.
+    MenuPick(Box<Message>),
+    /// Turns the comment tools on if needed and picks a tool, from the Comment menu.
+    CommentTool(annotate::Tool),
+    SetSpread(Spread),
+    SetColors(colors::PageColors),
+    /// Shows or hides the keyboard shortcuts card.
+    Shortcuts(bool),
+    About,
+    /// Closes the window, as its close button does.
+    Quit,
     WindowResized(Size),
     PasswordInput(String),
     PasswordSubmit,
@@ -458,7 +474,7 @@ struct App {
     page_input: String,
     settings: Settings,
     trusted: trust::Trusted,
-    toolbar: Toolbar,
+    bars: Bars,
     sidebar: Sidebar,
     window_size: Size,
     show_properties: bool,
@@ -528,6 +544,9 @@ struct App {
     scanned: Vec<Vec<u8>>,
     /// The All tools card is showing.
     all_tools: bool,
+    /// The keyboard shortcuts card is showing.
+    shortcuts: bool,
+    menus: menu::State,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
     /// The New blank PDF card, while open.
@@ -785,6 +804,16 @@ fn scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("pages")
 }
 
+/// Files dropped on the window, and its size and scale changing.
+fn window_event(event: iced::Event) -> Option<Message> {
+    match event {
+        iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::FileChosen(Some(path))),
+        iced::Event::Window(window::Event::Rescaled(factor)) => Some(Message::ScaleFactor(factor)),
+        iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size)),
+        _ => None,
+    }
+}
+
 fn page_box_id() -> iced::widget::Id {
     iced::widget::Id::new("page-number")
 }
@@ -827,6 +856,68 @@ fn properties_view<'a>(
 }
 
 /// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
+/// The keyboard shortcuts, in two columns.
+fn shortcuts_card<'a>() -> Element<'a, Message> {
+    let m = icons::MOD;
+    let keys: [(String, &str); 24] = [
+        (format!("{m}O"), "Open"),
+        (format!("{m}S"), "Save"),
+        (format!("{m}Shift+S"), "Save as"),
+        (format!("{m}P"), "Print"),
+        (format!("{m}W"), "Close the document"),
+        (format!("{m}Tab"), "Next tab"),
+        (format!("{m}D"), "Document properties"),
+        (format!("{m}F, F3"), "Find, find next"),
+        (format!("{m}Z, {m}Y"), "Undo, redo"),
+        (format!("{m}C"), "Copy"),
+        (format!("{m}, (comma)"), "Preferences"),
+        ("F10, Alt+letter".into(), "Open a menu"),
+        (format!("{m}+, {m}−"), "Zoom in, zoom out"),
+        (format!("{m}1, {m}2, {m}0"), "Actual size, fit width, fit page"),
+        ("Page Up, Page Down".into(), "Previous, next page"),
+        ("Home, End".into(), "First, last page"),
+        (format!("{m}Shift+N"), "Go to page"),
+        (format!("{m}Shift+T"), "Page layout"),
+        (format!("{m}Shift+D"), "Page colours"),
+        (format!("{m}Shift+−, {m}Shift++"), "Rotate the view"),
+        ("F4".into(), "Sidebar"),
+        ("F11".into(), "Full screen"),
+        (format!("{m}L"), "Present"),
+        (
+            format!("{m}Shift+C"),
+            "Comment tools (then a letter picks a tool)",
+        ),
+    ];
+    let line = |(k, what): (String, &'a str)| -> Element<'a, Message> {
+        row![text(k).size(13).width(200), text(what).size(13)]
+            .spacing(8)
+            .into()
+    };
+    let mut left: Vec<Element<'a, Message>> = keys.into_iter().map(line).collect();
+    let right = left.split_off(12);
+    container(
+        column![
+            text("Keyboard shortcuts").size(16),
+            row![
+                iced::widget::Column::with_children(left).spacing(6).width(390),
+                iced::widget::Column::with_children(right).spacing(6).width(470),
+            ]
+            .spacing(16),
+            row![
+                space::horizontal(),
+                button("Close")
+                    .style(button::secondary)
+                    .on_press(Message::Shortcuts(false)),
+            ],
+        ]
+        .spacing(12)
+        .width(876),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
 fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
     opaque(
         mouse_area(
@@ -942,7 +1033,7 @@ impl App {
                 height: 800.0,
             },
             page_input: String::new(),
-            toolbar: Toolbar::new(settings.toolbar_dock, settings.toolbar_pos),
+            bars: Bars::new(settings.bars, menu::HEIGHT),
             sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
             settings,
             trusted: trust::Trusted::load(),
@@ -983,6 +1074,8 @@ impl App {
             scanning: None,
             scanned: Vec::new(),
             all_tools: false,
+            shortcuts: false,
+            menus: menu::State::default(),
             pictures: Vec::new(),
             blank: None,
             preferences: false,
@@ -1053,13 +1146,18 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let base = event::listen_with(|event, status, _window| match event {
-            iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::FileChosen(Some(path))),
-            iced::Event::Window(window::Event::Rescaled(factor)) => Some(Message::ScaleFactor(factor)),
-            iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size)),
-            iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
-            _ => None,
-        });
+        // While a menu is open, the keys move around it instead of reaching the document.
+        let base = if self.menus.is_open() {
+            event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(key) => shortcuts::menu_keys(key),
+                event => window_event(event),
+            })
+        } else {
+            event::listen_with(|event, status, _window| match event {
+                iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
+                event => window_event(event),
+            })
+        };
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
         #[cfg(target_os = "macos")]
         subs.push(finder::subscription());
@@ -1084,7 +1182,7 @@ impl App {
                 _ => None,
             }));
         }
-        if !self.toolbar.dragging() {
+        if !self.bars.dragging() {
             return Subscription::batch(subs);
         }
         // Follow the cursor anywhere in the window while a toolbar is being dragged.
@@ -1304,8 +1402,9 @@ impl App {
                 Task::batch([zoom_task, self.go_to_page(page)])
             }
             Message::RotateCw => self.rotate(1),
-            Message::NextColors => {
-                self.settings.colors = self.settings.colors.next();
+            Message::NextColors => self.update(Message::SetColors(self.settings.colors.next())),
+            Message::SetColors(colors) => {
+                self.settings.colors = colors;
                 self.settings.save();
                 // Every page and thumbnail is drawn again in the new colours.
                 if let Some(doc) = &mut self.doc {
@@ -1315,8 +1414,14 @@ impl App {
                 Task::batch([self.request_visible(), self.request_thumbnails()])
             }
             Message::NextSpread => {
-                let current = self.doc.as_mut().and_then(|d| d.spread.take());
-                self.settings.spread = current.unwrap_or(self.settings.spread).next();
+                let current = self.doc.as_ref().and_then(|d| d.spread);
+                self.update(Message::SetSpread(current.unwrap_or(self.settings.spread).next()))
+            }
+            Message::SetSpread(spread) => {
+                if let Some(doc) = &mut self.doc {
+                    doc.spread = None;
+                }
+                self.settings.spread = spread;
                 self.settings.save();
                 self.relayout()
             }
@@ -1351,14 +1456,56 @@ impl App {
                     None => release,
                 }
             }
+            Message::Toolbar(toolbar::Event::Show(Bar::Comment, shown)) => {
+                // The Comment bar shows while the comment tools are on.
+                if shown != self.annotate.open {
+                    return self.update(Message::Annotate(annotate::Event::Toggle));
+                }
+                Task::none()
+            }
             Message::Toolbar(event) => {
-                if self.toolbar.update(event, self.window_size) {
-                    self.settings.toolbar_dock = self.toolbar.dock;
-                    self.settings.toolbar_pos = self.toolbar.pos;
+                if self.bars.update(event, self.window_size) {
+                    self.settings.bars = self.bars.layout;
                     self.settings.save();
                 }
                 Task::none()
             }
+            Message::Menu(event) => {
+                let mut menus = std::mem::take(&mut self.menus);
+                menus.update(event, |m| self.menu_entries(m));
+                self.menus = menus;
+                Task::none()
+            }
+            Message::MenuNav(nav) => {
+                let mut menus = std::mem::take(&mut self.menus);
+                let picked = menus.nav(nav, |m| self.menu_entries(m));
+                self.menus = menus;
+                picked.map_or_else(Task::none, |m| self.update(m))
+            }
+            Message::MenuPick(message) => {
+                self.menus = menu::State::default();
+                self.update(*message)
+            }
+            Message::CommentTool(tool) => {
+                let open = if self.annotate.open {
+                    Task::none()
+                } else {
+                    self.update(Message::Annotate(annotate::Event::Toggle))
+                };
+                open.chain(Task::done(Message::Annotate(annotate::Event::Tool(tool))))
+            }
+            Message::Shortcuts(show) => {
+                self.shortcuts = show;
+                Task::none()
+            }
+            Message::About => {
+                self.notice = Some(format!(
+                    "Panna {}\n\nAn offline PDF viewer and editor, written in Rust. Nothing you open leaves this computer.",
+                    env!("CARGO_PKG_VERSION")
+                ));
+                Task::none()
+            }
+            Message::Quit => window::latest().and_then(|id| Task::done(Message::CloseRequested(id))),
             Message::WindowResized(size) => {
                 self.window_size = size;
                 // Refit the page once the window has gone full screen.
@@ -1526,6 +1673,8 @@ impl App {
                     self.scanning = None;
                 } else if self.all_tools {
                     self.all_tools = false;
+                } else if self.shortcuts {
+                    self.shortcuts = false;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -5518,190 +5667,729 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// A toolbar's buttons, laid out for a column when `vertical`, or `None` when the bar has
+    /// nothing to show.
+    fn bar_items(&self, bar: Bar, vertical: bool) -> Option<Vec<Element<'_, Message>>> {
+        let page_count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+        let has_doc = page_count > 0;
+        let on = |m: Message| has_doc.then_some(m);
+        let m = icons::MOD;
+        let items = match bar {
+            Bar::File => vec![
+                icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
+                icons::button(
+                    Icon::Save,
+                    format!("Save ({m}S)"),
+                    (self.dirty() && !self.saving).then_some(Message::Save),
+                ),
+                icons::button(
+                    Icon::Print,
+                    format!("Print… ({m}P)"),
+                    (has_doc && !self.printing).then_some(Message::Print),
+                ),
+                icons::button(
+                    Icon::Properties,
+                    format!("Document properties ({m}D)"),
+                    on(Message::ToggleProperties),
+                ),
+            ],
+            Bar::Page => {
+                let current = self.current_page() + 1;
+                let labels = self
+                    .doc
+                    .as_ref()
+                    .map_or(&[][..], |d| d.info.page_labels.as_slice());
+                let current_label = panna_core::page_label(labels, current - 1);
+                let page_box = text_input(&current_label, &self.page_input)
+                    .id(page_box_id())
+                    .on_input(Message::PageInput)
+                    .on_submit(Message::PageSubmit)
+                    .width(if vertical { 40 } else { 56 });
+                let of = if current_label == current.to_string() {
+                    format!("of {page_count}")
+                } else {
+                    format!("({current} of {page_count})")
+                };
+                vec![
+                    icons::button(
+                        if vertical { Icon::FindPrev } else { Icon::PrevPage },
+                        "Previous page (Page Up)",
+                        on(Message::PrevPage),
+                    ),
+                    icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
+                    text(of).size(13).into(),
+                    icons::button(
+                        if vertical { Icon::FindNext } else { Icon::NextPage },
+                        "Next page (Page Down)",
+                        on(Message::NextPage),
+                    ),
+                ]
+            }
+            Bar::Zoom => vec![
+                icons::button(
+                    Icon::ZoomOut,
+                    format!("Zoom out ({m}Minus)"),
+                    on(Message::ZoomOut),
+                ),
+                icons::with_tip(
+                    button(text(format!("{:.0}%", self.zoom * 100.0)).size(13))
+                        .style(button::text)
+                        .padding([4, 2])
+                        .on_press_maybe(on(Message::ZoomReset)),
+                    format!("Actual size ({m}1)"),
+                ),
+                icons::button(Icon::ZoomIn, format!("Zoom in ({m}Plus)"), on(Message::ZoomIn)),
+                icons::button(Icon::FitWidth, format!("Fit width ({m}2)"), on(Message::FitWidth)),
+                icons::button(Icon::FitPage, format!("Fit page ({m}0)"), on(Message::FitPage)),
+            ],
+            Bar::View => {
+                let spread = self.spread();
+                vec![
+                    icons::toggle(
+                        Icon::Sidebar,
+                        if self.sidebar.open {
+                            "Hide sidebar (F4)"
+                        } else {
+                            "Show sidebar (F4)"
+                        },
+                        self.sidebar.open,
+                        Message::Sidebar(sidebar::Event::Toggle),
+                    ),
+                    icons::button(
+                        match spread {
+                            Spread::Single => Icon::SinglePage,
+                            Spread::Two => Icon::TwoPages,
+                            Spread::TwoCover => Icon::CoverPage,
+                        },
+                        match spread {
+                            Spread::Single => {
+                                format!("Single page: click for two pages side by side ({m}Shift+T)")
+                            }
+                            Spread::Two => {
+                                format!("Two pages: click to show the cover page alone ({m}Shift+T)")
+                            }
+                            Spread::TwoCover => {
+                                format!("Two pages with cover: click for single page ({m}Shift+T)")
+                            }
+                        },
+                        on(Message::NextSpread),
+                    ),
+                    icons::button(Icon::RotateCcw, "Rotate the view left", on(Message::RotateCcw)),
+                    icons::button(Icon::RotateCw, "Rotate the view right", on(Message::RotateCw)),
+                    icons::toggle(
+                        Icon::Moon,
+                        format!(
+                            "Page colours: {} (click for {}, {m}Shift+D)",
+                            self.settings.colors.label(),
+                            self.settings.colors.next().label()
+                        ),
+                        self.settings.colors != colors::PageColors::Normal,
+                        Message::NextColors,
+                    ),
+                    icons::button(
+                        Icon::Present,
+                        format!("Present, one page at a time ({m}L)"),
+                        on(Message::Present),
+                    ),
+                    icons::toggle(
+                        Icon::FullScreen,
+                        if self.screen == Screen::Full {
+                            "Leave full screen (F11)"
+                        } else {
+                            "Full screen (F11)"
+                        },
+                        self.screen == Screen::Full,
+                        Message::ToggleFullScreen,
+                    ),
+                ]
+            }
+            Bar::Tools => vec![
+                icons::toggle(
+                    Icon::Hand,
+                    if self.hand {
+                        "Stop the hand tool (Esc)"
+                    } else {
+                        "Hand: drag the pages to scroll"
+                    },
+                    self.hand,
+                    Message::ToggleHand,
+                ),
+                icons::toggle(
+                    Icon::ZoomBox,
+                    if self.zoom_box {
+                        "Stop the zoom tool (Esc)"
+                    } else {
+                        "Zoom: drag a box over a page to zoom in to it"
+                    },
+                    self.zoom_box,
+                    Message::ToggleZoomBox,
+                ),
+                icons::button(
+                    Icon::Search,
+                    format!("Find ({m}F)"),
+                    on(Message::Find(find::Event::Open)),
+                ),
+                icons::toggle(
+                    Icon::Camera,
+                    if self.snapping {
+                        "Stop taking snapshots (Esc)"
+                    } else {
+                        "Snapshot: drag over a page to copy a picture of it"
+                    },
+                    self.snapping,
+                    Message::ToggleSnapshot,
+                ),
+                icons::toggle(
+                    Icon::Ruler,
+                    if self.measure.on {
+                        "Stop measuring (Esc)"
+                    } else {
+                        "Measure distance, perimeter and area"
+                    },
+                    self.measure.on,
+                    Message::Measure(measure::Event::Toggle),
+                ),
+            ],
+            Bar::Review => vec![
+                icons::toggle(
+                    Icon::Annotate,
+                    if self.annotate.open {
+                        format!("Hide comment tools ({m}Shift+C)")
+                    } else {
+                        format!("Comment and draw ({m}Shift+C)")
+                    },
+                    self.annotate.open,
+                    Message::Annotate(annotate::Event::Toggle),
+                ),
+                icons::toggle(
+                    Icon::EditPage,
+                    "Add or change text, pictures and links",
+                    self.adder.on,
+                    Message::Add(add::Event::Toggle),
+                ),
+                icons::toggle(
+                    Icon::PrepareForm,
+                    "Prepare a form (add or delete fields)",
+                    self.preparer.on,
+                    Message::Prepare(prepare::Event::Toggle),
+                ),
+                icons::button(
+                    Icon::Signature,
+                    annotate::Tool::Sign.tip(),
+                    on(Message::CommentTool(annotate::Tool::Sign)),
+                ),
+                icons::button(Icon::AllTools, "All tools…", Some(Message::AllTools(true))),
+            ],
+            Bar::Comment => {
+                if !(self.annotate.open && has_doc) {
+                    return None;
+                }
+                self.annotate.bar_items(vertical)
+            }
+        };
+        Some(items)
+    }
+
+    /// The page layout in use: the document's own, or the one picked last.
+    fn spread(&self) -> Spread {
+        self.doc
+            .as_ref()
+            .and_then(|d| d.spread)
+            .unwrap_or(self.settings.spread)
+    }
+
+    /// The rows of a menu, enabled and ticked to match the app's state.
+    fn menu_entries(&self, which: menu::Menu) -> Vec<menu::Entry<Message>> {
+        use menu::{Entry::Separator, check, item, plain, sub};
+        use toolbar::Event as T;
+        let has_doc = self.doc.as_ref().is_some_and(|d| !d.pages.is_empty());
+        let on = |m: Message| has_doc.then_some(m);
+        let m = icons::MOD;
+        let k = |keys: &str| format!("{m}{keys}");
+        match which {
+            menu::Menu::File => vec![
+                item(
+                    Icon::NewBlank,
+                    "New blank PDF…",
+                    "",
+                    Some(Message::Blank(create::Event::Open)),
+                ),
+                item(
+                    Icon::FromPictures,
+                    "New PDF from pictures…",
+                    "",
+                    Some(Message::FromPictures),
+                ),
+                item(
+                    Icon::FromClipboard,
+                    "New PDF from the clipboard picture",
+                    "",
+                    Some(Message::FromClipboard),
+                ),
+                item(
+                    Icon::Scanner,
+                    "Scan pages…",
+                    "",
+                    Some(Message::Scan(scan::Event::Open)),
+                ),
+                Separator,
+                item(Icon::Open, "Open…", k("O"), Some(Message::OpenDialog)),
+                sub(
+                    None,
+                    "Open recent",
+                    if self.settings.recent.is_empty() {
+                        vec![plain("No recent files", "", None)]
+                    } else {
+                        self.settings
+                            .recent
+                            .iter()
+                            .map(|path| {
+                                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                                plain(name, "", Some(Message::FileChosen(Some(path.clone()))))
+                            })
+                            .collect()
+                    },
+                ),
+                Separator,
+                item(
+                    Icon::Save,
+                    "Save",
+                    k("S"),
+                    (self.dirty() && !self.saving).then_some(Message::Save),
+                ),
+                plain("Save as…", k("Shift+S"), on(Message::SaveAs)),
+                item(
+                    Icon::Shrink,
+                    "Save a smaller copy…",
+                    "",
+                    on(Message::Shrink(shrink::Event::Open)),
+                ),
+                item(
+                    Icon::Export,
+                    "Export as text, Office or pictures…",
+                    "",
+                    on(Message::Export(export::Event::Open)),
+                ),
+                Separator,
+                item(
+                    Icon::Print,
+                    "Print…",
+                    k("P"),
+                    (has_doc && !self.printing).then_some(Message::Print),
+                ),
+                item(
+                    Icon::PrintComments,
+                    "Print with comments…",
+                    "",
+                    on(Message::PrintWithComments),
+                ),
+                Separator,
+                item(
+                    Icon::Properties,
+                    "Document properties…",
+                    k("D"),
+                    on(Message::ToggleProperties),
+                ),
+                item(
+                    Icon::Batch,
+                    "Batch actions on a folder…",
+                    "",
+                    Some(Message::Batch(batch::Event::Open)),
+                ),
+                Separator,
+                plain("Close", k("W"), self.doc.is_some().then_some(Message::CloseTab)),
+                plain(
+                    if cfg!(target_os = "macos") {
+                        "Quit Panna"
+                    } else {
+                        "Exit"
+                    },
+                    "",
+                    Some(Message::Quit),
+                ),
+            ],
+            menu::Menu::Edit => vec![
+                item(
+                    Icon::Undo,
+                    "Undo",
+                    k("Z"),
+                    self.annotate
+                        .can_undo()
+                        .then_some(Message::Annotate(annotate::Event::Undo)),
+                ),
+                item(
+                    Icon::Redo,
+                    "Redo",
+                    k("Y"),
+                    self.annotate
+                        .can_redo()
+                        .then_some(Message::Annotate(annotate::Event::Redo)),
+                ),
+                Separator,
+                plain("Copy", k("C"), on(Message::Copy)),
+                check("Snapshot", "", self.snapping, on(Message::ToggleSnapshot)),
+                Separator,
+                item(
+                    Icon::Search,
+                    "Find…",
+                    k("F"),
+                    on(Message::Find(find::Event::Open)),
+                ),
+                Separator,
+                item(
+                    Icon::EditPage,
+                    "Add or change text, pictures and links",
+                    "",
+                    on(Message::Add(add::Event::Toggle)),
+                ),
+                item(
+                    Icon::EditPictures,
+                    "Move, replace or delete pictures",
+                    "",
+                    on(Message::EditPictures(pictures::Event::Toggle)),
+                ),
+                Separator,
+                item(
+                    Icon::Preferences,
+                    "Preferences…",
+                    k(","),
+                    Some(Message::Preferences(preferences::Event::Open)),
+                ),
+            ],
+            menu::Menu::View => {
+                let bars = &self.bars.layout;
+                let mut toolbars: Vec<menu::Entry<Message>> = Bar::ALL
+                    .into_iter()
+                    .map(|bar| {
+                        let shown = if bar == Bar::Comment {
+                            self.annotate.open
+                        } else {
+                            bars.place(bar).shown
+                        };
+                        check(
+                            bar.name(),
+                            "",
+                            shown,
+                            Some(Message::Toolbar(T::Show(bar, !shown))),
+                        )
+                    })
+                    .collect();
+                toolbars.push(Separator);
+                for align in toolbar::Align::ALL {
+                    toolbars.push(check(
+                        format!("Bottom bars: {}", align.label()),
+                        "",
+                        bars.bottom == align,
+                        Some(Message::Toolbar(T::BottomAlign(align))),
+                    ));
+                }
+                toolbars.extend([
+                    Separator,
+                    check(
+                        "Lock toolbars",
+                        "",
+                        bars.locked,
+                        Some(Message::Toolbar(T::ToggleLock)),
+                    ),
+                    plain("Reset toolbar layout", "", Some(Message::Toolbar(T::Reset))),
+                ]);
+                let spread = self.spread();
+                let colors = self.settings.colors;
+                vec![
+                    check(
+                        "Sidebar",
+                        "F4",
+                        self.sidebar.open,
+                        Some(Message::Sidebar(sidebar::Event::Toggle)),
+                    ),
+                    sub(None, "Toolbars", toolbars),
+                    Separator,
+                    item(Icon::ZoomIn, "Zoom in", k("+"), on(Message::ZoomIn)),
+                    item(Icon::ZoomOut, "Zoom out", k("−"), on(Message::ZoomOut)),
+                    plain("Actual size", k("1"), on(Message::ZoomReset)),
+                    item(Icon::FitWidth, "Fit width", k("2"), on(Message::FitWidth)),
+                    item(Icon::FitPage, "Fit page", k("0"), on(Message::FitPage)),
+                    Separator,
+                    sub(
+                        Some(Icon::SinglePage),
+                        "Page layout",
+                        [
+                            (Spread::Single, "Single page"),
+                            (Spread::Two, "Two pages"),
+                            (Spread::TwoCover, "Two pages with cover"),
+                        ]
+                        .into_iter()
+                        .map(|(s, label)| check(label, "", spread == s, on(Message::SetSpread(s))))
+                        .collect(),
+                    ),
+                    sub(
+                        Some(Icon::Moon),
+                        "Page colours",
+                        [
+                            (colors::PageColors::Normal, "Original"),
+                            (colors::PageColors::Dark, "Dark"),
+                            (colors::PageColors::Sepia, "Sepia"),
+                        ]
+                        .into_iter()
+                        .map(|(c, label)| check(label, "", colors == c, Some(Message::SetColors(c))))
+                        .collect(),
+                    ),
+                    item(
+                        Icon::RotateCcw,
+                        "Rotate the view left",
+                        "",
+                        on(Message::RotateCcw),
+                    ),
+                    item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
+                    Separator,
+                    item(Icon::Present, "Present", k("L"), on(Message::Present)),
+                    check(
+                        "Full screen",
+                        "F11",
+                        self.screen == Screen::Full,
+                        Some(Message::ToggleFullScreen),
+                    ),
+                    Separator,
+                    item(Icon::PrevPage, "Previous page", "Page Up", on(Message::PrevPage)),
+                    item(Icon::NextPage, "Next page", "Page Down", on(Message::NextPage)),
+                    plain("Go to page…", k("Shift+N"), on(Message::FocusPageBox)),
+                ]
+            }
+            menu::Menu::Comment => {
+                let tool = |t: annotate::Tool| {
+                    item(
+                        t.icon(),
+                        t.label(),
+                        t.key().to_ascii_uppercase().to_string(),
+                        on(Message::CommentTool(t)),
+                    )
+                };
+                use annotate::Tool;
+                vec![
+                    check(
+                        "Comment tools",
+                        k("Shift+C"),
+                        self.annotate.open,
+                        on(Message::Annotate(annotate::Event::Toggle)),
+                    ),
+                    Separator,
+                    tool(Tool::Select),
+                    tool(Tool::Highlight),
+                    tool(Tool::Underline),
+                    tool(Tool::StrikeOut),
+                    tool(Tool::Note),
+                    tool(Tool::TextBox),
+                    tool(Tool::Pen),
+                    sub(
+                        Some(Icon::Square),
+                        "Shapes",
+                        [
+                            Tool::Rect,
+                            Tool::Ellipse,
+                            Tool::Arrow,
+                            Tool::Line,
+                            Tool::Polygon,
+                            Tool::Cloud,
+                        ]
+                        .into_iter()
+                        .map(tool)
+                        .collect(),
+                    ),
+                    tool(Tool::Stamp),
+                    tool(Tool::Sign),
+                    Separator,
+                    item(
+                        Icon::CommentsImport,
+                        "Add comments from a file…",
+                        "",
+                        on(Message::ImportComments),
+                    ),
+                    item(
+                        Icon::CommentsExport,
+                        "Save comments to a file…",
+                        "",
+                        on(Message::ExportComments),
+                    ),
+                    item(
+                        Icon::CommentSummary,
+                        "Summarize comments as a PDF…",
+                        "",
+                        on(Message::SummarizeComments),
+                    ),
+                ]
+            }
+            menu::Menu::Pages => {
+                let op =
+                    |icon: Icon, label: &str, op: pages::Op| item(icon, label, "", on(Message::Pages(op)));
+                vec![
+                    op(Icon::RotateCcw, "Rotate this page left", pages::Op::RotateCcw),
+                    op(Icon::RotateCw, "Rotate this page right", pages::Op::RotateCw),
+                    op(Icon::MoveUp, "Move this page up", pages::Op::MoveUp),
+                    op(Icon::MoveDown, "Move this page down", pages::Op::MoveDown),
+                    Separator,
+                    op(
+                        Icon::PageAdd,
+                        "Add a blank page after this one",
+                        pages::Op::InsertBlank,
+                    ),
+                    op(
+                        Icon::PageInsertFile,
+                        "Insert pages from a PDF…",
+                        pages::Op::InsertFile,
+                    ),
+                    op(Icon::PageReplace, "Replace pages…", pages::Op::Replace),
+                    op(Icon::PageExtract, "Extract or split pages…", pages::Op::Extract),
+                    op(Icon::Delete, "Delete this page", pages::Op::Delete),
+                    Separator,
+                    op(Icon::Crop, "Crop pages…", pages::Op::Crop),
+                    op(
+                        Icon::PageNumbers,
+                        "Page numbers, headers and footers…",
+                        pages::Op::HeaderFooter,
+                    ),
+                    op(Icon::Watermark, "Watermark or page colour…", pages::Op::Watermark),
+                    op(Icon::PageLabels, "Page labels…", pages::Op::Labels),
+                    op(Icon::Flatten, "Flatten into the pages…", pages::Op::Flatten),
+                ]
+            }
+            menu::Menu::Forms => {
+                let has_form = self.form.exists();
+                vec![
+                    check(
+                        "Prepare a form",
+                        "",
+                        self.preparer.on,
+                        on(Message::Prepare(prepare::Event::Toggle)),
+                    ),
+                    Separator,
+                    item(
+                        Icon::Eraser,
+                        "Reset form",
+                        "",
+                        self.form.can_reset().then_some(Message::ResetForm),
+                    ),
+                    item(
+                        Icon::DataImport,
+                        "Fill in from a data file…",
+                        "",
+                        (has_doc && has_form).then_some(Message::ImportFormData),
+                    ),
+                    item(
+                        Icon::DataExport,
+                        "Save form data (FDF, XFDF)…",
+                        "",
+                        (has_doc && has_form).then_some(Message::ExportFormData),
+                    ),
+                ]
+            }
+            menu::Menu::Protect => vec![
+                item(
+                    Icon::Protect,
+                    "Password protection…",
+                    "",
+                    on(Message::Protect(protect::Event::Open)),
+                ),
+                check(
+                    "Redact (remove content for good)",
+                    "",
+                    self.redactor.on,
+                    on(Message::Redact(redact::Event::Toggle)),
+                ),
+                item(
+                    Icon::Clean,
+                    "Remove hidden information…",
+                    "",
+                    on(Message::Clean(protect::CleanEvent::Open)),
+                ),
+                Separator,
+                item(
+                    Icon::Signed,
+                    "Sign with a certificate…",
+                    "",
+                    on(Message::Signing(signing::Event::Open)),
+                ),
+            ],
+            menu::Menu::Tools => vec![
+                item(Icon::AllTools, "All tools…", "", Some(Message::AllTools(true))),
+                Separator,
+                item(
+                    Icon::ScanText,
+                    "Recognise text in scanned pages (OCR)",
+                    "",
+                    (has_doc && !self.recognising).then_some(Message::Recognise),
+                ),
+                sub(
+                    Some(Icon::ReadAloud),
+                    "Read aloud",
+                    vec![
+                        plain(
+                            "This page",
+                            k("Shift+V"),
+                            on(Message::ReadAloud(speech::Event::Page)),
+                        ),
+                        plain(
+                            "To the end",
+                            k("Shift+B"),
+                            on(Message::ReadAloud(speech::Event::ToEnd)),
+                        ),
+                        plain(
+                            "Stop",
+                            k("Shift+E"),
+                            self.reader
+                                .bar()
+                                .is_some()
+                                .then_some(Message::ReadAloud(speech::Event::Stop)),
+                        ),
+                    ],
+                ),
+                check(
+                    "Measure",
+                    "",
+                    self.measure.on,
+                    on(Message::Measure(measure::Event::Toggle)),
+                ),
+                check("Hand", "", self.hand, Some(Message::ToggleHand)),
+                check("Zoom box", "", self.zoom_box, Some(Message::ToggleZoomBox)),
+                Separator,
+                item(
+                    Icon::Compare,
+                    "Compare with another file…",
+                    "",
+                    on(Message::Compare(compare::Event::Open)),
+                ),
+                item(
+                    Icon::Preflight,
+                    "Check for PDF/A (archiving)",
+                    "",
+                    on(Message::Preflight(preflight::Event::Run)),
+                ),
+                item(
+                    Icon::Preflight,
+                    "Check for PDF/X (printing)",
+                    "",
+                    on(Message::Preflight(preflight::Event::RunPrint)),
+                ),
+                item(
+                    Icon::Accessibility,
+                    "Check accessibility",
+                    "",
+                    on(Message::Preflight(preflight::Event::RunAccessibility)),
+                ),
+            ],
+            menu::Menu::Help => vec![
+                plain("Keyboard shortcuts", "", Some(Message::Shortcuts(true))),
+                Separator,
+                item(Icon::Properties, "About Panna", "", Some(Message::About)),
+            ],
+        }
+    }
+
     fn view(&self) -> Element<'_, Message> {
         if let Screen::Present { page, .. } = self.screen {
             return self.present_view(page);
         }
         let page_count = self.doc.as_ref().map_or(0, |d| d.pages.len());
         let has_doc = page_count > 0;
-        let current = self.current_page() + 1;
-        let labels = self
-            .doc
-            .as_ref()
-            .map_or(&[][..], |d| d.info.page_labels.as_slice());
-        let current_label = panna_core::page_label(labels, current - 1);
-
-        let page_box = text_input(&current_label, &self.page_input)
-            .id(page_box_id())
-            .on_input(Message::PageInput)
-            .on_submit(Message::PageSubmit)
-            .width(56);
-
-        let gap = || space().width(4).height(4).into();
-        let on = |m: Message| has_doc.then_some(m);
-        let m = icons::MOD;
-        let spread = self
-            .doc
-            .as_ref()
-            .and_then(|d| d.spread)
-            .unwrap_or(self.settings.spread);
-        let items: Vec<Element<'_, Message>> = vec![
-            icons::button(
-                Icon::Sidebar,
-                if self.sidebar.open {
-                    "Hide sidebar (F4)"
-                } else {
-                    "Show sidebar (F4)"
-                },
-                on(Message::Sidebar(sidebar::Event::Toggle)),
-            ),
-            icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
-            icons::button(
-                Icon::Save,
-                format!("Save ({m}S)"),
-                (self.dirty() && !self.saving).then_some(Message::Save),
-            ),
-            icons::button(
-                Icon::Print,
-                format!("Print… ({m}P)"),
-                (has_doc && !self.printing).then_some(Message::Print),
-            ),
-            icons::button(Icon::AllTools, "All tools…", Some(Message::AllTools(true))),
-            gap(),
-            icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
-            icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
-            text(if current_label == current.to_string() {
-                format!("of {page_count}")
-            } else {
-                format!("({current} of {page_count})")
-            })
-            .into(),
-            icons::button(Icon::NextPage, "Next page (Page Down)", on(Message::NextPage)),
-            gap(),
-            icons::button(
-                Icon::ZoomOut,
-                format!("Zoom out ({m}Minus)"),
-                on(Message::ZoomOut),
-            ),
-            icons::with_tip(
-                button(text(format!("{:.0}%", self.zoom * 100.0)).size(13))
-                    .style(button::text)
-                    .on_press_maybe(on(Message::ZoomReset)),
-                format!("Actual size ({m}1)"),
-            ),
-            icons::button(Icon::ZoomIn, format!("Zoom in ({m}Plus)"), on(Message::ZoomIn)),
-            icons::button(Icon::FitWidth, format!("Fit width ({m}2)"), on(Message::FitWidth)),
-            icons::button(Icon::FitPage, format!("Fit page ({m}0)"), on(Message::FitPage)),
-            icons::toggle(
-                Icon::Hand,
-                if self.hand {
-                    "Stop the hand tool (Esc)"
-                } else {
-                    "Hand: drag the pages to scroll"
-                },
-                self.hand,
-                Message::ToggleHand,
-            ),
-            icons::toggle(
-                Icon::ZoomBox,
-                if self.zoom_box {
-                    "Stop the zoom tool (Esc)"
-                } else {
-                    "Zoom: drag a box over a page to zoom in to it"
-                },
-                self.zoom_box,
-                Message::ToggleZoomBox,
-            ),
-            gap(),
-            icons::button(Icon::RotateCcw, "Rotate left", on(Message::RotateCcw)),
-            icons::button(Icon::RotateCw, "Rotate right", on(Message::RotateCw)),
-            icons::button(
-                match spread {
-                    Spread::Single => Icon::SinglePage,
-                    Spread::Two => Icon::TwoPages,
-                    Spread::TwoCover => Icon::CoverPage,
-                },
-                match spread {
-                    Spread::Single => format!("Single page: click for two pages side by side ({m}Shift+T)"),
-                    Spread::Two => format!("Two pages: click to show the cover page alone ({m}Shift+T)"),
-                    Spread::TwoCover => format!("Two pages with cover: click for single page ({m}Shift+T)"),
-                },
-                on(Message::NextSpread),
-            ),
-            icons::button(
-                Icon::Present,
-                format!("Present, one page at a time ({m}L)"),
-                on(Message::Present),
-            ),
-            icons::toggle(
-                Icon::FullScreen,
-                if self.screen == Screen::Full {
-                    "Leave full screen (F11)"
-                } else {
-                    "Full screen (F11)"
-                },
-                self.screen == Screen::Full,
-                Message::ToggleFullScreen,
-            ),
-            icons::toggle(
-                Icon::Moon,
-                format!(
-                    "Page colours: {} (click for {}, {m}Shift+D)",
-                    self.settings.colors.label(),
-                    self.settings.colors.next().label()
-                ),
-                self.settings.colors != colors::PageColors::Normal,
-                Message::NextColors,
-            ),
-            gap(),
-            icons::button(
-                Icon::Search,
-                format!("Find ({m}F)"),
-                on(Message::Find(find::Event::Open)),
-            ),
-            icons::toggle(
-                Icon::Annotate,
-                if self.annotate.open {
-                    format!("Hide comment tools ({m}Shift+C)")
-                } else {
-                    format!("Comment and draw ({m}Shift+C)")
-                },
-                self.annotate.open,
-                Message::Annotate(annotate::Event::Toggle),
-            ),
-            icons::toggle(
-                Icon::Ruler,
-                if self.measure.on {
-                    "Stop measuring (Esc)"
-                } else {
-                    "Measure distance, perimeter and area"
-                },
-                self.measure.on,
-                Message::Measure(measure::Event::Toggle),
-            ),
-            icons::toggle(
-                Icon::Camera,
-                if self.snapping {
-                    "Stop taking snapshots (Esc)"
-                } else {
-                    "Snapshot: drag over a page to copy a picture of it"
-                },
-                self.snapping,
-                Message::ToggleSnapshot,
-            ),
-            icons::button(
-                Icon::Eraser,
-                "Reset form",
-                self.form.can_reset().then_some(Message::ResetForm),
-            ),
-            gap(),
-            icons::button(
-                Icon::Properties,
-                format!("Document properties ({m}D)"),
-                on(Message::ToggleProperties),
-            ),
-        ];
-        let toolbar = self.toolbar.view(items, Message::Toolbar);
 
         let body: Element<'_, Message> = match (&self.status, &self.doc) {
             (Status::Error(e), _) => center(
@@ -5743,14 +6431,6 @@ impl App {
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.pages_view(doc);
-                // The row is there either way, so opening the rail doesn't move the pages in
-                // the widget tree and reset their scroll position.
-                let rail: Element<'_, Message> = if self.annotate.open {
-                    container(self.annotate.rail()).padding(6).into()
-                } else {
-                    space().into()
-                };
-                let pages = row![rail, pages].into();
                 self.with_sidebar(doc, pages)
             }
             _ => self.welcome_view(),
@@ -5969,19 +6649,35 @@ impl App {
                 Message::DismissNotice,
             ));
         }
+        if self.shortcuts {
+            layers.push(modal(shortcuts_card(), Message::Shortcuts(false)));
+        }
         let body: Element<'_, Message> = Stack::with_children(layers).into();
 
-        match self.toolbar.dock {
-            Dock::Top => column![toolbar, body].into(),
-            Dock::Bottom => column![body, toolbar].into(),
-            Dock::Left => row![toolbar, body].into(),
-            Dock::Right => row![body, toolbar].into(),
-            Dock::Floating => stack![
-                body,
-                pin(opaque(toolbar)).x(self.toolbar.pos.x).y(self.toolbar.pos.y)
-            ]
-            .into(),
+        // The same shape whichever edges have bars, so moving a bar doesn't move the body in
+        // the widget tree and reset its scroll position.
+        let bars = self.bars.arrange(
+            |bar, vertical| self.bar_items(bar, vertical),
+            Message::Toolbar,
+            self.window_size,
+        );
+        let window = column![
+            self.menus.bar(Message::Menu),
+            bars.top,
+            row![bars.left, container(body).width(Fill).height(Fill), bars.right].height(Fill),
+            bars.bottom,
+        ];
+        let mut layers = vec![window.into()];
+        layers.extend(bars.floating);
+        if let Some(menu) = self.menus.open() {
+            layers.extend(self.menus.panels(
+                self.menu_entries(menu),
+                Message::Menu,
+                |m| Message::MenuPick(Box::new(m)),
+                self.window_size,
+            ));
         }
+        Stack::with_children(layers).into()
     }
 
     /// One page on black, nothing else. A click goes forward, a right-click back.
