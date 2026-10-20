@@ -74,7 +74,7 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
     }
     let mut runs = FormRuns::default();
     for (index, page) in pdf.pages().iter().enumerate() {
-        let resources = page.raw().get::<Dict<'_>>(b"Resources");
+        let resources = page_resources(page.raw());
         let mut total = 0u64;
         for content in page_contents(page.raw()) {
             total = total.saturating_add(runs.of_content(&content, resources.as_ref(), MAX_FORM_DEPTH));
@@ -87,6 +87,19 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
         }
     }
     Ok(())
+}
+
+/// The page's resources, which it may inherit from the page tree above it, as the engine
+/// draws with them.
+fn page_resources<'a>(page: &Dict<'a>) -> Option<Dict<'a>> {
+    let mut node = page.clone();
+    for _ in 0..64 {
+        if let Some(resources) = node.get::<Dict<'_>>(b"Resources") {
+            return Some(resources);
+        }
+        node = node.get::<Dict<'_>>(b"Parent")?;
+    }
+    None
 }
 
 fn page_contents<'a>(page: &Dict<'a>) -> Vec<Stream<'a>> {

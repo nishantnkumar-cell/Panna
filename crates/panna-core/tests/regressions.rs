@@ -74,3 +74,12 @@ fn forms_fanning_out_are_refused() {
     let doc = Document::from_bytes(chain(1), None, Limits::default()).unwrap();
     assert!(doc.render_page(&doc.new_cache(), 0, 1.0).is_ok());
 }
+
+/// A page with no resources of its own inherits them from the page tree, where a form draws
+/// itself twice. The fan-out check read only the page's own resources, so it counted nothing
+/// and finding the page's text never finished.
+#[test]
+fn forms_through_inherited_resources_are_refused() {
+    let bytes = include_bytes!("regressions/forms-through-inherited-resources.pdf");
+    assert!(Document::from_bytes(bytes.to_vec(), None, Limits::default()).is_err());
+}
