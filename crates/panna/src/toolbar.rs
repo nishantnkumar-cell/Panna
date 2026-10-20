@@ -203,8 +203,9 @@ impl Toolbar {
                 .align_x(Center)
                 .into()
         } else {
+            // Tight enough that every button fits in one row at the opening window width.
             Row::with_children(all)
-                .spacing(4)
+                .spacing(2)
                 .padding(6)
                 .align_y(Center)
                 // Onto a second line when the window is too narrow for every button.

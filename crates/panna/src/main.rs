@@ -5537,7 +5537,7 @@ impl App {
             .on_submit(Message::PageSubmit)
             .width(56);
 
-        let gap = || space().width(10).height(10).into();
+        let gap = || space().width(4).height(4).into();
         let on = |m: Message| has_doc.then_some(m);
         let m = icons::MOD;
         let spread = self
