@@ -3,6 +3,8 @@
 //! Every icon button carries a hover tooltip naming the action and its shortcut, so the
 //! toolbar needs no words.
 
+use std::cell::Cell;
+
 use iced::widget::{self, container, svg, text, tooltip};
 use iced::{Element, Length, Theme};
 
@@ -20,12 +22,6 @@ pub enum Icon {
     Properties,
     GripVertical,
     GripHorizontal,
-    DockMenu,
-    DockTop,
-    DockBottom,
-    DockLeft,
-    DockRight,
-    Float,
     Sidebar,
     SwapSide,
     Close,
@@ -146,12 +142,6 @@ impl Icon {
             Icon::Properties => include_bytes!("../icons/info.svg"),
             Icon::GripVertical => include_bytes!("../icons/grip-vertical.svg"),
             Icon::GripHorizontal => include_bytes!("../icons/grip-horizontal.svg"),
-            Icon::DockMenu => include_bytes!("../icons/pin.svg"),
-            Icon::DockTop => include_bytes!("../icons/panel-top.svg"),
-            Icon::DockBottom => include_bytes!("../icons/panel-bottom.svg"),
-            Icon::DockLeft => include_bytes!("../icons/panel-left.svg"),
-            Icon::DockRight => include_bytes!("../icons/panel-right.svg"),
-            Icon::Float => include_bytes!("../icons/picture-in-picture-2.svg"),
             Icon::Sidebar => include_bytes!("../icons/panel-left.svg"),
             Icon::SwapSide => include_bytes!("../icons/arrow-left-right.svg"),
             Icon::Close => include_bytes!("../icons/x.svg"),
@@ -325,6 +315,20 @@ fn styled<'a, M: Clone + 'a>(
     with_tip(button, tip)
 }
 
+thread_local! {
+    /// Which side of their buttons tooltips open on, for the toolbar being built.
+    static TIP_SIDE: Cell<tooltip::Position> = const { Cell::new(tooltip::Position::Bottom) };
+}
+
+/// Builds with tooltips opening on `side` of their buttons, so a toolbar at the bottom of the
+/// window shows them above it rather than over it.
+pub fn tips_on<T>(side: tooltip::Position, build: impl FnOnce() -> T) -> T {
+    let before = TIP_SIDE.replace(side);
+    let built = build();
+    TIP_SIDE.set(before);
+    built
+}
+
 /// Wraps any element in a hover tooltip.
 pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<String>) -> Element<'a, M> {
     let label = container(text(tip.into()).size(13))
@@ -339,7 +343,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
                     ..Default::default()
                 })
         });
-    tooltip(content, label, tooltip::Position::Bottom)
+    tooltip(content, label, TIP_SIDE.get())
         .gap(4)
         .snap_within_viewport(true)
         .into()
@@ -349,7 +353,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 121] = [
+    const ALL: [Icon; 115] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -362,12 +366,6 @@ mod tests {
         Icon::Properties,
         Icon::GripVertical,
         Icon::GripHorizontal,
-        Icon::DockMenu,
-        Icon::DockTop,
-        Icon::DockBottom,
-        Icon::DockLeft,
-        Icon::DockRight,
-        Icon::Float,
         Icon::Sidebar,
         Icon::SwapSide,
         Icon::Close,
