@@ -94,7 +94,23 @@ pub fn panel<'a>(
         entry(comment, unsaved, quote, &thread)
     });
     column![
-        container(text(count).size(12).style(text::secondary)).padding([6, 12]),
+        row![
+            text(count).size(12).style(text::secondary),
+            space::horizontal(),
+            icons::button(
+                Icon::CommentSummary,
+                "Save a list of the comments, by page, as a PDF…",
+                Some(Message::SummarizeComments)
+            ),
+            icons::button(
+                Icon::PrintComments,
+                "Print with each page's comments after it…",
+                Some(Message::PrintWithComments)
+            ),
+        ]
+        .spacing(2)
+        .align_y(Center)
+        .padding([2, 6]),
         scrollable(
             Column::with_children(items)
                 .spacing(2)

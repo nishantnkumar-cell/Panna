@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use iced::widget::scrollable::Viewport;
 use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
-use iced::{Center, Element, Fill, Length, Theme};
+use iced::{Center, Element, Fill, Theme};
 use panna_core::{Annotation, Attachment, Comment, CommentId, Layer, OutlineItem, PageSize};
 
 use crate::Message;
@@ -33,6 +33,7 @@ pub enum Tab {
     Files,
     Layers,
     Changes,
+    Signatures,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,6 +70,7 @@ impl Tab {
             Tab::Files => "files",
             Tab::Layers => "layers",
             Tab::Changes => "changes",
+            Tab::Signatures => "signatures",
         }
     }
 
@@ -81,6 +83,7 @@ impl Tab {
             "files" => Some(Tab::Files),
             "layers" => Some(Tab::Layers),
             "changes" => Some(Tab::Changes),
+            "signatures" => Some(Tab::Signatures),
             _ => None,
         }
     }
@@ -204,6 +207,9 @@ pub struct ViewData<'a> {
     pub layout: &'a ThumbLayout,
     pub thumbs_images: &'a [crate::Thumb],
     pub outline: &'a [OutlineItem],
+    /// How pages are labelled, for the thumbnails.
+    pub page_labels: &'a [panna_core::LabelRange],
+    pub bookmarks: &'a crate::bookmarks::Editor,
     pub current: usize,
     pub find: &'a Find,
     pub texts: &'a [TextSlot],
@@ -211,6 +217,8 @@ pub struct ViewData<'a> {
     pub unsaved: &'a [Annotation],
     pub removed: &'a [CommentId],
     pub attachments: &'a [Attachment],
+    pub signatures: &'a [panna_core::Signature],
+    pub trusted: &'a [panna_core::Cert],
     pub layers: &'a [Layer],
     /// Whether each layer is shown.
     pub layers_shown: &'a [bool],
@@ -228,6 +236,7 @@ impl Sidebar {
         // Word-style text tabs; the open one is underlined in the accent colour.
         let has_files = !data.attachments.is_empty();
         let has_layers = !data.layers.is_empty();
+        let has_signatures = !data.signatures.is_empty();
         let tab_button = |tab: Tab, label: &'static str| {
             let active = self.tab == tab;
             button(text(label).size(13))
@@ -278,6 +287,12 @@ impl Sidebar {
             ))
             .push(icon_tab(has_layers, Icon::Layers, "Layers", Tab::Layers))
             .push(icon_tab(has_files, Icon::Paperclip, "Attached files", Tab::Files))
+            .push(icon_tab(
+                has_signatures,
+                crate::signatures::icon(data.signatures),
+                "Signatures",
+                Tab::Signatures,
+            ))
             .push(
                 row![
                     icons::button(Icon::SwapSide, side_tip, Some(ev(Event::SwapSide))),
@@ -310,8 +325,16 @@ impl Sidebar {
             Tab::Changes if data.comparison.is_some() => data
                 .comparison
                 .map_or_else(|| space().into(), crate::compare::Comparison::panel),
-            Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes => self.thumbnails(&data),
-            Tab::Bookmarks => bookmarks(data.outline, data.find),
+            Tab::Signatures if has_signatures => crate::signatures::panel(data.signatures, data.trusted),
+            Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes | Tab::Signatures => {
+                self.thumbnails(&data)
+            }
+            Tab::Bookmarks => data.bookmarks.view(
+                data.outline,
+                data.find,
+                |i| section(data.outline, i).is_some_and(|pages| data.find.count_in(pages) > 0),
+                data.pages_busy,
+            ),
             Tab::Results => data.find.results(data.texts),
             Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),
         };
@@ -356,9 +379,10 @@ impl Sidebar {
             } else {
                 0
             };
+            let page_label = panna_core::page_label(data.page_labels, index);
             let label: Element<'a, Message> = if found > 0 {
                 row![
-                    text((index + 1).to_string()).size(12),
+                    text(page_label).size(12),
                     container(text(found.to_string()).size(10))
                         .padding([0, 5])
                         .style(|theme: &Theme| {
@@ -374,7 +398,7 @@ impl Sidebar {
                 .height(LABEL_H)
                 .into()
             } else {
-                text((index + 1).to_string()).size(12).height(LABEL_H).into()
+                text(page_label).size(12).height(LABEL_H).into()
             };
             let entry = column![frame, label].align_x(Center).spacing(2);
             button(entry)
@@ -418,53 +442,6 @@ fn section(outline: &[OutlineItem], i: usize) -> Option<std::ops::Range<usize>> 
     Some(start..end)
 }
 
-fn bookmarks<'a>(outline: &'a [OutlineItem], find: &Find) -> Element<'a, Message> {
-    if outline.is_empty() {
-        return container(
-            text("This document has no bookmarks.")
-                .size(13)
-                .style(text::secondary),
-        )
-        .padding(PAD)
-        .into();
-    }
-    let items = outline.iter().enumerate().map(|(i, item)| {
-        let title = if item.title.is_empty() {
-            "(untitled)"
-        } else {
-            item.title.as_str()
-        };
-        let indent = f32::from(item.depth.min(8)) * 12.0;
-        // Like Word's Headings tab, sections that contain search results are highlighted.
-        let found = find.active() && section(outline, i).is_some_and(|pages| find.count_in(pages) > 0);
-        let label = text(title).size(13).wrapping(text::Wrapping::WordOrGlyph);
-        row![
-            space().width(indent),
-            button(label)
-                .padding([3, 6])
-                .width(Length::Fill)
-                .style(move |theme: &Theme, status| {
-                    let mut style = button::text(theme, status);
-                    if found {
-                        let palette = theme.extended_palette();
-                        style.background = Some(palette.primary.weak.color.into());
-                        style.text_color = palette.primary.weak.text;
-                    }
-                    style
-                })
-                .on_press_maybe(item.page.map(Message::GoToPage)),
-        ]
-        .into()
-    });
-    scrollable(
-        Column::with_children(items)
-            .spacing(1)
-            .padding([4, 6])
-            .width(Fill),
-    )
-    .height(Fill)
-    .into()
-}
 /// Layers, each with a box to show or hide it. Hiding one changes only the view.
 fn layers<'a>(layers: &'a [Layer], shown: &[bool]) -> Element<'a, Message> {
     let items = layers.iter().enumerate().map(|(index, layer)| {
@@ -509,6 +486,14 @@ fn files(attachments: &[Attachment]) -> Element<'_, Message> {
                     .into(),
                 None => Element::from(line),
             });
+        }
+        if file.is_program() {
+            about = about.push(
+                text("This is a program or script. It could harm your computer if you open it.")
+                    .size(12)
+                    .style(text::danger)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
         }
         if !file.description.trim().is_empty() {
             about = about.push(
@@ -595,6 +580,7 @@ mod tests {
             title: String::new(),
             depth: 0,
             page,
+            id: None,
         };
         let outline = [
             item(Some(2)),

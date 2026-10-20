@@ -29,6 +29,15 @@ pub enum Unit {
 impl Unit {
     pub const ALL: [Unit; 4] = [Unit::Millimetres, Unit::Centimetres, Unit::Inches, Unit::Points];
 
+    /// Its name in the settings file.
+    pub fn as_str(self) -> &'static str {
+        self.symbol()
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|u| u.symbol() == s)
+    }
+
     /// How many of this unit make a point (1/72 inch).
     fn per_point(self) -> f64 {
         match self {

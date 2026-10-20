@@ -11,7 +11,7 @@ use crate::edit::lex::{Lexer, array_items, dict_entries};
 const MAX_FIELDS: usize = 5_000;
 const MAX_DEPTH: usize = 32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DataFormat {
     Fdf,
     Xfdf,

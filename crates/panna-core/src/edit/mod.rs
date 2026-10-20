@@ -4,13 +4,24 @@ pub(crate) mod annot;
 mod convert;
 pub(crate) mod crypt;
 mod field;
+mod labels;
 pub(crate) mod lex;
 mod marks;
 mod new_field;
+mod outline;
+pub(crate) use labels::with_page_labels;
+pub(crate) use outline::with_outline;
+mod view;
+pub(crate) use view::with_initial_view;
 mod pack;
+mod pdfa;
 mod picture;
 mod rebuild;
 mod redact;
+pub(crate) mod scrub;
+mod sign;
+mod summary;
+mod tag;
 mod update;
 
 use std::collections::{BTreeMap, HashSet};
@@ -24,15 +35,18 @@ use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
 pub use picture::StampImage;
 
-pub use convert::{MAX_PICTURES, pictures_to_pdf};
+pub use convert::{MAX_BLANK_PAGES, MAX_PICTURES, blank_pdf, pictures_to_pdf, rgba_to_pdf};
 pub use crypt::Protection;
 pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
+pub(crate) use sign::prepare as prepare_signature;
+pub use sign::{Corner, SignOptions, Visible};
+pub(crate) use tag::{describe, tag};
 
 use crate::{CommentId, FieldValue, ObjRef};
 
 /// Unsaved changes to a document's comments.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Changes {
     /// New annotations, oldest first.
     pub add: Vec<Annotation>,
@@ -48,7 +62,7 @@ impl Changes {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SaveError {
     /// The file's structure is too damaged to append to safely.
     Damaged,
@@ -65,6 +79,27 @@ pub enum SaveError {
     ProtectionLocked,
     /// A marked area covers a form field, whose value would stay in the form.
     RedactsFormField,
+    /// PDF/A files can't be password protected.
+    ArchiveProtected,
+    /// Signing password-protected files isn't supported.
+    SigningProtected,
+    /// Only the first signature can certify a document.
+    CertifySigned,
+    /// The certificate file couldn't be used, and why.
+    Certificate(String),
+    /// Tagging password-protected files isn't supported.
+    TaggingProtected,
+    /// The document has tags already.
+    AlreadyTagged,
+    /// No page has text to tag.
+    NothingToTag,
+    /// Text recognition found no words on the pages that needed it; `true` when every page
+    /// asked about already has text.
+    NothingRecognised(bool),
+    /// The text recognition engine failed, and why.
+    Recognition(String),
+    /// Another file to take pages from couldn't be used, and why, as a sentence.
+    OtherFile(String),
 }
 
 impl fmt::Display for SaveError {
@@ -86,6 +121,38 @@ impl fmt::Display for SaveError {
                 f,
                 "Only the owner can change this PDF's password protection. Open it with the \
                  owner password first."
+            ),
+            Self::ArchiveProtected => write!(
+                f,
+                "PDF/A files can't have password protection. Remove it first, from Password \
+                 protection in All tools."
+            ),
+            Self::SigningProtected => write!(
+                f,
+                "Password-protected PDFs can't be signed yet. Remove the protection first, from \
+                 Password protection in All tools."
+            ),
+            Self::CertifySigned => write!(
+                f,
+                "This PDF is already signed, so it can't be certified: only the first signature \
+                 can certify a document."
+            ),
+            Self::Certificate(why) | Self::OtherFile(why) => write!(f, "{why}"),
+            Self::TaggingProtected => write!(
+                f,
+                "Panna can't add tags to a password-protected PDF. Remove the protection first, \
+                 from Password protection in All tools."
+            ),
+            Self::AlreadyTagged => write!(f, "This PDF has tags already."),
+            Self::NothingRecognised(true) => write!(
+                f,
+                "These pages have text already, so there's nothing to recognise."
+            ),
+            Self::NothingRecognised(false) => write!(f, "No text was found on these pages."),
+            Self::Recognition(why) => write!(f, "Text recognition failed: {why}"),
+            Self::NothingToTag => write!(
+                f,
+                "This PDF has no text to tag. If it's scanned, its text needs recognising first."
             ),
             Self::RedactsFormField => write!(
                 f,
@@ -288,6 +355,40 @@ pub(crate) fn rearrange(docs: &[Input<'_>], plan: &[PageSource]) -> Result<Vec<u
     rebuild_from(docs, plan, &[], Output::Keep, Cleanup::default())
 }
 
+/// The first document with `count` of its pages from `first` replaced by the second's pages
+/// from `from`. Bookmarks and links to a replaced page go to the page that replaced it.
+pub(crate) fn replace(
+    docs: &[Input<'_>],
+    own: usize,
+    first: usize,
+    count: usize,
+    from: usize,
+) -> Result<Vec<u8>, SaveError> {
+    let mut plan = Vec::with_capacity(own);
+    let mut extras = Vec::with_capacity(own);
+    for index in 0..own {
+        let replaced = index >= first && index - first < count;
+        plan.push(if replaced {
+            PageSource::Page {
+                doc: 1,
+                index: from + (index - first),
+                turns: 0,
+            }
+        } else {
+            PageSource::Page {
+                doc: 0,
+                index,
+                turns: 0,
+            }
+        });
+        extras.push(rebuild::Extra {
+            stands_for: replaced.then_some(index),
+            ..rebuild::Extra::default()
+        });
+    }
+    rebuild_from(docs, &plan, &extras, Output::Keep, Cleanup::default())
+}
+
 /// Every page of `doc`, unchanged and unturned.
 fn every_page(count: usize) -> Vec<PageSource> {
     (0..count)
@@ -347,14 +448,52 @@ pub(crate) fn header_footer(
     )
 }
 
+pub(crate) use marks::Words;
+
+/// Every page of `doc`, with the words recognised on some pages drawn invisibly over them
+/// (each word as text the size of its box, as page text boxes), so they can be found,
+/// selected and copied.
+pub(crate) fn with_hidden_text(
+    doc: Input<'_>,
+    count: usize,
+    words: &[(usize, Words)],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for (page, words) in words {
+        let extra = extras.get_mut(*page).ok_or(SaveError::NoSuchPage(*page))?;
+        extra.over.push(marks::Drawing::Hidden(words.clone()));
+    }
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
 /// Every page of `doc`, without the hidden information `clean` names.
 pub(crate) fn clean_up(doc: Input<'_>, count: usize, clean: Cleanup) -> Result<Vec<u8>, SaveError> {
     rebuild_from(&[doc], &every_page(count), &[], Output::Keep, clean)
 }
 
+/// Whether the file `bytes` has an identifier (/ID) in its trailer.
+pub(crate) fn has_file_id(bytes: &[u8]) -> bool {
+    update::read_trailer(bytes).is_ok_and(|t| t.id.is_some())
+}
+
 /// Whether the file `bytes` has password protection.
 pub(crate) fn protected(bytes: &[u8]) -> bool {
     update::read_trailer(bytes).is_ok_and(|t| t.encrypt.is_some())
+}
+
+/// For a file protected with RC4 or AES-128 and opened with the owner password: the same
+/// protection with AES-256, and the encryption method's name for any protected file.
+pub(crate) fn protection_method(doc: Input<'_>) -> Option<(&'static str, Option<Protection>)> {
+    let (pdf, bytes, password) = doc;
+    let trailer = update::read_trailer(bytes).ok()?;
+    let crypt = encryption(pdf, trailer.encrypt.as_deref()?, trailer.id.as_deref(), password).ok()?;
+    Some((crypt.method_name(), crypt.upgrade(password)))
 }
 
 /// Every page of `doc` with new password protection, or none.
@@ -419,7 +558,7 @@ pub(crate) fn watermark(
 }
 
 /// A change to a picture a page draws.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PictureChange {
     /// To this box, in the same space as [`crate::TextBox`] page text.
     Move(crate::TextBox),
@@ -453,8 +592,13 @@ pub(crate) fn page_pictures(pdf: &Pdf, page: usize) -> Vec<crate::TextBox> {
     rebuild::page_pictures(pdf, page)
 }
 
+/// The rectangles and straight lines page `page` draws, as shown.
+pub(crate) fn page_shapes(pdf: &Pdf, page: usize) -> (Vec<crate::TextBox>, Vec<crate::TextBox>) {
+    rebuild::page_shapes(pdf, page)
+}
+
 /// A form field to make.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NewField {
     pub page: usize,
     /// Where it goes, in the same space as [`crate::TextBox`] page text.
@@ -466,7 +610,7 @@ pub struct NewField {
     pub kind: NewFieldKind,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NewFieldKind {
     Text {
         multiline: bool,
@@ -482,7 +626,7 @@ pub enum NewFieldKind {
 }
 
 /// One button of a new radio group.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RadioButton {
     /// What the group's value is when this button is on.
     pub choice: String,
@@ -525,7 +669,7 @@ pub(crate) fn form_fields(
 
 /// Something added to a page itself, rather than as a comment. Places are in points from the
 /// top-left corner of the page as shown (the same space as [`crate::TextBox`]).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Addition {
     /// Lines of text in Helvetica, the first line's top-left corner at `at`.
     Text {
@@ -540,6 +684,17 @@ pub enum Addition {
     Link {
         rect: crate::TextBox,
         target: crate::LinkTarget,
+    },
+    /// The text in `area` taken out (only the text: pictures and drawings stay) and `text`
+    /// written in its place in Helvetica, at `size`, in `color` or the colour the old text
+    /// was drawn in. With a `leading` (the distance between baselines), `area` is a
+    /// paragraph and the text is wrapped to its width.
+    ReplaceText {
+        area: crate::TextBox,
+        text: String,
+        size: f32,
+        color: Option<Color>,
+        leading: Option<f32>,
     },
 }
 
@@ -570,6 +725,7 @@ pub(crate) fn add(
                     top: f64::from(at.1),
                     lines,
                     size: f64::from(size.clamp(1.0, 500.0)),
+                    leading: f64::from(size.clamp(1.0, 500.0) * annot::LINE_HEIGHT),
                     color: *color,
                 });
             }
@@ -578,6 +734,47 @@ pub(crate) fn add(
                 image: image.clone(),
             }),
             Addition::Link { rect, target } => extra.links.push((corners(rect), target.clone())),
+            Addition::ReplaceText {
+                area,
+                text,
+                size,
+                color,
+                leading,
+            } => {
+                extra.redact.push(corners(area));
+                extra.text_only = true;
+                let size = f64::from(size.clamp(1.0, 500.0));
+                let paragraph = leading.map(|l| f64::from(l).clamp(size * 0.8, size * 4.0));
+                let lines: Vec<String> = match paragraph {
+                    // A little room, as the measured width is the longest line's.
+                    Some(_) => annot::wrap(text.trim_end(), f64::from(area.width()) * 1.02 / size),
+                    None => text.lines().map(str::to_owned).collect(),
+                };
+                let same = match lines.as_slice() {
+                    [line] if !line.trim().is_empty() => rebuild::same_font(doc.0, page, corners(area), line),
+                    _ => None,
+                };
+                if let Some(line) = same {
+                    extra.over.push(marks::Drawing::SameFont {
+                        line,
+                        color: color.unwrap_or(Color::BLACK),
+                    });
+                } else if lines.iter().any(|l| !l.trim().is_empty()) {
+                    extra.over.push(marks::Drawing::Text {
+                        x: f64::from(area.x0),
+                        // Page text boxes reach 0.8 of the size above the baseline and 0.2
+                        // below; added text's baseline is 0.77 below its top.
+                        top: match paragraph {
+                            Some(_) => f64::from(area.y0) + size * 0.03,
+                            None => f64::from(area.y1) - size * 0.97,
+                        },
+                        lines,
+                        size,
+                        leading: paragraph.unwrap_or(size * f64::from(annot::LINE_HEIGHT)),
+                        color: color.unwrap_or(Color::BLACK),
+                    });
+                }
+            }
         }
     }
     rebuild_from(
@@ -596,8 +793,12 @@ pub(crate) fn redact(
     doc: Input<'_>,
     count: usize,
     areas: &[(usize, Vec<crate::TextBox>)],
+    scrub: &[String],
 ) -> Result<Vec<u8>, SaveError> {
     let mut extras = vec![rebuild::Extra::default(); count];
+    if let Some(first) = extras.first_mut() {
+        first.scrub = scrub::phrases(scrub.iter().map(String::as_str));
+    }
     for (page, boxes) in areas {
         let extra = extras.get_mut(*page).ok_or(SaveError::NoSuchPage(*page))?;
         let rects: Vec<[f64; 4]> = boxes
@@ -629,6 +830,55 @@ pub(crate) fn print_copy(doc: Input<'_>, pages: usize) -> Result<Vec<u8>, SaveEr
     rebuild_from(&[doc], &every_page(pages), &[], Output::Print, Cleanup::default())
 }
 
+/// The comments of a document with pages of `sizes` and page `labels`, listed by page under
+/// a heading naming it `title`, as a file of their own.
+pub(crate) fn comment_summary(
+    comments: &[crate::Comment],
+    sizes: &[(f32, f32)],
+    labels: &[String],
+    title: &str,
+) -> Vec<u8> {
+    summary::summary(comments, sizes, labels, summary::Layout::Whole { title }).file
+}
+
+/// Like [`print_copy`], with each page that has comments followed by pages listing them.
+pub(crate) fn print_with_comments(
+    doc: Input<'_>,
+    pages: usize,
+    comments: &[crate::Comment],
+    sizes: &[(f32, f32)],
+    labels: &[String],
+) -> Result<Vec<u8>, SaveError> {
+    let lists = summary::summary(comments, sizes, labels, summary::Layout::EachPage);
+    if lists.lists.is_empty() {
+        return print_copy(doc, pages);
+    }
+    let file = std::sync::Arc::new(lists.file);
+    let parsed = Pdf::new_with_password(std::sync::Arc::clone(&file), "").map_err(|_| SaveError::Damaged)?;
+    let mut plan = Vec::with_capacity(pages + lists.lists.len());
+    for index in 0..pages {
+        plan.push(PageSource::Page {
+            doc: 0,
+            index,
+            turns: 0,
+        });
+        for (sheet, _) in lists.lists.iter().enumerate().filter(|(_, p)| **p == index) {
+            plan.push(PageSource::Page {
+                doc: 1,
+                index: sheet,
+                turns: 0,
+            });
+        }
+    }
+    rebuild_from(
+        &[doc, (&parsed, file.as_slice(), "")],
+        &plan,
+        &[],
+        Output::Print,
+        Cleanup::default(),
+    )
+}
+
 /// What password protection a rebuilt file gets.
 #[derive(Clone, Copy)]
 enum Output<'a> {
@@ -647,19 +897,20 @@ fn rebuild_from(
     output: Output<'_>,
     clean: Cleanup,
 ) -> Result<Vec<u8>, SaveError> {
-    rebuild_with(docs, plan, extras, output, clean, false)
+    rebuild_with(docs, plan, extras, output, clean, None)
 }
 
 /// Every page of `doc` in as small a file as can be written without changing how anything
-/// looks (see [`pack`]).
-pub(crate) fn compacted(doc: Input<'_>, count: usize) -> Result<Vec<u8>, SaveError> {
+/// looks (see [`pack`]), unless pictures may be made smaller too: then those sharper than
+/// `pictures` dots per inch, as drawn, are scaled down to it.
+pub(crate) fn compacted(doc: Input<'_>, count: usize, pictures: Option<u32>) -> Result<Vec<u8>, SaveError> {
     rebuild_with(
         &[doc],
         &every_page(count),
         &[],
         Output::Keep,
         Cleanup::default(),
-        true,
+        Some(pack::Compact { pictures }),
     )
 }
 
@@ -669,7 +920,7 @@ fn rebuild_with(
     extras: &[rebuild::Extra],
     output: Output<'_>,
     clean: Cleanup,
-    compact: bool,
+    compact: Option<pack::Compact>,
 ) -> Result<Vec<u8>, SaveError> {
     let mut sources = Vec::with_capacity(docs.len());
     let mut first = None;
@@ -790,6 +1041,43 @@ fn fill_fields(
         out.put_copied(number, generation, rewrite(dict.data(), &set)?);
     }
     Ok(())
+}
+
+/// For an RC4 or AES-128 file and its owner password, the user password, which is what opens
+/// it for reading (the owner password is still what saving needs). Works on the raw bytes, as
+/// the file can't be parsed without it.
+pub(crate) fn user_password_for(bytes: &[u8], owner: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    let trailer = update::read_trailer(bytes).ok()?;
+    let raw = trailer.encrypt.as_deref()?.trim_ascii();
+    let dict = if raw.starts_with(b"<<") {
+        raw
+    } else {
+        // The encryption dictionary is never in an object stream, so it is "N G obj" in the
+        // file itself; the last one is the current one.
+        let r = lex::reference(raw)?;
+        let head = format!("{} {} obj", r.number, r.generation);
+        let at = bytes
+            .windows(head.len())
+            .enumerate()
+            .rev()
+            .find(|(i, w)| {
+                *w == head.as_bytes()
+                    && (*i == 0 || bytes.get(i - 1).is_some_and(|b| b.is_ascii_whitespace()))
+            })
+            .map(|(i, _)| i + head.len())?;
+        bytes.get(at..)?.trim_ascii_start()
+    };
+    let first_id = trailer
+        .id
+        .as_deref()
+        .and_then(|id| {
+            let inner = id.trim_ascii().strip_prefix(b"[")?.strip_suffix(b"]")?;
+            let items = lex::array_items(inner)?;
+            crypt::parse_string(inner.get(items.first()?.clone())?)
+        })
+        .unwrap_or_default();
+    let crypt = crypt::Crypt::new(dict, &first_id, owner).ok()?;
+    crypt.user_password().map(|p| p.to_vec().into())
 }
 
 /// The file key for an encrypted file, from its /Encrypt dictionary (inline or referenced),

@@ -1,5 +1,6 @@
-//! Adding text, pictures and links to pages. Unlike comments, these become part of the page
-//! itself, as a page change that can be undone from the page tools.
+//! Adding text, pictures and links to pages, and changing a line of text already there.
+//! Unlike comments, these become part of the page itself, as a page change that can be
+//! undone from the page tools.
 
 use iced::widget::{column, container, pick_list, pin, row, space, text, text_editor, text_input};
 use iced::{Center, Element, Theme};
@@ -25,6 +26,8 @@ pub enum Tool {
     Text,
     Picture,
     Link,
+    /// Change a line of text already on the page.
+    EditText,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +49,14 @@ enum Details {
     Link(String),
     /// Waiting for a picture file to be chosen.
     Picture,
+    /// A line or paragraph already on the page, its text as it'll be, its size, and for a
+    /// paragraph of more than one line the distance between them.
+    Replace {
+        content: text_editor::Content,
+        was: String,
+        size: f32,
+        leading: Option<f32>,
+    },
 }
 
 #[derive(Debug)]
@@ -93,6 +104,8 @@ pub enum Outcome {
     Add(usize, Addition),
     /// Ask for a picture file to place.
     PickPicture,
+    /// Find the line of text at this point of page `page`, for [`Adder::edit_line`].
+    FindLine(usize, (f32, f32)),
 }
 
 /// Reads what the user typed for a link: a page number, or a web or email address.
@@ -145,7 +158,7 @@ impl Adder {
             }
             Event::Edit(action) => {
                 if let Some(Pending {
-                    details: Details::Text(content),
+                    details: Details::Text(content) | Details::Replace { content, .. },
                     ..
                 }) = &mut self.pending
                 {
@@ -206,6 +219,25 @@ impl Adder {
                             return Outcome::Nothing;
                         }
                     },
+                    Details::Replace {
+                        content,
+                        was,
+                        size,
+                        leading,
+                    } => {
+                        let text = content.text();
+                        let text = text.trim_end();
+                        if text == was {
+                            return Outcome::Nothing;
+                        }
+                        Addition::ReplaceText {
+                            area: pending.rect,
+                            text: text.to_owned(),
+                            size,
+                            color: None,
+                            leading,
+                        }
+                    }
                     Details::Picture => return Outcome::Nothing,
                 };
                 return Outcome::Add(pending.page, addition);
@@ -243,6 +275,7 @@ impl Adder {
         };
         let dragged = rect.width() >= CLICK_SLOP && rect.height() >= CLICK_SLOP;
         let (rect, details) = match self.tool {
+            Tool::EditText => return Outcome::FindLine(page, to),
             Tool::Text => (rect, Details::Text(text_editor::Content::new())),
             Tool::Link if dragged => (rect, Details::Link(String::new())),
             Tool::Link => (
@@ -272,6 +305,22 @@ impl Adder {
             Outcome::PickPicture
         } else {
             Outcome::Nothing
+        }
+    }
+
+    /// Opens the card for changing a line or paragraph on page `page`.
+    pub fn edit_line(&mut self, page: usize, found: Option<panna_core::Paragraph>) {
+        if let Some(found) = found {
+            self.pending = Some(Pending {
+                page,
+                rect: found.area,
+                details: Details::Replace {
+                    content: text_editor::Content::with_text(&found.text),
+                    was: found.text,
+                    size: found.size.clamp(1.0, 500.0),
+                    leading: found.leading,
+                },
+            });
         }
     }
 
@@ -346,11 +395,13 @@ impl Adder {
             Tool::Text => "Click where the text starts.",
             Tool::Picture => "Click, or drag a box, where the picture goes.",
             Tool::Link => "Drag a box over what the link covers.",
+            Tool::EditText => "Click a line of text to change it.",
         };
         let content = row![
             tool(Tool::Text, Icon::TextBox, "Add text to the page"),
             tool(Tool::Picture, Icon::AddPicture, "Add a picture to the page"),
             tool(Tool::Link, Icon::AddLink, "Add a link to a page or address"),
+            tool(Tool::EditText, Icon::EditText, "Change text on the page"),
             text(hint).size(13).width(290),
             icons::button(Icon::Close, "Stop adding to pages (Esc)", Some(ev(Event::Toggle))),
         ]
@@ -375,13 +426,13 @@ impl Adder {
     pub fn card(&self) -> Option<Element<'_, Message>> {
         let pending = self.pending.as_ref()?;
         let ev = Message::Add;
-        let buttons = |ready: bool| {
+        let buttons = |ready: bool, label: &'static str| {
             row![
                 space::horizontal(),
                 iced::widget::button("Cancel")
                     .style(iced::widget::button::secondary)
                     .on_press(ev(Event::Cancel)),
-                iced::widget::button("Add").on_press_maybe(ready.then(|| ev(Event::Done))),
+                iced::widget::button(label).on_press_maybe(ready.then(|| ev(Event::Done))),
             ]
             .spacing(8)
         };
@@ -412,11 +463,46 @@ impl Adder {
                     .spacing(6)
                     .align_y(Center),
                     text("The text becomes part of the page, in Helvetica.").size(12),
-                    buttons(!content.text().trim().is_empty()),
+                    buttons(!content.text().trim().is_empty(), "Add"),
                 ]
                 .spacing(10)
                 .into()
             }
+            Details::Replace {
+                content,
+                was,
+                size,
+                leading,
+            } => column![
+                text(if leading.is_some() {
+                    "Change a paragraph"
+                } else {
+                    "Change text"
+                })
+                .size(16),
+                text_editor(content)
+                    .id(editor_id())
+                    .on_action(move |a| ev(Event::Edit(a)))
+                    .height(if leading.is_some() { 160 } else { 80 }),
+                text(if leading.is_some() {
+                    format!(
+                        "The old paragraph is taken out, and the new text drawn in its place at \
+                         {size:.0} pt in Helvetica, in the old text's colour, with its lines \
+                         wrapped to the paragraph's width. A new line starts a new paragraph."
+                    )
+                } else {
+                    format!(
+                        "The old text is taken out, and the new text drawn in its place at {size:.0} \
+                         pt, in the old text's colour and font. If the font can't show the new \
+                         letters (fonts are often embedded with only the letters a page uses), or \
+                         the text runs to more lines, it's drawn in Helvetica."
+                    )
+                })
+                .size(12),
+                buttons(content.text().trim_end() != was, "Change"),
+            ]
+            .spacing(10)
+            .into(),
             Details::Link(typed) => {
                 let target = link_target(typed);
                 let note = match &target {
@@ -432,7 +518,7 @@ impl Adder {
                         .on_input(move |v| ev(Event::Address(v)))
                         .on_submit(ev(Event::Done)),
                     text(note).size(12),
-                    buttons(target.is_some()),
+                    buttons(target.is_some(), "Add"),
                 ]
                 .spacing(10)
                 .into()
@@ -449,7 +535,7 @@ impl Adder {
     /// Which input to focus once the card opens.
     pub fn focus(&self) -> Option<iced::widget::Id> {
         match &self.pending.as_ref()?.details {
-            Details::Text(_) => Some(editor_id()),
+            Details::Text(_) | Details::Replace { .. } => Some(editor_id()),
             Details::Link(_) => Some(link_input_id()),
             Details::Picture => None,
         }

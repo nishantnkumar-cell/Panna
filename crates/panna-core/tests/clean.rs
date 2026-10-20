@@ -25,7 +25,7 @@ fn build(objects: &[&str], trailer: &str) -> Vec<u8> {
 }
 
 /// A page with everything that hides: metadata, scripts, an attachment, comments, a link and
-/// a field with a script.
+/// a field with a script, and a field whose parent has a calculation script.
 fn busy() -> Vec<u8> {
     build(
         &[
@@ -33,10 +33,10 @@ fn busy() -> Vec<u8> {
              /AA << /WC << /S /JavaScript /JS (app.alert\\(2\\)) >> >> \
              /Names << /JavaScript << /Names [(a) << /S /JavaScript /JS (app.alert\\(3\\)) >>] >> \
              /EmbeddedFiles << /Names [(secret.txt) 6 0 R] >> /Dests << /Names [(here) [3 0 R /Fit]] >> >> \
-             /AcroForm << /Fields [12 0 R] >> >>",
+             /AcroForm << /Fields [12 0 R 15 0 R] >> >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
-             /AA << /O << /S /JavaScript /JS (app.alert\\(4\\)) >> >> /Annots [8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >>",
+             /AA << /O << /S /JavaScript /JS (app.alert\\(4\\)) >> >> /Annots [8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 16 0 R] >>",
             "<< /Length 0 >>\nstream\n\nendstream",
             "<< /Type /Metadata /Subtype /XML /Length 13 >>\nstream\n<x>Author</x>\nendstream",
             "<< /Type /Filespec /F (secret.txt) /EF << /F 7 0 R >> >>",
@@ -49,6 +49,8 @@ fn busy() -> Vec<u8> {
              /AA << /K << /S /JavaScript /JS (app.alert\\(6\\)) >> >> >>",
             "<< /Type /Annot /Subtype /Popup /Rect [10 40 80 80] /Parent 8 0 R >>",
             "<< /Title (Busy) /Author (Jo Bloggs) >>",
+            "<< /FT /Tx /T (total) /Kids [16 0 R] /AA << /C << /S /JavaScript /JS (app.alert\\(7\\)) >> >> >>",
+            "<< /Type /Annot /Subtype /Widget /Parent 15 0 R /Rect [10 130 150 150] >>",
         ],
         "/Info 14 0 R",
     )
@@ -80,6 +82,7 @@ fn hidden_information_is_removed() {
         scripts: true,
         attachments: true,
         comments: true,
+        archive: false,
     };
     let out = doc.cleaned(all).unwrap();
     for gone in [
@@ -101,7 +104,7 @@ fn hidden_information_is_removed() {
     let out = open(out);
     assert!(out.comments().is_empty());
     let info = out.info().unwrap();
-    assert_eq!(info.fields.len(), 1);
+    assert_eq!(info.fields.len(), 2);
     assert_eq!(info.links.len(), 1);
     assert!(!info.properties.iter().any(|(k, _)| *k == "Author"));
 }

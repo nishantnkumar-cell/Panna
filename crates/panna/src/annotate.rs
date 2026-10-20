@@ -1,9 +1,10 @@
-//! Annotation tools: the tool rail, drawing in progress, and the list of unsaved annotations
+//! Annotation tools: the Comment toolbar, drawing in progress, and the list of unsaved annotations
 //! with undo and redo.
 
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{
-    Column, button, column, container, row, space, text, text_editor, text_input, vertical_slider,
+    Column, Row, button, column, container, row, slider, space, text, text_editor, text_input,
+    vertical_slider,
 };
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
@@ -54,7 +55,7 @@ impl Tool {
         Tool::Sign,
     ];
 
-    fn icon(self) -> Icon {
+    pub fn icon(self) -> Icon {
         match self {
             Tool::Select => Icon::Pointer,
             Tool::Highlight => Icon::Highlighter,
@@ -74,7 +75,7 @@ impl Tool {
         }
     }
 
-    fn tip(self) -> String {
+    pub fn tip(self) -> String {
         let what = match self {
             Tool::Select => "Select text",
             Tool::Highlight => "Highlight text",
@@ -95,6 +96,27 @@ impl Tool {
             }
         };
         format!("{what} ({})", self.key().to_ascii_uppercase())
+    }
+
+    /// The tool's name in the Comment menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            Tool::Select => "Select",
+            Tool::Highlight => "Highlight",
+            Tool::Underline => "Underline",
+            Tool::StrikeOut => "Strike out",
+            Tool::Note => "Sticky note",
+            Tool::TextBox => "Text box",
+            Tool::Pen => "Draw",
+            Tool::Rect => "Rectangle",
+            Tool::Ellipse => "Ellipse",
+            Tool::Arrow => "Arrow",
+            Tool::Line => "Line",
+            Tool::Polygon => "Polygon",
+            Tool::Cloud => "Cloud",
+            Tool::Stamp => "Stamp",
+            Tool::Sign => "Fill & Sign",
+        }
     }
 
     /// The single key that picks this tool while the comment tools are open.
@@ -322,6 +344,15 @@ impl Annotate {
             author,
             ..Self::default()
         }
+    }
+
+    /// The name put on new comments and replies.
+    pub fn set_author(&mut self, name: String) {
+        self.author = name;
+    }
+
+    pub fn author(&self) -> &str {
+        &self.author
     }
 
     pub fn color(&self) -> Color {
@@ -1191,61 +1222,56 @@ impl Annotate {
         Outcome::Changed
     }
 
-    /// The vertical tool rail shown at the edge of the page view.
-    pub fn rail(&self) -> Element<'_, Message> {
+    /// The Comment toolbar's buttons: the tools, colours, opacity, and undo and redo, laid
+    /// out for a column when `vertical`.
+    pub fn bar_items(&self, vertical: bool) -> Vec<Element<'_, Message>> {
         let ev = Message::Annotate;
-        let mut tools = Column::new().spacing(2).align_x(Center);
-        for tool in Tool::ALL {
-            tools = tools.push(icons::toggle(
-                tool.icon(),
-                tool.tip(),
-                self.tool == tool,
-                ev(Event::Tool(tool)),
-            ));
-        }
+        let mut items: Vec<Element<'_, Message>> = Tool::ALL
+            .into_iter()
+            .map(|tool| icons::toggle(tool.icon(), tool.tip(), self.tool == tool, ev(Event::Tool(tool))))
+            .collect();
+        items.push(divider(vertical));
         let current = self.picked_annotation().map_or_else(|| self.color(), |a| a.color);
-        let mut swatches = Column::new().spacing(4).align_x(Center);
-        for (i, color) in SWATCHES.iter().enumerate() {
-            swatches = swatches.push(swatch(*color, *color == current, ev(Event::Color(i))));
-        }
-        let opacity = icons::with_tip(
-            vertical_slider(0.1..=1.0, self.opacity(), move |v| ev(Event::Opacity(v)))
-                .step(0.05)
-                .on_release(ev(Event::OpacityDone))
-                .height(72),
-            format!("Opacity {}%", (self.opacity() * 100.0).round()),
-        );
+        let swatches = SWATCHES
+            .iter()
+            .enumerate()
+            .map(|(i, color)| swatch(*color, *color == current, ev(Event::Color(i))));
+        items.push(if vertical {
+            Column::with_children(swatches).spacing(4).align_x(Center).into()
+        } else {
+            Row::with_children(swatches).spacing(4).align_y(Center).into()
+        });
+        let tip = format!("Opacity {}%", (self.opacity() * 100.0).round());
+        items.push(if vertical {
+            icons::with_tip(
+                vertical_slider(0.1..=1.0, self.opacity(), move |v| ev(Event::Opacity(v)))
+                    .step(0.05_f32)
+                    .on_release(ev(Event::OpacityDone))
+                    .height(72),
+                tip,
+            )
+        } else {
+            icons::with_tip(
+                slider(0.1..=1.0, self.opacity(), move |v| ev(Event::Opacity(v)))
+                    .step(0.05_f32)
+                    .on_release(ev(Event::OpacityDone))
+                    .width(72),
+                tip,
+            )
+        });
+        items.push(divider(vertical));
         let m = icons::MOD;
-        let history = column![
-            icons::button(
-                Icon::Undo,
-                format!("Undo ({m}Z)"),
-                self.can_undo().then(|| ev(Event::Undo))
-            ),
-            icons::button(
-                Icon::Redo,
-                format!("Redo ({m}Y)"),
-                self.can_redo().then(|| ev(Event::Redo))
-            ),
-        ]
-        .spacing(2);
-        container(
-            column![tools, divider(), swatches, opacity, divider(), history]
-                .spacing(6)
-                .padding(4)
-                .align_x(Center),
-        )
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style::default()
-                .background(palette.background.base.color)
-                .border(iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                })
-        })
-        .into()
+        items.push(icons::button(
+            Icon::Undo,
+            format!("Undo ({m}Z)"),
+            self.can_undo().then(|| ev(Event::Undo)),
+        ));
+        items.push(icons::button(
+            Icon::Redo,
+            format!("Redo ({m}Y)"),
+            self.can_redo().then(|| ev(Event::Redo)),
+        ));
+        items
     }
 
     /// The card for typing a note's or text box's text.
@@ -1396,8 +1422,9 @@ pub fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("annotation-text")
 }
 
-fn divider<'a>() -> Element<'a, Message> {
-    container(space().width(20).height(1))
+fn divider<'a>(vertical: bool) -> Element<'a, Message> {
+    let (width, height) = if vertical { (20, 1) } else { (1, 20) };
+    container(space().width(width).height(height))
         .style(|theme: &Theme| {
             container::Style::default().background(theme.extended_palette().background.strong.color)
         })

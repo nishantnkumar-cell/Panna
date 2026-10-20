@@ -52,3 +52,50 @@ fn unreadable_pictures_are_named() {
     assert!(err.starts_with("Picture 2:"), "{err}");
     assert!(pictures_to_pdf(Vec::new()).is_err());
 }
+
+#[test]
+fn tiff_pictures_become_pages_too() {
+    let pixels: Vec<u8> = [0u8, 160, 0].repeat(40 * 20);
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    image::codecs::tiff::TiffEncoder::new(&mut tiff)
+        .write_image(&pixels, 40, 20, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    let pdf = pictures_to_pdf(vec![tiff.into_inner()]).unwrap();
+    let doc = Document::from_bytes(pdf, None, Limits::default()).unwrap();
+    let info = doc.info().unwrap();
+    assert_eq!((info.pages[0].width, info.pages[0].height), (30.0, 15.0));
+    let page = doc.render_page(&doc.new_cache(), 0, 1.0).unwrap();
+    let mid = ((page.height / 2 * page.width + page.width / 2) * 4) as usize;
+    assert!(
+        page.rgba[mid] < 30 && page.rgba[mid + 1] > 130,
+        "{:?}",
+        &page.rgba[mid..mid + 3]
+    );
+}
+
+#[test]
+fn blank_pdfs_have_the_pages_asked_for() {
+    let doc = Document::from_bytes(
+        panna_core::blank_pdf(842.0, 595.0, 3).unwrap(),
+        None,
+        Limits::default(),
+    )
+    .unwrap();
+    let info = doc.info().unwrap();
+    assert_eq!(info.pages.len(), 3);
+    assert!(info.pages.iter().all(|p| (p.width, p.height) == (842.0, 595.0)));
+    assert!(panna_core::blank_pdf(612.0, 792.0, 0).is_err());
+    assert!(panna_core::blank_pdf(1.0, 792.0, 1).is_err());
+}
+
+#[test]
+fn a_clipboard_picture_becomes_a_page() {
+    let rgba = [10u8, 20, 30, 255].repeat(40 * 30);
+    let pdf = panna_core::rgba_to_pdf(40, 30, &rgba).unwrap();
+    let doc = Document::from_bytes(pdf, None, Limits::default()).unwrap();
+    let info = doc.info().unwrap();
+    assert_eq!(info.pages.len(), 1);
+    // Wider than tall, at 96 pixels an inch.
+    assert_eq!((info.pages[0].width, info.pages[0].height), (30.0, 22.5));
+    assert!(panna_core::rgba_to_pdf(0, 0, &[]).is_err());
+}

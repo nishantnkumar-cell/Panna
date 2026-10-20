@@ -11,12 +11,15 @@ use hayro::hayro_syntax::object::{Array, Dict, MaybeRef, Object, ObjectIdentifie
 use crate::document::decode_text_string;
 
 /// One bookmark. `depth` 0 is a top-level entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OutlineItem {
     pub title: String,
     pub depth: u16,
     /// Zero-based page the bookmark jumps to, when it points inside this document.
     pub page: Option<usize>,
+    /// The bookmark's object in the file; `None` for one not saved yet. Kept when bookmarks
+    /// are edited, so a bookmark keeps what it had (its exact destination, its style).
+    pub id: Option<crate::ObjRef>,
 }
 
 const MAX_ITEMS: usize = 20_000;
@@ -64,6 +67,38 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<OutlineItem> {
     ctx.out
 }
 
+/// Every bookmark that is an object of its own, with its title as written, for redacting.
+pub(crate) fn titled(pdf: &Pdf) -> Vec<(ObjectIdentifier, String)> {
+    let mut out = Vec::new();
+    let xref = pdf.xref();
+    let Some(root) = xref
+        .get::<Dict<'_>>(xref.root_id())
+        .and_then(|c| c.get::<Dict<'_>>(b"Outlines"))
+    else {
+        return out;
+    };
+    let mut seen = HashSet::new();
+    let mut lists = vec![(root.get::<Dict<'_>>(b"First"), 0u16)];
+    while let Some((mut node, depth)) = lists.pop() {
+        while let Some(item) = node {
+            if out.len() >= MAX_ITEMS || depth > MAX_DEPTH {
+                break;
+            }
+            let Some(id) = item.obj_id().filter(|id| seen.insert(*id)) else {
+                break;
+            };
+            let title = item
+                .get::<hayro::hayro_syntax::object::String<'_>>(b"Title")
+                .map(|s| decode_text_string(s.as_bytes()))
+                .unwrap_or_default();
+            out.push((id, title));
+            lists.push((item.get::<Dict<'_>>(b"First"), depth + 1));
+            node = item.get::<Dict<'_>>(b"Next");
+        }
+    }
+    out
+}
+
 fn walk<'a>(ctx: &mut Ctx<'a>, first: Option<Dict<'a>>, depth: u16) {
     if depth > MAX_DEPTH {
         return;
@@ -84,7 +119,15 @@ fn walk<'a>(ctx: &mut Ctx<'a>, first: Option<Dict<'a>>, depth: u16) {
             .map(|s| clean_title(&decode_text_string(s.as_bytes())))
             .unwrap_or_default();
         let page = destination(ctx, &item);
-        ctx.out.push(OutlineItem { title, depth, page });
+        let id = item
+            .obj_id()
+            .and_then(|id| crate::ObjRef::new(id.obj_number, id.gen_number));
+        ctx.out.push(OutlineItem {
+            title,
+            depth,
+            page,
+            id,
+        });
         walk(ctx, item.get::<Dict<'_>>(b"First"), depth + 1);
         node = item.get::<Dict<'_>>(b"Next");
     }
@@ -115,17 +158,55 @@ pub(crate) fn destination(ctx: &Ctx<'_>, item: &Dict<'_>) -> Option<usize> {
 }
 
 fn resolve_dest(ctx: &Ctx<'_>, dest: Object<'_>, hops: u8) -> Option<usize> {
+    page_of(ctx, &resolve_array(ctx, dest, hops)?)
+}
+
+/// The explicit destination (`[page /Fit]` and the like) that `dest` names.
+fn resolve_array<'a>(ctx: &Ctx<'a>, dest: Object<'a>, hops: u8) -> Option<Array<'a>> {
     if hops > 2 {
         return None;
     }
     match dest {
-        Object::Array(array) => page_of(ctx, &array),
+        Object::Array(array) => Some(array),
         // A named destination's value can be an array or a dictionary with /D.
-        Object::Dict(dict) => resolve_dest(ctx, dict.get::<Object<'_>>(b"D")?, hops + 1),
-        Object::Name(name) => resolve_dest(ctx, named(ctx, name.as_str().as_bytes())?, hops + 1),
-        Object::String(s) => resolve_dest(ctx, named(ctx, s.as_bytes())?, hops + 1),
+        Object::Dict(dict) => resolve_array(ctx, dict.get::<Object<'a>>(b"D")?, hops + 1),
+        Object::Name(name) => resolve_array(ctx, named(ctx, name.as_str().as_bytes())?, hops + 1),
+        Object::String(s) => resolve_array(ctx, named(ctx, s.as_bytes())?, hops + 1),
         _ => None,
     }
+}
+
+/// Where the document opens (its `/OpenAction`, when that goes to a page): the page, and
+/// the destination's kind (`Fit`, `XYZ`…) with its zoom for `XYZ`.
+pub(crate) fn opening(pdf: &Pdf) -> Option<(usize, String, Option<f32>)> {
+    let ctx = Ctx::new(pdf)?;
+    let dest = match ctx.catalog.get::<Object<'_>>(b"OpenAction")? {
+        Object::Dict(action) => {
+            let kind = action.get::<hayro::hayro_syntax::object::Name<'_>>(b"S")?;
+            if kind.as_str() != "GoTo" {
+                return None;
+            }
+            action.get::<Object<'_>>(b"D")?
+        }
+        dest => dest,
+    };
+    let array = resolve_array(&ctx, dest, 0)?;
+    let page = page_of(&ctx, &array)?;
+    let mut rest = array.iter::<Object<'_>>().skip(1);
+    let kind = match rest.next() {
+        Some(Object::Name(name)) => name.as_str().to_owned(),
+        _ => String::new(),
+    };
+    // [page /XYZ left top zoom]: a zoom of 0 or null keeps the current one.
+    let zoom = (kind == "XYZ")
+        .then(|| rest.nth(2))
+        .flatten()
+        .and_then(|z| match z {
+            Object::Number(n) => Some(n.as_f64() as f32),
+            _ => None,
+        })
+        .filter(|z| z.is_finite() && *z > 0.0);
+    Some((page, kind, zoom))
 }
 
 /// The first element of an explicit destination is a page reference (or, in some files, a

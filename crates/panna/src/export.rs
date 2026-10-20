@@ -1,4 +1,4 @@
-//! The Export card: pages as plain text or as pictures.
+//! The Export card: pages as plain text, a Word document or pictures.
 
 use iced::widget::{button, column, container, radio, row, space, text, text_input};
 use iced::{Element, Theme};
@@ -45,7 +45,7 @@ pub fn input_id() -> iced::widget::Id {
 pub fn settings(state: &Exporting, count: usize) -> Result<(Vec<usize>, f32), String> {
     let dpi = match state.dpi.trim().parse::<f32>() {
         Ok(v) if (36.0..=1200.0).contains(&v) => v,
-        _ if state.format == ExportFormat::Text => 0.0,
+        _ if !state.format.pictures() => 0.0,
         _ => return Err("The resolution goes from 36 to 1200 dots per inch.".into()),
     };
     let mut seen = std::collections::HashSet::new();
@@ -62,6 +62,9 @@ pub fn extension(format: ExportFormat) -> &'static str {
         ExportFormat::Text => "txt",
         ExportFormat::Png => "png",
         ExportFormat::Jpeg => "jpg",
+        ExportFormat::Word => "docx",
+        ExportFormat::PowerPoint => "pptx",
+        ExportFormat::Excel => "xlsx",
     }
 }
 
@@ -73,13 +76,30 @@ pub fn card<'a>(state: &Exporting, count: usize) -> Element<'a, Message> {
         Ok((pages, _)) if state.format == ExportFormat::Text => {
             text(format!("{} into one text file", plural(pages.len()))).size(13)
         }
+        Ok((pages, _)) if state.format == ExportFormat::Word => text(format!(
+            "{} into one Word document: the text, in paragraphs and headings. Pictures and \
+             layout aren't kept.",
+            plural(pages.len())
+        ))
+        .size(13),
+        Ok((pages, _)) if state.format == ExportFormat::PowerPoint => text(format!(
+            "{} into one PowerPoint presentation, a picture of each page as a slide",
+            plural(pages.len())
+        ))
+        .size(13),
+        Ok((pages, _)) if state.format == ExportFormat::Excel => text(format!(
+            "{} into one Excel workbook: a sheet for each page, a row for each line, and columns \
+             where the words line up",
+            plural(pages.len())
+        ))
+        .size(13),
         Ok((pages, _)) => text(format!("{}, a picture each", plural(pages.len()))).size(13),
         Err(e) => text(e.clone()).size(13).style(|theme: &Theme| text::Style {
             color: Some(theme.extended_palette().danger.base.color),
         }),
     };
     let format = Some(state.format);
-    let pictures = state.format != ExportFormat::Text;
+    let pictures = state.format.pictures();
     let dpi: Element<'a, Message> = if pictures {
         row![
             text("Resolution").width(80),
@@ -101,6 +121,21 @@ pub fn card<'a>(state: &Exporting, count: usize) -> Element<'a, Message> {
             radio("Plain text", ExportFormat::Text, format, move |v| ev(
                 Event::Format(v)
             )),
+            radio("Word document (.docx)", ExportFormat::Word, format, move |v| ev(
+                Event::Format(v)
+            )),
+            radio(
+                "PowerPoint presentation (.pptx)",
+                ExportFormat::PowerPoint,
+                format,
+                move |v| ev(Event::Format(v))
+            ),
+            radio(
+                "Excel workbook (.xlsx)",
+                ExportFormat::Excel,
+                format,
+                move |v| ev(Event::Format(v))
+            ),
             radio(
                 "PNG pictures (sharp, larger)",
                 ExportFormat::Png,

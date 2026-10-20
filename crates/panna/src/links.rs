@@ -6,6 +6,20 @@ use std::process::Command;
 
 use panna_core::{Link, safe_uri};
 
+/// Opens a page of Windows Settings (an `ms-settings:` address).
+#[cfg(windows)]
+pub fn open_settings(uri: &str) -> io::Result<()> {
+    if !uri.starts_with("ms-settings:") || uri.contains(['"', ' ']) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a Settings page"));
+    }
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    Command::new(std::path::Path::new(&root).join("System32\\rundll32.exe"))
+        .arg("url.dll,FileProtocolHandler")
+        .arg(uri)
+        .spawn()
+        .map(drop)
+}
+
 /// The link under a point on `page`, in page points.
 pub fn at(links: &[Link], page: usize, (x, y): (f32, f32)) -> Option<usize> {
     links.iter().position(|l| l.page == page && l.at.contains(x, y))
@@ -21,7 +35,9 @@ pub fn open(uri: &str) -> io::Result<()> {
         ));
     }
     let mut command = if cfg!(target_os = "windows") {
-        let mut c = Command::new("rundll32");
+        // The full path, so a rundll32.exe placed elsewhere (next to Panna, say) isn't run.
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let mut c = Command::new(std::path::Path::new(&root).join("System32\\rundll32.exe"));
         c.arg("url.dll,FileProtocolHandler");
         c
     } else if cfg!(target_os = "macos") {

@@ -26,7 +26,7 @@ const DESCENT: f64 = -200.0;
 
 /// A character's box in page points: origin at the top left of the page as displayed at
 /// rotation 0 (the page's own `/Rotate` already applied), y growing downwards.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct TextBox {
     pub x0: f32,
     pub y0: f32,
@@ -51,7 +51,7 @@ impl TextBox {
         ((self.x0 + self.x1) / 2.0, (self.y0 + self.y1) / 2.0)
     }
 
-    fn union(self, other: TextBox) -> TextBox {
+    pub(crate) fn union(self, other: TextBox) -> TextBox {
         TextBox {
             x0: self.x0.min(other.x0),
             y0: self.y0.min(other.y0),
@@ -62,14 +62,38 @@ impl TextBox {
 }
 
 /// The text of one page in content order, with one box per `char`.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PageText {
     chars: Vec<char>,
     boxes: Vec<TextBox>,
 }
 
+/// A line of text: what it says, its left edge, its top and bottom (y down), and its font
+/// size, in points.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Line {
+    pub text: String,
+    pub x0: f32,
+    pub x1: f32,
+    pub y0: f32,
+    pub y1: f32,
+    pub size: f32,
+    /// The line cut where words are far apart, as in a table: each part's left edge and text.
+    pub cells: Vec<(f32, String)>,
+}
+
+/// A paragraph of a page's text (see [`PageText::paragraph_at`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Paragraph {
+    pub text: String,
+    pub area: TextBox,
+    pub size: f32,
+    /// From one line's baseline to the next, when there's more than one line.
+    pub leading: Option<f32>,
+}
+
 /// Options for [`PageText::find`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FindOptions {
     pub match_case: bool,
     pub whole_word: bool,
@@ -82,6 +106,10 @@ impl PageText {
 
     pub(crate) fn chars(&self) -> &[char] {
         &self.chars
+    }
+
+    pub(crate) fn boxes(&self) -> &[TextBox] {
+        &self.boxes
     }
 
     pub fn is_empty(&self) -> bool {
@@ -208,6 +236,177 @@ impl PageText {
     }
 
     /// Whether `(x, y)` is on a character, so the pointer should show a text cursor.
+    /// The text's lines as drawn, each with the box around it and its glyphs' typical height
+    /// (the font size, give or take).
+    pub(crate) fn lines(&self) -> Vec<Line> {
+        let mut out = Vec::new();
+        let mut start = 0;
+        for end in (0..self.chars.len())
+            .filter(|&i| self.chars.get(i) == Some(&'\n'))
+            .chain([self.chars.len()])
+        {
+            let chars = self.chars.get(start..end).unwrap_or_default();
+            let boxes = self.boxes.get(start..end).unwrap_or_default();
+            start = end + 1;
+            let text: String = chars.iter().collect();
+            if text.trim().is_empty() {
+                continue;
+            }
+            let mut heights: Vec<f32> = chars
+                .iter()
+                .zip(boxes)
+                .filter(|(c, _)| !c.is_whitespace())
+                .map(|(_, b)| b.height())
+                .collect();
+            heights.sort_by(f32::total_cmp);
+            let drawn: Vec<&TextBox> = boxes
+                .iter()
+                .filter(|b| b.width() > 0.0 || b.height() > 0.0)
+                .collect();
+            let fold = |f: fn(&TextBox) -> f32, pick: fn(f32, f32) -> f32| {
+                drawn.iter().map(|b| f(b)).reduce(pick).unwrap_or(0.0)
+            };
+            let size =
+                heights.get(heights.len() / 2).copied().unwrap_or(0.0) * 1000.0 / (ASCENT - DESCENT) as f32;
+            // Cells: a gap of more than two spaces' width starts a new one.
+            let mut cells: Vec<(f32, String)> = Vec::new();
+            let mut last_end: Option<f32> = None;
+            for (c, b) in chars.iter().zip(boxes) {
+                if c.is_whitespace() {
+                    continue;
+                }
+                let far = last_end.is_none_or(|end| b.x0 - end > size.max(1.0) * 0.8);
+                match cells.last_mut() {
+                    Some((_, cell)) if !far => {
+                        if last_end.is_some_and(|end| b.x0 - end > size * 0.15) {
+                            cell.push(' ');
+                        }
+                        cell.push(*c);
+                    }
+                    _ => cells.push((b.x0, c.to_string())),
+                }
+                last_end = Some(b.x1);
+            }
+            out.push(Line {
+                cells,
+                text: text.trim().to_owned(),
+                x0: fold(|b| b.x0, f32::min),
+                x1: fold(|b| b.x1, f32::max),
+                y0: fold(|b| b.y0, f32::min),
+                y1: fold(|b| b.y1, f32::max),
+                // Boxes run from the descent to the ascent: 1000 units of a 1000-unit em.
+                size,
+            });
+        }
+        out
+    }
+
+    /// The line of text at `x`, `y`: what it says, the box around it, and its font size.
+    pub fn line_at(&self, x: f32, y: f32) -> Option<(String, TextBox, f32)> {
+        self.lines()
+            .into_iter()
+            .filter(|l| x >= l.x0 - 2.0 && x <= l.x1 + 2.0 && y >= l.y0 - 1.0 && y <= l.y1 + 1.0)
+            // The nearest by height, where lines overlap.
+            .min_by(|a, b| {
+                let d = |l: &Line| ((l.y0 + l.y1) / 2.0 - y).abs();
+                d(a).total_cmp(&d(b))
+            })
+            .map(|l| {
+                let area = TextBox {
+                    x0: l.x0,
+                    y0: l.y0,
+                    x1: l.x1,
+                    y1: l.y1,
+                };
+                (l.text, area, l.size)
+            })
+    }
+
+    /// The paragraph at `x`, `y`: the line there and the lines above and below it set the
+    /// same way (the same size, overlapping, and a line apart), with its text, the box
+    /// around it, its font size, and the distance between its lines when it has more than
+    /// one. Words broken with a hyphen at a line's end are joined.
+    pub fn paragraph_at(&self, x: f32, y: f32) -> Option<Paragraph> {
+        const MAX_LINES: usize = 200;
+        let lines = self.lines();
+        let hit = |l: &Line| x >= l.x0 - 2.0 && x <= l.x1 + 2.0 && y >= l.y0 - 1.0 && y <= l.y1 + 1.0;
+        let middle = |l: &Line| (l.y0 + l.y1) / 2.0;
+        let start = (0..lines.len())
+            .filter(|&i| lines.get(i).is_some_and(hit))
+            .min_by(|&a, &b| {
+                let d = |i: usize| lines.get(i).map_or(f32::MAX, |l| (middle(l) - y).abs());
+                d(a).total_cmp(&d(b))
+            })?;
+        let first = lines.get(start)?;
+        let size = first.size.max(1.0);
+        // The nearest line just below (or above) `from` that belongs with it.
+        let next = |from: &Line, down: bool, taken: &[usize]| -> Option<usize> {
+            (0..lines.len())
+                .filter(|i| !taken.contains(i))
+                .filter_map(|i| Some((i, lines.get(i)?)))
+                .filter(|(_, l)| (l.size - from.size).abs() <= 0.15 * from.size.max(1.0))
+                .filter(|(_, l)| {
+                    let overlap = l.x1.min(from.x1) - l.x0.max(from.x0);
+                    overlap > 0.0
+                        && ((l.x0 - from.x0).abs() < 3.0 * size
+                            || overlap > 0.5 * (l.x1 - l.x0).min(from.x1 - from.x0))
+                })
+                .filter_map(|(i, l)| {
+                    let step = if down { l.y0 - from.y0 } else { from.y0 - l.y0 };
+                    let gap = if down { l.y0 - from.y1 } else { from.y0 - l.y1 };
+                    (step > 0.6 * size && gap < 0.8 * size).then_some((i, step))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        };
+        let mut order = vec![start];
+        for down in [false, true] {
+            let mut edge = start;
+            while order.len() < MAX_LINES {
+                let Some(i) = lines.get(edge).and_then(|l| next(l, down, &order)) else {
+                    break;
+                };
+                if down {
+                    order.push(i);
+                } else {
+                    order.insert(0, i);
+                }
+                edge = i;
+            }
+        }
+        let picked: Vec<&Line> = order.iter().filter_map(|&i| lines.get(i)).collect();
+        let mut text = String::new();
+        for line in &picked {
+            if text.ends_with('-') && line.text.starts_with(char::is_lowercase) {
+                text.pop();
+            } else if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(&line.text);
+        }
+        let fold = |f: fn(&Line) -> f32, pick: fn(f32, f32) -> f32| {
+            picked.iter().map(|l| f(l)).reduce(pick).unwrap_or(0.0)
+        };
+        let leading = (picked.len() > 1).then(|| {
+            let (top, bottom) = (
+                picked.first().map_or(0.0, |l| l.y1),
+                picked.last().map_or(0.0, |l| l.y1),
+            );
+            (bottom - top) / (picked.len() - 1) as f32
+        });
+        Some(Paragraph {
+            text,
+            area: TextBox {
+                x0: fold(|l| l.x0, f32::min),
+                y0: fold(|l| l.y0, f32::min),
+                x1: fold(|l| l.x1, f32::max),
+                y1: fold(|l| l.y1, f32::max),
+            },
+            size: first.size,
+            leading,
+        })
+    }
+
     pub fn hit(&self, x: f32, y: f32) -> bool {
         self.boxes.iter().any(|b| b.contains(x, y))
     }

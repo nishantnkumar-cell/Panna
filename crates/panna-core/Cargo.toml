@@ -7,18 +7,44 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+panna-sandbox = { path = "../panna-sandbox", version = "0.1.0" }
 aes = "0.8"
 getrandom = "0.3"
-hayro = "0.8"
+# Without the default "simd" feature: its image scaling uses hand-written SIMD (unsafe) on
+# picture data from the PDF. Safe scaling costs about 25 ms per full-page photo.
+hayro = { version = "0.8", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
 # Image stamps: the PNG and JPEG decoders and the compressor hayro already brings in.
 flate2 = "1"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 zune-core = "0.5"
 zune-jpeg = "0.5"
 md-5 = "0.10"
 # Reading XFDF form data files (already used by the SVG icons).
 roxmltree = "0.20"
 sha2 = "0.10"
+# Checking digital signatures: CMS and certificates, and the ECDSA algorithms.
+cms = "0.2"
+der = "0.7"
+x509-cert = { version = "0.2", default-features = false }
+spki = "0.7"
+# RSA signatures are checked with public-key arithmetic only (no private keys involved).
+num-bigint = "0.4"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std", "pkcs8"] }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "std", "pkcs8"] }
+# Signing: certificates and keys from PKCS #12 (.p12, .pfx) files, and RSA's private-key
+# operation (blinded with random numbers).
+p12-keystore = "0.2"
+rsa = { version = "0.9", default-features = false, features = ["std", "sha2"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha1 = "0.10"
+# Passwords and file keys are wiped from memory when dropped.
+zeroize = { version = "1", features = ["serde"] }
+# Requests and replies between the app and its locked-down document process (see isolate).
+serde = { version = "1", features = ["derive", "rc"] }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+# Recognising text in scanned pages (OCR), offline, with the models in models/.
+ocrs = { version = "0.13", default-features = false, features = ["rten"] }
+rten = { version = "0.26", default-features = false, features = ["rten_format"] }
 
 [lints]
 workspace = true

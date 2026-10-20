@@ -107,6 +107,54 @@ impl Form {
                 *editor = text_editor::Content::with_text(t);
             }
         }
+        self.recalculate();
+    }
+
+    /// Works out the fields calculated from others, in the form's calculation order. Only
+    /// the standard calculations are recognised; no script is run.
+    fn recalculate(&mut self) {
+        let mut order: Vec<(usize, usize)> = self
+            .fields
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| Some((f.calculation.as_ref()?.order, i)))
+            .collect();
+        order.sort_unstable();
+        for (_, i) in order {
+            let Some(formula) = self
+                .fields
+                .get(i)
+                .and_then(|f| f.calculation.as_ref())
+                .map(|c| &c.formula)
+            else {
+                continue;
+            };
+            let values = |name: &str| -> Vec<f64> {
+                let group = format!("{name}.");
+                self.fields
+                    .iter()
+                    .zip(&self.values)
+                    .filter(|(f, _)| f.name == name || f.name.starts_with(&group))
+                    .map(|(_, v)| match v {
+                        FieldValue::Text(t) => panna_core::calc_number(t),
+                        FieldValue::State(Some(s)) => panna_core::calc_number(s),
+                        FieldValue::State(None) => 0.0,
+                    })
+                    .collect()
+            };
+            let result = formula
+                .evaluate(&values)
+                .map(panna_core::calc_value_text)
+                .unwrap_or_default();
+            if let Some(slot) = self.values.get_mut(i)
+                && *slot != FieldValue::Text(result.clone())
+            {
+                if let Some(editor) = self.editors.get_mut(&i) {
+                    *editor = text_editor::Content::with_text(&result);
+                }
+                *slot = FieldValue::Text(result);
+            }
+        }
     }
 
     /// Fields whose values differ from the file's.
@@ -179,6 +227,7 @@ impl Form {
                 filled += 1;
             }
         }
+        self.recalculate();
         filled
     }
 
@@ -229,6 +278,7 @@ impl Form {
         match self.values.get_mut(index) {
             Some(value) if *value != new => {
                 *value = new;
+                self.recalculate();
                 true
             }
             _ => false,
@@ -486,6 +536,7 @@ mod tests {
             color: Ink::BLACK,
             align: 0,
             format: None,
+            calculation: None,
             widgets: on
                 .iter()
                 .map(|s| Widget {
@@ -528,6 +579,42 @@ mod tests {
             ),
         ]);
         f
+    }
+
+    #[test]
+    fn calculated_fields_follow_what_is_typed() {
+        let text = || FieldKind::Text {
+            multiline: false,
+            password: false,
+            max_len: None,
+        };
+        let empty = || FieldValue::Text(String::new());
+        let mut total = field(3, text(), empty(), &[""]);
+        total.read_only = true;
+        total.calculation = Some(panna_core::Calculation {
+            order: 1,
+            formula: panna_core::Formula::Simple(panna_core::CalcOp::Sum, vec!["line".into(), "f2".into()]),
+        });
+        let mut line = field(4, text(), empty(), &[""]);
+        line.name = "line".into();
+        line.calculation = Some(panna_core::Calculation {
+            order: 0,
+            formula: panna_core::Formula::from_script("/** BVCALC f1 * f2 EVCALC **/").unwrap(),
+        });
+        let mut f = Form::default();
+        f.load(&[
+            field(1, text(), empty(), &[""]),
+            field(2, text(), empty(), &[""]),
+            total,
+            line,
+        ]);
+        assert!(f.update(Event::Text(0, "2.5".into())));
+        assert!(f.update(Event::Text(1, "4".into())));
+        assert_eq!(f.values[3], FieldValue::Text("10".into()));
+        // The total is worked out after the line it adds up.
+        assert_eq!(f.values[2], FieldValue::Text("14".into()));
+        f.reset();
+        assert_eq!(f.values[2], FieldValue::Text("0".into()));
     }
 
     #[test]

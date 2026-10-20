@@ -136,3 +136,81 @@ fn the_worker_keeps_the_password_for_changes_and_saves() {
     assert_eq!(saved.comments().len(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn old_protection_is_redone_with_aes_256_keeping_both_passwords() {
+    for (name, bytes) in FIXTURES {
+        let user = open(bytes, "secret");
+        assert!(
+            !user.info().unwrap().weak_protection,
+            "{name}: opened without owner rights"
+        );
+        let owner = open(bytes, "owner");
+        let info = owner.info().unwrap();
+        let shown = info
+            .properties
+            .iter()
+            .find(|(k, _)| *k == "Password protection")
+            .unwrap();
+        assert_eq!(shown.1, format!("Yes ({name})"));
+        assert_eq!(info.weak_protection, name != "AES-256", "{name}");
+        if name == "AES-256" {
+            assert!(owner.strengthened().is_err());
+            continue;
+        }
+        let (bytes, password) = owner.strengthened().unwrap();
+        assert_eq!(*password, "owner");
+        // The same passwords open it, now with AES-256, and the text is still there.
+        let again = open(&bytes, "secret");
+        let shown = again.info().unwrap().properties;
+        assert!(
+            shown.contains(&("Password protection".into(), "Yes (AES-256)".to_owned())),
+            "{name}"
+        );
+        assert!(open(&bytes, "owner").info().is_ok());
+        assert!(Document::from_bytes(bytes.clone(), Some("wrong"), Limits::default()).is_err());
+        assert_eq!(red_pixels(&again), red_pixels(&owner), "{name}");
+    }
+}
+
+#[test]
+fn bookmarks_added_to_encrypted_files_read_back() {
+    for (name, bytes) in FIXTURES {
+        let doc = open(bytes, "secret");
+        let added = [panna_core::OutlineItem {
+            title: "Résumé".into(),
+            depth: 0,
+            page: Some(0),
+            id: None,
+        }];
+        let saved = doc.with_bookmarks(&added).unwrap();
+        let again = doc.reopen(saved.clone()).unwrap();
+        let outline = again.info().unwrap().outline;
+        assert_eq!(outline.len(), 1, "{name}");
+        assert_eq!(outline[0].title, "Résumé", "{name}");
+
+        // Renaming it again rewrites the same object, still encrypted.
+        let mut renamed = outline;
+        renamed[0].title = "Summary".into();
+        let saved = again.with_bookmarks(&renamed).unwrap();
+        let outline = again.reopen(saved).unwrap().info().unwrap().outline;
+        assert_eq!(outline[0].title, "Summary", "{name}");
+    }
+}
+
+#[test]
+fn page_labels_in_encrypted_files_read_back() {
+    for (name, bytes) in FIXTURES {
+        let doc = open(bytes, "secret");
+        let ranges = [panna_core::LabelRange {
+            start: 0,
+            style: panna_core::LabelStyle::Decimal,
+            prefix: "Annexe-".into(),
+            first: 3,
+        }];
+        let saved = doc.with_page_labels(&ranges).unwrap();
+        let labels = doc.reopen(saved).unwrap().info().unwrap().page_labels;
+        assert_eq!(labels, ranges, "{name}");
+        assert_eq!(panna_core::page_label(&labels, 0), "Annexe-3", "{name}");
+    }
+}

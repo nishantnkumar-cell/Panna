@@ -10,7 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 
 use hayro::hayro_syntax::Pdf;
-use hayro::hayro_syntax::object::{Dict, Object, ObjectIdentifier};
+use hayro::hayro_syntax::object::{Dict, Object, ObjectIdentifier, Stream};
 
 use super::SaveError;
 use super::annot::n;
@@ -19,7 +19,7 @@ use super::lex;
 use crate::ObjRef;
 
 /// Where one page of the new file comes from.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PageSource {
     /// Page `index` of document `doc` (0 is the document being changed), turned clockwise by
     /// `turns` quarter turns.
@@ -275,6 +275,8 @@ pub(crate) struct Extra {
     pub links: Vec<([f64; 4], crate::LinkTarget)>,
     /// Areas to take content out of for good, in the same space as `links`.
     pub redact: Vec<[f64; 4]>,
+    /// Take only text out of the `redact` areas, leaving pictures, drawings and comments.
+    pub text_only: bool,
     /// Form fields to add, placed in the same space as `links`.
     pub fields: Vec<super::NewField>,
     /// Widgets to take off the page, and fields to take out of the form.
@@ -283,10 +285,17 @@ pub(crate) struct Extra {
     /// Pictures the page draws to move, replace or take out, by their place in
     /// [`page_pictures`].
     pub pictures: Vec<(usize, super::PictureChange)>,
+    /// Redacted phrases (see [`super::scrub`]) to take out of the whole document: comments
+    /// that mention one go, and they are blacked out in bookmark titles. Read from every
+    /// page's extra.
+    pub scrub: Vec<String>,
+    /// This page takes the place of the first document's page at this index: bookmarks and
+    /// links to that page come here.
+    pub stands_for: Option<usize>,
 }
 
 /// Hidden information to leave out of the new file.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cleanup {
     /// The document information (title, author, dates, software) and XMP metadata.
     pub metadata: bool,
@@ -296,6 +305,10 @@ pub struct Cleanup {
     pub attachments: bool,
     /// Comments and markup; links and form fields stay.
     pub comments: bool,
+    /// Makes the copy PDF/A-2b where it can: new metadata naming it PDF/A (the document
+    /// information goes into it), an sRGB output intent, and comments and fields set to
+    /// print. Scripts should go too.
+    pub archive: bool,
 }
 
 impl Cleanup {
@@ -311,6 +324,32 @@ fn runs_script(annot: &Dict<'_>) -> bool {
         .get::<Dict<'_>>(b"A")
         .and_then(|a| a.get::<Name<'_>>(b"S"))
         .is_some_and(|s| s.as_str() == "JavaScript")
+}
+
+/// Whether `dict` is a form field (or a field's parent), whose actions run as it's filled in.
+fn is_field(dict: &Dict<'_>) -> bool {
+    dict.contains_key(b"FT") || (dict.contains_key(b"Kids") && dict.contains_key(b"T"))
+}
+
+/// A copied dictionary without its additional actions (scripts that run as a field is
+/// typed in, worked out, formatted or checked), nor its action when that's a `script`.
+fn without_actions(body: &[u8], script: bool) -> Option<Vec<u8>> {
+    if !body.trim_ascii_start().starts_with(b"<<") {
+        return None;
+    }
+    let mut out = b"<<".to_vec();
+    for (key, value) in lex::dict_entries(body)? {
+        if key == b"AA" || (key == b"A" && script) {
+            continue;
+        }
+        out.push(b'/');
+        out.extend_from_slice(key);
+        out.push(b' ');
+        out.extend_from_slice(body.get(value)?);
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b">>");
+    Some(out)
 }
 
 /// Which annotations become part of the page's content.
@@ -553,10 +592,18 @@ pub(crate) fn rebuild(
     info: Option<ObjRef>,
     encryption: Option<Encryption>,
     clean: Cleanup,
-    compact: bool,
+    compact: Option<super::pack::Compact>,
 ) -> Result<Vec<u8>, SaveError> {
     let first = sources.first().ok_or(SaveError::Damaged)?;
-    let info = info.filter(|_| !clean.metadata);
+    let info = info.filter(|_| !clean.metadata && !clean.archive);
+    let mut scrub: Vec<String> = Vec::new();
+    for phrase in extras.iter().flat_map(|e| &e.scrub) {
+        if !scrub.contains(phrase) {
+            scrub.push(phrase.clone());
+        }
+    }
+    // Pictures already written, by StampImage::key.
+    let mut pictures_written: HashMap<usize, u32> = HashMap::new();
     let mut w = Writer {
         objects: Vec::new(),
         maps: vec![HashMap::new(); sources.len()],
@@ -597,6 +644,17 @@ pub(crate) fn rebuild(
             {
                 map.insert(r, Some(num));
             }
+        }
+    }
+    for (extra, num) in extras.iter().zip(&page_nums) {
+        let Some(index) = extra.stands_for else { continue };
+        let (Some((pages, _)), Some(map)) = (trees.first(), w.maps.first_mut()) else {
+            continue;
+        };
+        if let Some((r, _)) = pages.get(index)
+            && map.get(r).is_some_and(Option::is_none)
+        {
+            map.insert(*r, Some(*num));
         }
     }
     for (place, (source, num)) in plan.iter().zip(&page_nums).enumerate() {
@@ -657,12 +715,16 @@ pub(crate) fn rebuild(
                     || !extra.links.is_empty()
                     || !extra.fields.is_empty()
                     || !extra.drop_annots.is_empty()
-                    || redacting;
-                let gone = if redacting {
-                    redacted_annotations(pdf, dict, &areas)?
+                    || redacting
+                    || !scrub.is_empty();
+                let mut gone = if redacting && !extra.text_only {
+                    redacted_annotations(dict, &areas)?
                 } else {
                     std::collections::HashSet::new()
                 };
+                if !scrub.is_empty() {
+                    gone.extend(mentioning_annotations(dict, &scrub));
+                }
                 if filtering
                     && let Some(annots) = dict.get::<hayro::hayro_syntax::object::Array<'_>>(b"Annots")
                 {
@@ -699,14 +761,20 @@ pub(crate) fn rebuild(
                             }
                         }
                         let has_actions = script || annot.get::<Dict<'_>>(b"AA").is_some();
-                        if clean.scripts && has_actions {
+                        let flags = annot.get::<i64>(b"F").unwrap_or(0);
+                        // PDF/A wants every comment and field printed, none hidden.
+                        let printed = (flags | 4) & !(1 | 2 | 32);
+                        let reflag = clean.archive && subtype != "Popup" && flags != printed;
+                        if (clean.scripts && has_actions) || reflag {
                             // A copy without its scripts, under the number everything that
                             // refers to it will use.
                             if let Some(num) = w.claim(doc, r) {
                                 let data = annot.data();
                                 let mut body = b"<<".to_vec();
                                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
-                                    if key == b"AA" || (key == b"A" && script) {
+                                    if (clean.scripts && (key == b"AA" || (key == b"A" && script)))
+                                        || (reflag && key == b"F")
+                                    {
                                         continue;
                                     }
                                     body.push(b'/');
@@ -715,6 +783,9 @@ pub(crate) fn rebuild(
                                     let value = data.get(value).ok_or(SaveError::Damaged)?;
                                     body.extend(copy_syntax(&mut w, sources, doc, r, value)?);
                                     body.push(b'\n');
+                                }
+                                if reflag {
+                                    body.extend_from_slice(format!("/F {printed}\n").as_bytes());
                                 }
                                 body.extend_from_slice(b">>");
                                 w.set(num, body);
@@ -867,24 +938,42 @@ pub(crate) fn rebuild(
                         format!("<< {dict}/Length {} >>\nstream\n{data}\nendstream", data.len()).into_bytes()
                     };
                     let mut forms = Vec::new();
-                    let draw = |w: &mut Writer,
-                                forms: &mut Vec<(String, u32)>,
-                                drawings: &[super::marks::Drawing]| {
+                    let mut draw = |w: &mut Writer,
+                                    forms: &mut Vec<(String, u32)>,
+                                    drawings: &[super::marks::Drawing]| {
                         let mut ops = String::new();
                         for drawing in drawings {
                             let resources = match drawing.picture() {
                                 Some(image) => {
-                                    let mask = image.has_mask().then(|| w.alloc());
-                                    let (body, mask_body) =
-                                        image.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
-                                    let num = w.alloc();
-                                    w.set(num, body);
-                                    if let (Some(m), Some(b)) = (mask, mask_body) {
-                                        w.set(m, b);
+                                    // A picture on many pages, such as a watermark, is written once.
+                                    let num = match pictures_written.get(&image.key()) {
+                                        Some(&num) => num,
+                                        None => {
+                                            let mask = image.has_mask().then(|| w.alloc());
+                                            let (body, mask_body) =
+                                                image.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
+                                            let num = w.alloc();
+                                            w.set(num, body);
+                                            if let (Some(m), Some(b)) = (mask, mask_body) {
+                                                w.set(m, b);
+                                            }
+                                            pictures_written.insert(image.key(), num);
+                                            num
+                                        }
+                                    };
+                                    match drawing.opacity() {
+                                        Some(a) => format!(
+                                            "<< /XObject << /PaIm {num} 0 R >> /ExtGState << /PaGS << /Type \
+                                             /ExtGState /CA {a} /ca {a} >> >> >>",
+                                            a = n(a)
+                                        ),
+                                        None => format!("<< /XObject << /PaIm {num} 0 R >> >>"),
                                     }
-                                    format!("<< /XObject << /PaIm {num} 0 R >> >>")
                                 }
-                                None => drawing.resources(),
+                                None => match drawing.font().and_then(|r| w.map(doc, r)) {
+                                    Some(num) => format!("<< /Font << /PaFo {num} 0 R >> >>"),
+                                    None => drawing.resources(),
+                                },
                             };
                             let form = w.alloc();
                             w.set(
@@ -920,6 +1009,7 @@ pub(crate) fn rebuild(
                             super::redact::IDENTITY,
                             0,
                             &mut counter,
+                            extra.text_only,
                         )?;
                         let num = w.alloc();
                         w.set(num, flate_stream("", &content));
@@ -1102,7 +1192,8 @@ pub(crate) fn rebuild(
             }
         }
         let value = data.get(value.clone()).ok_or(SaveError::Damaged)?;
-        if (clean.metadata && key == b"Metadata")
+        if ((clean.metadata || clean.archive) && key == b"Metadata")
+            || (clean.archive && key == b"OutputIntents")
             || (clean.scripts && key == b"AA")
             // An open action that is a destination only turns to a page; any other runs an action.
             || (clean.scripts && key == b"OpenAction" && !value.trim_ascii_start().starts_with(b"["))
@@ -1135,20 +1226,81 @@ pub(crate) fn rebuild(
             .as_bytes(),
         );
     }
+    if clean.archive {
+        let meta = first.pdf.metadata();
+        let text = |v: &Option<Vec<u8>>| v.as_deref().map(crate::document::decode_text_string);
+        let xmp = super::pdfa::xmp(text(&meta.title).as_deref(), text(&meta.author).as_deref());
+        let meta_num = w.alloc();
+        let mut stream = format!(
+            "<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n",
+            xmp.len()
+        )
+        .into_bytes();
+        stream.extend(xmp);
+        stream.extend_from_slice(b"\nendstream");
+        w.set(meta_num, stream);
+        let profile = super::pdfa::srgb_profile();
+        let profile_num = w.alloc();
+        w.set(profile_num, flate_stream("/N 3", &profile));
+        body.extend_from_slice(
+            format!(
+                "/Metadata {meta_num} 0 R\n/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 \
+                 /OutputConditionIdentifier (sRGB IEC61966-2.1) /Info (sRGB IEC61966-2.1) \
+                 /DestOutputProfile {profile_num} 0 R >>]\n"
+            )
+            .as_bytes(),
+        );
+    }
     body.extend_from_slice(format!("/Pages {pages_num} 0 R\n>>").as_bytes());
     w.set(catalog_num, body);
     let info_num = info.and_then(|r| w.map(0, r));
 
     while let Some((doc, r, num)) = w.queue.pop_front() {
-        let body = copy_object(&mut w, sources, doc, r)?;
+        let mut body = copy_object(&mut w, sources, doc, r)?;
+        if clean.scripts
+            && let Some(field) = sources
+                .get(doc)
+                .and_then(|s| s.pdf.xref().get::<Dict<'_>>(id(r)))
+                .filter(is_field)
+        {
+            body = without_actions(&body, runs_script(&field)).unwrap_or(body);
+        }
         w.set(num, body);
     }
+    if !scrub.is_empty() {
+        retitle_bookmarks(&mut w, first.pdf, &scrub);
+    }
 
-    if compact {
+    if let Some(compact) = compact {
+        if let Some(dpi) = compact.pictures {
+            let map = w.maps.first().ok_or(SaveError::Damaged)?;
+            for (r, drawn) in drawn_pictures(first.pdf) {
+                let (Some(Some(num)), Some(stream)) =
+                    (map.get(&r), first.pdf.xref().get::<Stream<'_>>(id(r)))
+                else {
+                    continue;
+                };
+                let Some(slot) = w.objects.get_mut(*num as usize - 1) else {
+                    continue;
+                };
+                if let Some(smaller) = slot
+                    .as_deref()
+                    .and_then(|body| super::pack::shrink_picture(&stream, body, drawn, dpi))
+                {
+                    *slot = Some(smaller);
+                }
+            }
+        }
         super::pack::merge_duplicates(&mut w.objects, &[catalog_num, pages_num]);
         super::pack::compress_streams(&mut w.objects);
     }
-    write_file(w.objects, catalog_num, info_num, encryption.as_ref(), compact)
+    write_file(
+        w.objects,
+        catalog_num,
+        info_num,
+        encryption.as_ref(),
+        compact.is_some(),
+    )
 }
 
 /// A resources dictionary written in `owner` or referred to from it.
@@ -1210,13 +1362,250 @@ fn form_with_fields(
     Ok(body)
 }
 
+/// The largest size, in points, each picture is drawn at on `pdf`'s pages, by object: drawn
+/// by the page itself or inside the forms it draws. Pictures drawn only by comments, patterns
+/// or text aren't included.
+fn drawn_pictures(pdf: &Pdf) -> HashMap<ObjRef, (f64, f64)> {
+    let mut out = HashMap::new();
+    let mut budget = 10_000usize;
+    let (pages, _) = page_tree(pdf);
+    for (r, dict) in &pages {
+        let res = inherited(pdf, *r, dict, b"Resources").and_then(|(owner, raw)| resolved(pdf, owner, raw));
+        drawn_in(
+            &page_content(dict),
+            res,
+            super::redact::IDENTITY,
+            0,
+            &mut budget,
+            &mut out,
+        );
+    }
+    out
+}
+
+/// Adds the pictures `content` draws with `ctm` to `out`, looking into forms up to a few
+/// levels deep, and at most `budget` forms in all.
+fn drawn_in(
+    content: &[u8],
+    res: Option<Dict<'_>>,
+    ctm: super::redact::Matrix,
+    depth: usize,
+    budget: &mut usize,
+    out: &mut HashMap<ObjRef, (f64, f64)>,
+) {
+    use super::redact::{Lookup as _, XObject, concat};
+    let mut lookup = super::redact::Resources { dict: res.clone() };
+    for placed in super::redact::placed_images(content, &mut lookup) {
+        let Some((_, Some(r))) = lookup.stream(&placed.name) else {
+            continue;
+        };
+        let m = concat(placed.ctm, ctm);
+        let size = out.entry(r).or_insert((0.0, 0.0));
+        size.0 = size.0.max(m[0].hypot(m[1]));
+        size.1 = size.1.max(m[2].hypot(m[3]));
+    }
+    if depth >= 4 {
+        return;
+    }
+    for placed in super::redact::placed_forms(content, &mut lookup) {
+        let (Some((stream, _)), Some(XObject::Form { matrix, .. })) =
+            (lookup.stream(&placed.name), lookup.xobject(&placed.name))
+        else {
+            continue;
+        };
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let Ok(inner) = stream.decoded() else { continue };
+        // Old files leave a form's resources out, meaning the page's.
+        let inner_res = stream
+            .dict()
+            .get::<Dict<'_>>(b"Resources")
+            .or_else(|| res.clone());
+        let at = concat(matrix, concat(placed.ctm, ctm));
+        drawn_in(&inner, inner_res, at, depth + 1, budget, out);
+    }
+}
+
+/// New text written in the font a line was in, where it was.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SameFont {
+    /// The font's object.
+    pub font: ObjRef,
+    /// The new text, in the font's character codes.
+    pub bytes: Vec<u8>,
+    /// The size and sideways stretch (100 is none) on the page as shown.
+    pub size: f64,
+    pub stretch: f64,
+    /// Where the first glyph's origin was, from the bottom-left corner of the page as shown.
+    pub origin: (f64, f64),
+}
+
+/// How to write `text` in place of the line in `area` (a page text box) on page `index`, in
+/// the font most of that line is in: when the line is upright and every character of `text`
+/// is one the font can show. Fonts embedded as subsets can only show the characters the page
+/// already uses them for.
+pub(crate) fn same_font(pdf: &Pdf, index: usize, area: [f64; 4], text: &str) -> Option<SameFont> {
+    use super::redact::{IDENTITY, apply, concat, invert};
+    let (content, res, to_shown, height) = shown_page(pdf, index)?;
+    let to_user = invert(to_shown)?;
+    let [x0, top, x1, bottom] = area;
+    let (ux0, uy0) = apply(to_user, x0, height - top);
+    let (ux1, uy1) = apply(to_user, x1, height - bottom);
+    let areas = [[ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)]];
+    let mut lookup = super::redact::Resources { dict: res.clone() };
+    let mut names = || String::from("PannaUnused");
+    let found = super::redact::redact(&content, &mut lookup, &areas, IDENTITY, true, &mut names)?;
+    // The font with the most glyphs in the line, and where its first one was.
+    let mut counts: HashMap<&[u8], usize> = HashMap::new();
+    for taken in &found.taken {
+        *counts.entry(taken.font.as_slice()).or_default() += taken.glyphs;
+    }
+    let (name, _) = counts.into_iter().max_by_key(|(_, n)| *n)?;
+    let first = found.taken.iter().find(|t| t.font == name)?;
+    let m = concat(first.at, to_shown);
+    let size = m[3];
+    let upright = m[0] > 0.0 && size > 0.0 && m[1].abs() < 0.01 * size && m[2].abs() < 0.01 * size;
+    if !upright {
+        return None;
+    }
+    let fonts = res?.get::<Dict<'_>>(b"Font")?;
+    let font = fonts.get::<Dict<'_>>(name)?;
+    let r = fonts.get_ref(name).and_then(obj_ref_of)?;
+    let used = found.used.get(name).cloned().unwrap_or_default();
+    Some(SameFont {
+        font: r,
+        bytes: encode(&font, text, &used)?,
+        size,
+        stretch: 100.0 * m[0] / size,
+        origin: (m[4], m[5]),
+    })
+}
+
+/// `text` in the character codes of `font`, when it can show every character: by its
+/// ToUnicode map, or by WinAnsi or standard encoding for simple fonts without one. Subsets
+/// may only use `used` codes, the ones the page shows with them.
+fn encode(font: &Dict<'_>, text: &str, used: &std::collections::HashSet<u32>) -> Option<Vec<u8>> {
+    use hayro::hayro_interpret::hayro_cmap::{BfString, CMap};
+    use hayro::hayro_syntax::object::{Array, Name};
+    let info = super::redact::font_from(font)?;
+    let two = match info.codes {
+        super::redact::Codes::One => false,
+        super::redact::Codes::Two => true,
+        super::redact::Codes::Unknown => return None,
+    };
+    let base = font
+        .get::<Name<'_>>(b"BaseFont")
+        .map(|n| n.as_str().to_owned())
+        .unwrap_or_default();
+    let subset = base.split_once('+').is_some_and(|(tag, _)| tag.len() == 6);
+    let descriptor = font.get::<Dict<'_>>(b"FontDescriptor").or_else(|| {
+        font.get::<Array<'_>>(b"DescendantFonts")?
+            .iter::<Dict<'_>>()
+            .next()?
+            .get::<Dict<'_>>(b"FontDescriptor")
+    });
+    let embedded = descriptor.as_ref().is_some_and(|d| {
+        [&b"FontFile"[..], b"FontFile2", b"FontFile3"]
+            .iter()
+            .any(|k| d.contains_key(k))
+    });
+    let allowed = |code: u32| (!subset && !two) || used.contains(&code);
+    let mut map: HashMap<char, u32> = HashMap::new();
+    if let Some(unicode) = font.get::<Stream<'_>>(b"ToUnicode") {
+        let data = unicode.decoded().ok()?;
+        let cmap = CMap::parse(&data, hayro::hayro_interpret::hayro_cmap::load_embedded)?;
+        let codes: Vec<u32> = if two || subset {
+            used.iter().copied().collect()
+        } else {
+            (0..256).collect()
+        };
+        for code in codes {
+            if let Some(BfString::Char(c)) = cmap.lookup_bf_string(code) {
+                map.entry(c).or_insert(code);
+            }
+        }
+    } else if !two {
+        let encoding = font.get::<Name<'_>>(b"Encoding").map(|n| n.as_str().to_owned());
+        let win_ansi = match encoding.as_deref() {
+            Some("WinAnsiEncoding") => true,
+            // Standard encoding matches WinAnsi for letters, digits and plain punctuation.
+            None | Some("StandardEncoding") => false,
+            _ => return None,
+        };
+        for c in text.chars() {
+            let code = if win_ansi {
+                match super::annot::win_ansi(&c.to_string()).as_slice() {
+                    [b] if *b != b'?' || c == '?' => u32::from(*b),
+                    _ => return None,
+                }
+            } else if c.is_ascii_alphanumeric() || " .,:;-()!?/&%".contains(c) {
+                u32::from(c as u8)
+            } else {
+                return None;
+            };
+            map.insert(c, code);
+        }
+    } else {
+        return None;
+    }
+    let mut out = Vec::new();
+    for c in text.chars() {
+        let code = *map.get(&c)?;
+        // Fonts that aren't embedded are drawn by the viewer's own, which have every glyph.
+        if !allowed(code) || (embedded && info.width(code).is_none()) {
+            return None;
+        }
+        if two {
+            out.extend_from_slice(&(code as u16).to_be_bytes());
+        } else {
+            out.push(u8::try_from(code).ok()?);
+        }
+    }
+    Some(out)
+}
+
 /// The pictures page `index` draws itself, in the order they're drawn, each as the box it
 /// covers in the same space as page text.
 pub(crate) fn page_pictures(pdf: &Pdf, index: usize) -> Vec<crate::TextBox> {
-    let (pages, _) = page_tree(pdf);
-    let Some((r, dict)) = pages.get(index) else {
+    let Some((content, res, to_shown, height)) = shown_page(pdf, index) else {
         return Vec::new();
     };
+    let mut lookup = super::redact::Resources { dict: res };
+    super::redact::placed_images(&content, &mut lookup)
+        .iter()
+        .map(|p| shown_box(to_shown, height, p.bounds()))
+        .collect()
+}
+
+/// The rectangles and straight lines page `index` draws, as shown (see
+/// [`super::redact::drawn_shapes`]); a line's box runs from end to end.
+pub(crate) fn page_shapes(pdf: &Pdf, index: usize) -> (Vec<crate::TextBox>, Vec<crate::TextBox>) {
+    let Some((content, _, to_shown, height)) = shown_page(pdf, index) else {
+        return (Vec::new(), Vec::new());
+    };
+    let (rects, lines) = super::redact::drawn_shapes(&content);
+    (
+        rects
+            .into_iter()
+            .map(|r| shown_box(to_shown, height, r))
+            .collect(),
+        lines
+            .into_iter()
+            .map(|l| shown_box(to_shown, height, l))
+            .collect(),
+    )
+}
+
+/// Page `index`'s content and resources, with the matrix from its user space to shown space
+/// (bottom up) and its shown height.
+fn shown_page<'a>(
+    pdf: &'a Pdf,
+    index: usize,
+) -> Option<(Vec<u8>, Option<Dict<'a>>, super::redact::Matrix, f64)> {
+    let (pages, _) = page_tree(pdf);
+    let (r, dict) = pages.get(index)?;
     let rotate = inherited(pdf, *r, dict, b"Rotate")
         .and_then(|(_, v)| std::str::from_utf8(v).ok()?.trim().parse::<f64>().ok())
         .map_or(0, |v| (v as i64).rem_euclid(360));
@@ -1224,30 +1613,24 @@ pub(crate) fn page_pictures(pdf: &Pdf, index: usize) -> Vec<crate::TextBox> {
     let media = boxed(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
     let shown = cropped(media, boxed(b"CropBox"), rotate, [0.0; 4]).unwrap_or(media);
     let res = inherited(pdf, *r, dict, b"Resources").and_then(|(owner, raw)| resolved(pdf, owner, raw));
-    let content = page_content(dict);
-    let mut lookup = super::redact::Resources { dict: res };
     let (matrix, _, height) = shown_space(shown, rotate);
-    let Some(inv) = super::redact::invert(matrix) else {
-        return Vec::new();
-    };
-    super::redact::placed_images(&content, &mut lookup)
-        .iter()
-        .map(|p| {
-            let [x0, y0, x1, y1] = p.bounds();
-            let a = super::redact::apply(inv, x0, y0);
-            let b = super::redact::apply(inv, x1, y1);
-            crate::TextBox {
-                x0: a.0.min(b.0) as f32,
-                y0: (height - a.1.max(b.1)) as f32,
-                x1: a.0.max(b.0) as f32,
-                y1: (height - a.1.min(b.1)) as f32,
-            }
-        })
-        .collect()
+    let to_shown = super::redact::invert(matrix)?;
+    Some((page_content(dict), res, to_shown, height))
+}
+
+fn shown_box(to_shown: super::redact::Matrix, height: f64, [x0, y0, x1, y1]: [f64; 4]) -> crate::TextBox {
+    let a = super::redact::apply(to_shown, x0, y0);
+    let b = super::redact::apply(to_shown, x1, y1);
+    crate::TextBox {
+        x0: a.0.min(b.0) as f32,
+        y0: (height - a.1.max(b.1)) as f32,
+        x1: a.0.max(b.0) as f32,
+        y1: (height - a.1.min(b.1)) as f32,
+    }
 }
 
 /// A page's content, all its streams decoded and joined.
-fn page_content(page: &Dict<'_>) -> Vec<u8> {
+pub(crate) fn page_content(page: &Dict<'_>) -> Vec<u8> {
     use hayro::hayro_syntax::object::{Array, Stream};
     let mut out = Vec::new();
     if let Some(stream) = page.get::<Stream<'_>>(b"Contents") {
@@ -1276,9 +1659,49 @@ fn flate_stream(dict: &str, data: &[u8]) -> Vec<u8> {
 /// The annotations on a page that touch one of `areas` (in the page's own space), with their
 /// pop-ups and replies. Fails on a form field, whose value lives on in the form.
 fn redacted_annotations(
-    pdf: &Pdf,
     page: &Dict<'_>,
     areas: &[[f64; 4]],
+) -> Result<std::collections::HashSet<ObjRef>, SaveError> {
+    use hayro::hayro_syntax::object::Array;
+    annotations_where(page, |annot, subtype| {
+        let Some(rect) = annot.get::<Array<'_>>(b"Rect") else {
+            return Ok(false);
+        };
+        let v: Vec<f64> = rect.iter::<f64>().take(4).collect();
+        let [x0, y0, x1, y1] = v[..] else { return Ok(false) };
+        let b = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        let hit = areas
+            .iter()
+            .any(|a| b[0] < a[2] && a[0] < b[2] && b[1] < a[3] && a[1] < b[3]);
+        if hit && subtype == Some("Widget") {
+            return Err(SaveError::RedactsFormField);
+        }
+        Ok(hit)
+    })
+}
+
+/// The comments on a page whose text mentions one of `phrases`, with their pop-ups and
+/// replies. Links and form fields aren't comments, and stay.
+fn mentioning_annotations(page: &Dict<'_>, phrases: &[String]) -> std::collections::HashSet<ObjRef> {
+    use hayro::hayro_syntax::object::String as PdfString;
+    annotations_where(page, |annot, subtype| {
+        if matches!(subtype, Some("Widget" | "Link")) {
+            return Ok(false);
+        }
+        Ok([b"Contents".as_slice(), b"Subj", b"RC"].iter().any(|key| {
+            annot.get::<PdfString<'_>>(key).is_some_and(|s| {
+                super::scrub::mentions(&crate::document::decode_text_string(s.as_bytes()), phrases)
+            })
+        }))
+    })
+    .unwrap_or_default()
+}
+
+/// The annotations on a page that `hit` picks (given each one and its subtype), with their
+/// pop-ups and replies.
+fn annotations_where(
+    page: &Dict<'_>,
+    hit: impl Fn(&Dict<'_>, Option<&str>) -> Result<bool, SaveError>,
 ) -> Result<std::collections::HashSet<ObjRef>, SaveError> {
     use hayro::hayro_syntax::object::{Array, Name};
     let mut gone = std::collections::HashSet::new();
@@ -1291,23 +1714,11 @@ fn redacted_annotations(
         .filter_map(|a| Some((a.obj_id().and_then(obj_ref)?, a)))
         .collect();
     for (r, annot) in &list {
-        let Some(rect) = annot.get::<Array<'_>>(b"Rect") else {
+        let subtype = annot.get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_owned());
+        if subtype.as_deref() == Some("Popup") {
             continue;
-        };
-        let v: Vec<f64> = rect.iter::<f64>().take(4).collect();
-        let [x0, y0, x1, y1] = v[..] else { continue };
-        let b = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
-        if areas
-            .iter()
-            .any(|a| b[0] < a[2] && a[0] < b[2] && b[1] < a[3] && a[1] < b[3])
-        {
-            let subtype = annot.get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_owned());
-            if subtype.as_deref() == Some("Widget") {
-                return Err(SaveError::RedactsFormField);
-            }
-            if subtype.as_deref() == Some("Popup") {
-                continue;
-            }
+        }
+        if hit(annot, subtype.as_deref())? {
             gone.insert(*r);
         }
     }
@@ -1327,7 +1738,6 @@ fn redacted_annotations(
             break;
         }
     }
-    let _ = pdf;
     Ok(gone)
 }
 
@@ -1353,14 +1763,20 @@ fn redact_into<'a>(
     ctm: super::redact::Matrix,
     depth: usize,
     counter: &mut u32,
+    text_only: bool,
 ) -> Result<(Vec<u8>, FormOverrides), SaveError> {
     let mut lookup = super::redact::Resources { dict: res.clone() };
     let mut names = || {
         *counter += 1;
         format!("PannaRedact{counter}")
     };
-    // Content Panna can't follow is dropped rather than kept unredacted.
-    let redacted = super::redact::redact(content, &mut lookup, areas, ctm, &mut names).unwrap_or_default();
+    // Content Panna can't follow is dropped rather than kept unredacted; when only editing
+    // text, it's kept as it was.
+    let redacted = super::redact::redact(content, &mut lookup, areas, ctm, text_only, &mut names)
+        .unwrap_or_else(|| super::redact::Redacted {
+            content: if text_only { content.to_vec() } else { Vec::new() },
+            ..super::redact::Redacted::default()
+        });
     let mut overrides: Vec<(String, u32)> = Vec::new();
     for image in &redacted.images {
         overrides.push((String::from_utf8_lossy(image).into_owned(), 0));
@@ -1395,6 +1811,7 @@ fn redact_into<'a>(
                 form.ctm,
                 depth + 1,
                 counter,
+                text_only,
             )?
         };
         let data = dict.data();
@@ -1492,6 +1909,12 @@ fn write_file(
             "/Encrypt {num} 0 R /ID {} ",
             String::from_utf8_lossy(&e.id)
         );
+    } else {
+        // An identifier made from the content, as PDF/A and many tools want one.
+        use md5::{Digest, Md5};
+        let digest = Md5::digest(&out);
+        let hex: String = digest.iter().map(|b| format!("{b:02X}")).collect();
+        let _ = write!(trailer, "/ID [<{hex}> <{hex}>] ");
     }
     if compact {
         // The cross-reference stream is the last object, and lists itself.
@@ -1540,6 +1963,48 @@ fn write_file(
     );
     out.extend_from_slice(xref.as_bytes());
     Ok(out)
+}
+
+/// Blacks out `phrases` in the titles of the copied bookmarks of the first source.
+fn retitle_bookmarks(w: &mut Writer, pdf: &Pdf, phrases: &[String]) {
+    for (oid, title) in crate::outline::titled(pdf) {
+        let Some(title) = super::scrub::black_out(&title, phrases) else {
+            continue;
+        };
+        let Some(Some(num)) = obj_ref(oid).and_then(|r| w.maps.first()?.get(&r).copied()) else {
+            continue;
+        };
+        let Some(slot) = w.objects.get_mut(num as usize - 1) else {
+            continue;
+        };
+        if let Some(body) = slot
+            .as_deref()
+            .and_then(|b| with_entry(b, b"Title", &super::annot::text_string(&title)))
+        {
+            *slot = Some(body);
+        }
+    }
+}
+
+/// The dictionary `body` with `key` set to `value`.
+fn with_entry(body: &[u8], key: &[u8], value: &str) -> Option<Vec<u8>> {
+    let mut out = b"<<".to_vec();
+    for (k, v) in lex::dict_entries(body)? {
+        if k == key {
+            continue;
+        }
+        out.push(b'/');
+        out.extend_from_slice(k);
+        out.push(b' ');
+        out.extend_from_slice(body.get(v)?);
+        out.push(b'\n');
+    }
+    out.push(b'/');
+    out.extend_from_slice(key);
+    out.push(b' ');
+    out.extend_from_slice(value.as_bytes());
+    out.extend_from_slice(b"\n>>");
+    Some(out)
 }
 
 #[cfg(test)]

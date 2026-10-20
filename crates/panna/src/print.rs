@@ -59,13 +59,11 @@ async fn on_thread(work: impl FnOnce() -> Result<(), String> + Send + 'static) -
 /// The system print dialog from `panna-print`, drawing pages from the print copy itself.
 #[cfg(any(windows, target_os = "macos"))]
 fn native(pdf: &[u8], title: &str, current: usize, owner: Option<isize>) -> Result<(), String> {
-    use panna_core::{Document, Limits};
+    use panna_core::{Isolated, Limits};
     use panna_print::{Bitmap, Job, Page};
 
-    let doc = Document::from_bytes(pdf.to_vec(), None, Limits::default())
-        .map_err(|e| format!("The pages couldn't be prepared for printing: {e}"))?;
-    let info = doc
-        .info()
+    // Drawn in the locked-down process, like the pages on screen.
+    let (mut doc, info) = Isolated::open(pdf.to_vec(), None, Limits::default())
         .map_err(|e| format!("The pages couldn't be prepared for printing: {e}"))?;
     let pages: Vec<Page> = info
         .pages
@@ -75,9 +73,8 @@ fn native(pdf: &[u8], title: &str, current: usize, owner: Option<isize>) -> Resu
             height: p.height,
         })
         .collect();
-    let cache = doc.new_cache();
     let mut render = |index: usize, scale: f32| {
-        doc.render_page(&cache, index, scale).ok().map(|page| Bitmap {
+        doc.render(index, scale).ok().map(|page| Bitmap {
             width: page.width,
             height: page.height,
             rgba: page.rgba,

@@ -3,26 +3,32 @@
 
 use std::path::PathBuf;
 
-use iced::Point;
-
 use crate::colors::PageColors;
 use crate::layout::Spread;
+use crate::measure::Unit;
+use crate::preferences::{Appearance, OpenZoom};
 use crate::sidebar::{Side, Tab};
-use crate::toolbar::Dock;
+use crate::toolbar;
 
 /// Settings files bigger than this are ignored rather than parsed.
 const MAX_BYTES: u64 = 64 * 1024;
 const MAX_RECENT: usize = 10;
+/// Longest name kept for comments.
+const MAX_AUTHOR: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
-    pub toolbar_dock: Dock,
-    pub toolbar_pos: Point,
+    pub bars: toolbar::Layout,
     pub sidebar_open: bool,
     pub sidebar_side: Side,
     pub sidebar_tab: Tab,
     pub spread: Spread,
     pub colors: PageColors,
+    /// The name put on comments; empty for the account's name.
+    pub author: String,
+    pub appearance: Appearance,
+    pub open_zoom: OpenZoom,
+    pub unit: Unit,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -30,13 +36,16 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            toolbar_dock: Dock::Top,
-            toolbar_pos: Point::new(40.0, 60.0),
+            bars: toolbar::Layout::default(),
             sidebar_open: false,
             sidebar_side: Side::Left,
             sidebar_tab: Tab::Thumbnails,
             spread: Spread::Single,
             colors: PageColors::Normal,
+            author: String::new(),
+            appearance: Appearance::System,
+            open_zoom: OpenZoom::ActualSize,
+            unit: Unit::default(),
             recent: Vec::new(),
         }
     }
@@ -86,15 +95,22 @@ impl Settings {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
-            match key.trim() {
-                "toolbar.dock" => out.toolbar_dock = Dock::parse(value.trim()).unwrap_or(out.toolbar_dock),
-                "toolbar.x" => out.toolbar_pos.x = finite(value).unwrap_or(out.toolbar_pos.x),
-                "toolbar.y" => out.toolbar_pos.y = finite(value).unwrap_or(out.toolbar_pos.y),
+            let key = key.trim();
+            if out.bars.parse_line(key, value, finite) {
+                continue;
+            }
+            match key {
                 "sidebar.open" => out.sidebar_open = value.trim() == "true",
                 "sidebar.side" => out.sidebar_side = Side::parse(value.trim()).unwrap_or(out.sidebar_side),
                 "sidebar.tab" => out.sidebar_tab = Tab::parse(value.trim()).unwrap_or(out.sidebar_tab),
                 "view.spread" => out.spread = Spread::parse(value.trim()).unwrap_or(out.spread),
                 "view.colors" => out.colors = PageColors::parse(value.trim()).unwrap_or(out.colors),
+                "view.appearance" => {
+                    out.appearance = Appearance::parse(value.trim()).unwrap_or(out.appearance);
+                }
+                "view.open_zoom" => out.open_zoom = OpenZoom::parse(value.trim()).unwrap_or(out.open_zoom),
+                "measure.unit" => out.unit = Unit::parse(value.trim()).unwrap_or(out.unit),
+                "comments.author" => out.author = value.trim().chars().take(MAX_AUTHOR).collect(),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
                     out.recent.push(PathBuf::from(value));
@@ -106,17 +122,26 @@ impl Settings {
     }
 
     fn serialize(&self) -> String {
-        let mut out = format!(
-            "toolbar.dock={}\ntoolbar.x={}\ntoolbar.y={}\nsidebar.open={}\nsidebar.side={}\nsidebar.tab={}\nview.spread={}\nview.colors={}\n",
-            self.toolbar_dock.as_str(),
-            self.toolbar_pos.x,
-            self.toolbar_pos.y,
+        let mut out = String::new();
+        self.bars.serialize(&mut out);
+        out.push_str(&format!(
+            "sidebar.open={}\nsidebar.side={}\nsidebar.tab={}\nview.spread={}\nview.colors={}\n",
             self.sidebar_open,
             self.sidebar_side.as_str(),
             self.sidebar_tab.as_str(),
             self.spread.as_str(),
             self.colors.as_str(),
-        );
+        ));
+        out.push_str(&format!(
+            "view.appearance={}\nview.open_zoom={}\nmeasure.unit={}\n",
+            self.appearance.as_str(),
+            self.open_zoom.as_str(),
+            self.unit.as_str()
+        ));
+        // A name with a line break can't be stored in this format.
+        if !self.author.contains(['\n', '\r']) {
+            out.push_str(&format!("comments.author={}\n", self.author));
+        }
         // Paths that aren't UTF-8 or contain line breaks can't be stored in this format.
         for path in &self.recent {
             if let Some(p) = path.to_str().filter(|p| !p.contains(['\n', '\r'])) {
@@ -137,6 +162,11 @@ fn finite(s: &str) -> Option<f32> {
 }
 
 fn file_path() -> Option<PathBuf> {
+    Some(config_dir()?.join("settings.txt"))
+}
+
+/// Panna's folder in the OS config directory.
+pub fn config_dir() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -147,7 +177,7 @@ fn file_path() -> Option<PathBuf> {
             .filter(|p| p.is_absolute())
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     }?;
-    Some(base.join("Panna").join("settings.txt"))
+    Some(base.join("Panna"))
 }
 
 #[cfg(test)]
@@ -157,13 +187,21 @@ mod tests {
     #[test]
     fn round_trips() {
         let s = Settings {
-            toolbar_dock: Dock::Floating,
-            toolbar_pos: Point::new(120.5, 33.0),
+            bars: {
+                let mut bars = toolbar::Layout::default();
+                bars.bottom = toolbar::Align::Left;
+                bars.locked = true;
+                bars
+            },
             sidebar_open: true,
             sidebar_side: Side::Right,
             sidebar_tab: Tab::Bookmarks,
             spread: Spread::TwoCover,
             colors: PageColors::Sepia,
+            author: "Asha Rao".into(),
+            appearance: Appearance::Dark,
+            open_zoom: OpenZoom::FitWidth,
+            unit: Unit::Inches,
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
@@ -171,8 +209,9 @@ mod tests {
 
     #[test]
     fn ignores_garbage() {
-        let s =
-            Settings::parse("toolbar.dock=sideways\ntoolbar.x=NaN\ntoolbar.y=1e30\nno equals\n=\nrecent=\n");
+        let s = Settings::parse(
+            "bar.file.dock=sideways\nbar.file.x=NaN\nbar.page.y=1e30\nno equals\n=\nrecent=\n",
+        );
         assert_eq!(s, Settings::default());
     }
 
@@ -191,9 +230,9 @@ mod tests {
     #[test]
     fn line_breaks_in_paths_are_not_saved() {
         let s = Settings {
-            recent: vec![PathBuf::from("evil\ntoolbar.dock=left")],
+            recent: vec![PathBuf::from("evil\nbars.locked=true")],
             ..Settings::default()
         };
-        assert_eq!(Settings::parse(&s.serialize()).toolbar_dock, Dock::Top);
+        assert!(!Settings::parse(&s.serialize()).bars.locked);
     }
 }

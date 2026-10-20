@@ -1,9 +1,9 @@
 //! Redacting: marking areas of pages, then taking everything in them out of the file for good
 //! and covering them in black, as a page change that can be undone until the file is closed.
 
-use iced::widget::{button, column, container, pin, row, space, text};
+use iced::widget::{button, checkbox, column, container, pin, row, space, text};
 use iced::{Center, Element, Theme};
-use panna_core::TextBox;
+use panna_core::{Leftovers, TextBox};
 
 use crate::Message;
 use crate::icons::{self, Icon};
@@ -25,6 +25,10 @@ pub enum Event {
     Apply,
     Confirm,
     Cancel,
+    /// What else in the file mentions the marked text, for the question.
+    Found(Leftovers),
+    /// Whether to take out the bookmarks and comments that mention it too.
+    Scrub(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,6 +61,10 @@ pub struct Redactor {
     marks: Vec<Mark>,
     drag: Option<Drag>,
     confirming: bool,
+    /// Bookmarks and comments that mention the marked text, once looked for.
+    leftovers: Option<Leftovers>,
+    /// Take those out too (the default).
+    keep_mentions: bool,
 }
 
 /// What the main view does next.
@@ -64,8 +72,11 @@ pub enum Outcome {
     Nothing,
     /// Find's matches are wanted as marks.
     MarkResults,
-    /// Redact these areas, page by page.
-    Apply(Vec<(usize, Vec<TextBox>)>),
+    /// Look for the text in these areas elsewhere in the file, for the question.
+    LookFor(Vec<(usize, Vec<TextBox>)>),
+    /// Redact these areas, page by page, and the comments and bookmark titles that mention
+    /// these phrases.
+    Apply(Vec<(usize, Vec<TextBox>)>, Vec<String>),
 }
 
 impl Redactor {
@@ -97,15 +108,32 @@ impl Redactor {
                 self.marks.pop();
             }
             Event::Clear => self.marks.clear(),
-            Event::Apply => self.confirming = !self.marks.is_empty(),
+            Event::Apply => {
+                self.confirming = !self.marks.is_empty();
+                self.leftovers = None;
+                self.keep_mentions = false;
+                if self.confirming {
+                    return Outcome::LookFor(self.areas());
+                }
+            }
             Event::Cancel => self.cancel(),
+            Event::Found(leftovers) => {
+                if self.confirming {
+                    self.leftovers = Some(leftovers);
+                }
+            }
+            Event::Scrub(on) => self.keep_mentions = !on,
             Event::Confirm => {
                 if !self.confirming {
                     return Outcome::Nothing;
                 }
                 // The marks stay until the pages change, in case redacting fails.
                 self.confirming = false;
-                return Outcome::Apply(self.areas());
+                let scrub = match self.leftovers.take() {
+                    Some(l) if !self.keep_mentions && l.bookmarks + l.comments > 0 => l.phrases,
+                    _ => Vec::new(),
+                };
+                return Outcome::Apply(self.areas(), scrub);
             }
         }
         Outcome::Nothing
@@ -259,6 +287,31 @@ impl Redactor {
             (m, 1) => format!("the {m} marked areas"),
             (m, p) => format!("the {m} marked areas on {p} pages"),
         };
+        let elsewhere = self.leftovers.as_ref().and_then(|l| {
+            let count = |n: usize, one: &str, many: &str| match n {
+                0 => None,
+                1 => Some(format!("1 {one}")),
+                n => Some(format!("{n} {many}")),
+            };
+            let found: Vec<String> = [
+                count(l.bookmarks, "bookmark", "bookmarks"),
+                count(l.comments, "comment", "comments"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            (!found.is_empty()).then(|| {
+                checkbox(!self.keep_mentions)
+                    .label(format!(
+                        "Also remove the marked text from {} elsewhere in the file \
+                         (comments that mention it are deleted)",
+                        found.join(" and ")
+                    ))
+                    .on_toggle(|on| Message::Redact(Event::Scrub(on)))
+                    .size(16)
+                    .text_size(13)
+            })
+        });
         let body = column![
             text("Remove marked content for good?").size(16),
             text(format!(
@@ -266,9 +319,14 @@ impl Redactor {
                  in black. Comments over them go too."
             ))
             .size(13),
+        ]
+        .push(elsewhere)
+        .push(
             text("You can undo this until you close the file. Once it's saved, what was removed can't be recovered from the saved file.")
                 .size(12)
                 .style(text::secondary),
+        )
+        .push(
             row![
                 space::horizontal(),
                 button("Cancel")
@@ -277,7 +335,7 @@ impl Redactor {
                 button("Remove").style(button::danger).on_press(ev(Event::Confirm)),
             ]
             .spacing(8),
-        ]
+        )
         .spacing(10);
         Some(
             container(container(body).width(380))
@@ -332,16 +390,31 @@ mod tests {
         r.mark(1, [b(5.0), b(5.0)]);
         assert_eq!(r.marks.len(), 3);
         assert!(matches!(r.update(Event::Confirm), Outcome::Nothing));
-        r.update(Event::Apply);
+        assert!(matches!(r.update(Event::Apply), Outcome::LookFor(_)));
         assert!(r.card().is_some());
-        let Outcome::Apply(areas) = r.update(Event::Confirm) else {
+        r.update(Event::Found(Leftovers {
+            phrases: vec!["acme".into()],
+            bookmarks: 1,
+            comments: 0,
+        }));
+        let Outcome::Apply(areas, scrub) = r.update(Event::Confirm) else {
             panic!("not applied");
         };
         assert_eq!(
             areas.iter().map(|(p, a)| (*p, a.len())).collect::<Vec<_>>(),
             [(1, 1), (3, 2)]
         );
+        assert_eq!(scrub, ["acme"]);
         assert!(r.on && !r.busy());
+        // Unticked, the mentions stay.
+        r.update(Event::Apply);
+        r.update(Event::Found(Leftovers {
+            phrases: vec!["acme".into()],
+            bookmarks: 1,
+            comments: 0,
+        }));
+        r.update(Event::Scrub(false));
+        assert!(matches!(r.update(Event::Confirm), Outcome::Apply(_, s) if s.is_empty()));
     }
 
     #[test]

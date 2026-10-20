@@ -15,7 +15,7 @@ const MAX_LINKS: usize = 50_000;
 const MAX_PER_PAGE: usize = 2_000;
 const MAX_URI: usize = 2_048;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LinkTarget {
     /// A page of this document, zero-based.
     Page(usize),
@@ -23,7 +23,7 @@ pub enum LinkTarget {
     Uri(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Link {
     pub page: usize,
     /// Its area, in the same top-left, unrotated-view space as page text.

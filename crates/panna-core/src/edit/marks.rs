@@ -11,7 +11,7 @@ use super::annot::{Color, literal, n, text_width, win_ansi};
 /// Text for the top and bottom of pages. In the text, `{page}` is the page's number,
 /// `{page:6}` the same padded with zeros to six digits (for Bates numbers), `{pages}` the
 /// number of pages marked and `{date}` today's date.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct HeaderFooter {
     /// The header's left, centre and right text, then the footer's.
     pub text: [String; 6],
@@ -92,7 +92,7 @@ pub(crate) struct Lines {
 
 /// Text across the middle of pages, such as DRAFT or CONFIDENTIAL, and a colour for the whole
 /// page behind its content. The text may use the fields headers and footers do.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Watermark {
     pub text: String,
     /// Text size in points; 0 or less fits the text to the page.
@@ -106,6 +106,10 @@ pub struct Watermark {
     pub behind: bool,
     /// A colour filling the page behind its content.
     pub background: Option<Color>,
+    /// A picture to draw instead of text, such as a logo.
+    pub picture: Option<super::picture::StampImage>,
+    /// How wide the picture is, as a share of the page's width.
+    pub picture_scale: f32,
 }
 
 impl Default for Watermark {
@@ -118,6 +122,8 @@ impl Default for Watermark {
             color: Color([0.5, 0.5, 0.5]),
             behind: false,
             background: None,
+            picture: None,
+            picture_scale: 0.5,
         }
     }
 }
@@ -125,7 +131,7 @@ impl Default for Watermark {
 impl Watermark {
     /// Whether there is nothing to draw.
     pub fn is_empty(&self) -> bool {
-        self.text.trim().is_empty() && self.background.is_none()
+        self.text.trim().is_empty() && self.background.is_none() && self.picture.is_none()
     }
 
     /// What to draw on one page, numbered `number` of `total`, on `date`: behind the page's
@@ -143,7 +149,15 @@ impl Watermark {
             opacity: f64::from(self.opacity.clamp(0.0, 1.0)),
             color: self.color,
         };
-        let text = (!self.text.trim().is_empty()).then_some(text);
+        let text = match &self.picture {
+            Some(image) => Some(Drawing::PictureMark {
+                image: image.clone(),
+                scale: f64::from(self.picture_scale.clamp(0.05, 1.0)),
+                angle: f64::from(self.angle),
+                opacity: f64::from(self.opacity.clamp(0.0, 1.0)),
+            }),
+            None => (!self.text.trim().is_empty()).then_some(text),
+        };
         let background = self.background.map(Drawing::Background);
         if self.behind {
             // The colour first, so the text shows on it.
@@ -171,6 +185,13 @@ pub(crate) enum Drawing {
         color: Color,
     },
     Background(Color),
+    /// A picture watermark: `scale` of the page's width, centred and turned by `angle`.
+    PictureMark {
+        image: super::picture::StampImage,
+        scale: f64,
+        angle: f64,
+        opacity: f64,
+    },
     /// Lines of text added to the page, the first line's top-left corner at `x`, `top`
     /// (from the top of the page as shown).
     Text {
@@ -178,6 +199,8 @@ pub(crate) enum Drawing {
         top: f64,
         lines: Vec<String>,
         size: f64,
+        /// From one baseline to the next.
+        leading: f64,
         color: Color,
     },
     /// A picture added to the page, filling `rect` (left, top, right, bottom from the
@@ -192,9 +215,20 @@ pub(crate) enum Drawing {
         rects: Vec<[f64; 4]>,
         color: Color,
     },
+    /// Words that can't be seen, each stretched over its box (left, top, right, bottom from
+    /// the top-left corner of the page as shown): recognised text over a scanned page.
+    Hidden(Words),
+    /// A line of text in a font the page has, named PaFo in the form's resources.
+    SameFont {
+        line: super::rebuild::SameFont,
+        color: Color,
+    },
     /// One, then the other.
     Both(Box<Drawing>, Box<Drawing>),
 }
+
+/// Words and their boxes on a page: left, top, right, bottom from its top-left corner as shown.
+pub(crate) type Words = Vec<(String, [f64; 4])>;
 
 /// The fonts and transparency the drawings use, as they're named in the forms' resources.
 pub(crate) const RESOURCES: &str = "<< /Font << \
@@ -218,17 +252,25 @@ impl Drawing {
         }
     }
 
-    /// The picture it draws, which needs objects of its own.
-    pub(crate) fn picture(&self) -> Option<&super::picture::StampImage> {
+    /// The page's font it writes with, which its resources must name.
+    pub(crate) fn font(&self) -> Option<crate::ObjRef> {
         match self {
-            Drawing::Picture { image, .. } => Some(image),
+            Drawing::SameFont { line, .. } => Some(line.font),
             _ => None,
         }
     }
 
-    fn opacity(&self) -> Option<f64> {
+    /// The picture it draws, which needs objects of its own.
+    pub(crate) fn picture(&self) -> Option<&super::picture::StampImage> {
         match self {
-            Drawing::Watermark { opacity, .. } => Some(*opacity),
+            Drawing::Picture { image, .. } | Drawing::PictureMark { image, .. } => Some(image),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn opacity(&self) -> Option<f64> {
+        match self {
+            Drawing::Watermark { opacity, .. } | Drawing::PictureMark { opacity, .. } => Some(*opacity),
             Drawing::Both(a, b) => a.opacity().or(b.opacity()),
             _ => None,
         }
@@ -285,14 +327,10 @@ impl Drawing {
                 top,
                 lines,
                 size,
+                leading,
                 color,
             } => {
-                let mut out = format!(
-                    "BT /PaHe {} Tf {} rg {} TL ",
-                    n(*size),
-                    rgb(*color),
-                    n(size * f64::from(super::annot::LINE_HEIGHT))
-                );
+                let mut out = format!("BT /PaHe {} Tf {} rg {} TL ", n(*size), rgb(*color), n(*leading));
                 // The first baseline sits an ascent below the top.
                 let _ = write!(out, "{} {} Td", n(*x), n(height - top - size * 0.77));
                 for (i, line) in lines.iter().enumerate() {
@@ -313,6 +351,27 @@ impl Drawing {
                 n(*x0),
                 n(height - bottom)
             ),
+            Drawing::PictureMark {
+                image, scale, angle, ..
+            } => {
+                let w = width * scale;
+                let h = w * f64::from(image.height) / f64::from(image.width.max(1));
+                let (sin, cos) = angle.to_radians().sin_cos();
+                format!(
+                    "/Artifact << /Type /Pagination /Subtype /Watermark >> BDC q /PaGS gs {} {} {} {} {} {} cm \
+                     {} 0 0 {} {} {} cm /PaIm Do Q EMC\n",
+                    n(cos),
+                    n(sin),
+                    n(-sin),
+                    n(cos),
+                    n(width / 2.0),
+                    n(height / 2.0),
+                    n(w),
+                    n(h),
+                    n(-w / 2.0),
+                    n(-h / 2.0)
+                )
+            }
             Drawing::Boxes { rects, color } => {
                 let mut out = format!("q {} rg", rgb(*color));
                 for [x0, top, x1, bottom] in rects {
@@ -326,6 +385,46 @@ impl Drawing {
                     );
                 }
                 out.push_str(" f Q\n");
+                out
+            }
+            Drawing::Hidden(words) => {
+                // Invisible text (render mode 3), each word scaled sideways to fill its box.
+                let mut out = "q BT 3 Tr".to_owned();
+                for (text, [x0, top, x1, bottom]) in words {
+                    let em = text_width(text);
+                    // Helvetica reaches 0.72 of its size above the baseline and 0.21 below.
+                    let size = ((bottom - top) / 0.93).max(1.0);
+                    if em <= 0.0 || x1 <= x0 {
+                        continue;
+                    }
+                    let stretch = 100.0 * (x1 - x0) / (em * size);
+                    let _ = write!(
+                        out,
+                        " /PaHe {} Tf {} Tz 1 0 0 1 {} {} Tm (",
+                        n(size),
+                        n(stretch),
+                        n(*x0),
+                        n(height - bottom + 0.21 * size)
+                    );
+                    out.push_str(&literal(&win_ansi(text)));
+                    out.push_str(") Tj");
+                }
+                out.push_str(" ET Q\n");
+                out
+            }
+            Drawing::SameFont { line, color } => {
+                let mut out = format!(
+                    "BT /PaFo {} Tf {} Tz {} rg 1 0 0 1 {} {} Tm <",
+                    n(line.size),
+                    n(line.stretch),
+                    rgb(*color),
+                    n(line.origin.0),
+                    n(line.origin.1)
+                );
+                for b in &line.bytes {
+                    let _ = write!(out, "{b:02X}");
+                }
+                out.push_str("> Tj ET\n");
                 out
             }
             Drawing::Both(a, b) => a.content(width, height) + &b.content(width, height),

@@ -3,6 +3,8 @@
 //! Every icon button carries a hover tooltip naming the action and its shortcut, so the
 //! toolbar needs no words.
 
+use std::cell::Cell;
+
 use iced::widget::{self, container, svg, text, tooltip};
 use iced::{Element, Length, Theme};
 
@@ -20,12 +22,6 @@ pub enum Icon {
     Properties,
     GripVertical,
     GripHorizontal,
-    DockMenu,
-    DockTop,
-    DockBottom,
-    DockLeft,
-    DockRight,
-    Float,
     Sidebar,
     SwapSide,
     Close,
@@ -64,6 +60,12 @@ pub enum Icon {
     Stamp,
     PageAdd,
     PageInsertFile,
+    PageReplace,
+    PageLabels,
+    CommentSummary,
+    PrintComments,
+    Preferences,
+    Batch,
     PageExtract,
     MoveUp,
     MoveDown,
@@ -73,11 +75,16 @@ pub enum Icon {
     Watermark,
     Export,
     FromPictures,
+    NewBlank,
+    FromClipboard,
     Flatten,
     Protect,
     Clean,
     AllTools,
     Paperclip,
+    Signed,
+    SignatureProblem,
+    SignatureUnknown,
     Camera,
     Layers,
     Ruler,
@@ -92,12 +99,17 @@ pub enum Icon {
     AddLink,
     EditPage,
     Shrink,
+    ScanText,
+    Scanner,
     Redact,
     MarkResults,
     EditPictures,
     ReplacePicture,
     ReadAloud,
     StopReading,
+    DetectFields,
+    Preflight,
+    Accessibility,
     Compare,
     PrepareForm,
     TextField,
@@ -106,6 +118,13 @@ pub enum Icon {
     ListField,
     RadioField,
     DataImport,
+    EditText,
+    BookmarkAdd,
+    Rename,
+    Indent,
+    Outdent,
+    Hand,
+    ZoomBox,
 }
 
 impl Icon {
@@ -123,12 +142,6 @@ impl Icon {
             Icon::Properties => include_bytes!("../icons/info.svg"),
             Icon::GripVertical => include_bytes!("../icons/grip-vertical.svg"),
             Icon::GripHorizontal => include_bytes!("../icons/grip-horizontal.svg"),
-            Icon::DockMenu => include_bytes!("../icons/pin.svg"),
-            Icon::DockTop => include_bytes!("../icons/panel-top.svg"),
-            Icon::DockBottom => include_bytes!("../icons/panel-bottom.svg"),
-            Icon::DockLeft => include_bytes!("../icons/panel-left.svg"),
-            Icon::DockRight => include_bytes!("../icons/panel-right.svg"),
-            Icon::Float => include_bytes!("../icons/picture-in-picture-2.svg"),
             Icon::Sidebar => include_bytes!("../icons/panel-left.svg"),
             Icon::SwapSide => include_bytes!("../icons/arrow-left-right.svg"),
             Icon::Close => include_bytes!("../icons/x.svg"),
@@ -167,6 +180,12 @@ impl Icon {
             Icon::Stamp => include_bytes!("../icons/stamp.svg"),
             Icon::PageAdd => include_bytes!("../icons/file-plus.svg"),
             Icon::PageInsertFile => include_bytes!("../icons/file-input.svg"),
+            Icon::PageReplace => include_bytes!("../icons/replace.svg"),
+            Icon::PageLabels => include_bytes!("../icons/list-ordered.svg"),
+            Icon::CommentSummary => include_bytes!("../icons/message-square-text.svg"),
+            Icon::PrintComments => include_bytes!("../icons/printer-check.svg"),
+            Icon::Preferences => include_bytes!("../icons/settings.svg"),
+            Icon::Batch => include_bytes!("../icons/folder-cog.svg"),
             Icon::PageExtract => include_bytes!("../icons/file-output.svg"),
             Icon::MoveUp => include_bytes!("../icons/arrow-up.svg"),
             Icon::MoveDown => include_bytes!("../icons/arrow-down.svg"),
@@ -176,11 +195,16 @@ impl Icon {
             Icon::Watermark => include_bytes!("../icons/file-type.svg"),
             Icon::Export => include_bytes!("../icons/file-output.svg"),
             Icon::FromPictures => include_bytes!("../icons/file-image.svg"),
+            Icon::NewBlank => include_bytes!("../icons/file.svg"),
+            Icon::FromClipboard => include_bytes!("../icons/clipboard-paste.svg"),
             Icon::Flatten => include_bytes!("../icons/layers.svg"),
             Icon::Protect => include_bytes!("../icons/lock.svg"),
             Icon::Clean => include_bytes!("../icons/shield-check.svg"),
             Icon::AllTools => include_bytes!("../icons/layout-grid.svg"),
             Icon::Paperclip => include_bytes!("../icons/paperclip.svg"),
+            Icon::Signed => include_bytes!("../icons/badge-check.svg"),
+            Icon::SignatureProblem => include_bytes!("../icons/shield-alert.svg"),
+            Icon::SignatureUnknown => include_bytes!("../icons/shield-question.svg"),
             Icon::Camera => include_bytes!("../icons/camera.svg"),
             Icon::Layers => include_bytes!("../icons/layers-2.svg"),
             Icon::Ruler => include_bytes!("../icons/ruler.svg"),
@@ -194,12 +218,17 @@ impl Icon {
             Icon::AddLink => include_bytes!("../icons/link.svg"),
             Icon::EditPage => include_bytes!("../icons/file-pen-line.svg"),
             Icon::Shrink => include_bytes!("../icons/shrink.svg"),
+            Icon::ScanText => include_bytes!("../icons/scan-text.svg"),
+            Icon::Scanner => include_bytes!("../icons/scanner.svg"),
             Icon::Redact => include_bytes!("../icons/eye-off.svg"),
             Icon::MarkResults => include_bytes!("../icons/text-search.svg"),
             Icon::EditPictures => include_bytes!("../icons/images.svg"),
             Icon::ReplacePicture => include_bytes!("../icons/replace.svg"),
             Icon::ReadAloud => include_bytes!("../icons/volume-2.svg"),
             Icon::StopReading => include_bytes!("../icons/circle-stop.svg"),
+            Icon::DetectFields => include_bytes!("../icons/wand-sparkles.svg"),
+            Icon::Preflight => include_bytes!("../icons/file-check.svg"),
+            Icon::Accessibility => include_bytes!("../icons/accessibility.svg"),
             Icon::Compare => include_bytes!("../icons/file-diff.svg"),
             Icon::PrepareForm => include_bytes!("../icons/clipboard-pen-line.svg"),
             Icon::TextField => include_bytes!("../icons/text-cursor-input.svg"),
@@ -209,6 +238,13 @@ impl Icon {
             Icon::RadioField => include_bytes!("../icons/circle-dot.svg"),
             Icon::CommentsExport => include_bytes!("../icons/message-square-share.svg"),
             Icon::DataImport => include_bytes!("../icons/file-up.svg"),
+            Icon::EditText => include_bytes!("../icons/text-cursor-input.svg"),
+            Icon::BookmarkAdd => include_bytes!("../icons/bookmark-plus.svg"),
+            Icon::Rename => include_bytes!("../icons/pencil.svg"),
+            Icon::Indent => include_bytes!("../icons/indent-increase.svg"),
+            Icon::Outdent => include_bytes!("../icons/indent-decrease.svg"),
+            Icon::Hand => include_bytes!("../icons/hand.svg"),
+            Icon::ZoomBox => include_bytes!("../icons/scan-search.svg"),
         }
     }
 }
@@ -279,6 +315,20 @@ fn styled<'a, M: Clone + 'a>(
     with_tip(button, tip)
 }
 
+thread_local! {
+    /// Which side of their buttons tooltips open on, for the toolbar being built.
+    static TIP_SIDE: Cell<tooltip::Position> = const { Cell::new(tooltip::Position::Bottom) };
+}
+
+/// Builds with tooltips opening on `side` of their buttons, so a toolbar at the bottom of the
+/// window shows them above it rather than over it.
+pub fn tips_on<T>(side: tooltip::Position, build: impl FnOnce() -> T) -> T {
+    let before = TIP_SIDE.replace(side);
+    let built = build();
+    TIP_SIDE.set(before);
+    built
+}
+
 /// Wraps any element in a hover tooltip.
 pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<String>) -> Element<'a, M> {
     let label = container(text(tip.into()).size(13))
@@ -293,7 +343,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
                     ..Default::default()
                 })
         });
-    tooltip(content, label, tooltip::Position::Bottom)
+    tooltip(content, label, TIP_SIDE.get())
         .gap(4)
         .snap_within_viewport(true)
         .into()
@@ -303,7 +353,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 98] = [
+    const ALL: [Icon; 115] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -316,12 +366,6 @@ mod tests {
         Icon::Properties,
         Icon::GripVertical,
         Icon::GripHorizontal,
-        Icon::DockMenu,
-        Icon::DockTop,
-        Icon::DockBottom,
-        Icon::DockLeft,
-        Icon::DockRight,
-        Icon::Float,
         Icon::Sidebar,
         Icon::SwapSide,
         Icon::Close,
@@ -360,6 +404,12 @@ mod tests {
         Icon::Stamp,
         Icon::PageAdd,
         Icon::PageInsertFile,
+        Icon::PageReplace,
+        Icon::PageLabels,
+        Icon::CommentSummary,
+        Icon::PrintComments,
+        Icon::Preferences,
+        Icon::Batch,
         Icon::PageExtract,
         Icon::MoveUp,
         Icon::MoveDown,
@@ -369,11 +419,16 @@ mod tests {
         Icon::Watermark,
         Icon::Export,
         Icon::FromPictures,
+        Icon::NewBlank,
+        Icon::FromClipboard,
         Icon::Flatten,
         Icon::Protect,
         Icon::Clean,
         Icon::AllTools,
         Icon::Paperclip,
+        Icon::Signed,
+        Icon::SignatureProblem,
+        Icon::SignatureUnknown,
         Icon::Camera,
         Icon::Layers,
         Icon::Ruler,
@@ -388,12 +443,17 @@ mod tests {
         Icon::AddLink,
         Icon::EditPage,
         Icon::Shrink,
+        Icon::ScanText,
+        Icon::Scanner,
         Icon::Redact,
         Icon::MarkResults,
         Icon::EditPictures,
         Icon::ReplacePicture,
         Icon::ReadAloud,
         Icon::StopReading,
+        Icon::DetectFields,
+        Icon::Preflight,
+        Icon::Accessibility,
         Icon::Compare,
         Icon::PrepareForm,
         Icon::TextField,
@@ -402,6 +462,13 @@ mod tests {
         Icon::ListField,
         Icon::RadioField,
         Icon::DataImport,
+        Icon::EditText,
+        Icon::BookmarkAdd,
+        Icon::Rename,
+        Icon::Indent,
+        Icon::Outdent,
+        Icon::Hand,
+        Icon::ZoomBox,
     ];
 
     #[test]

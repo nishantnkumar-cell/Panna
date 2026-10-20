@@ -6,6 +6,7 @@ use iced::keyboard::{self, Key, key::Named};
 use crate::Message;
 use crate::annotate;
 use crate::find::Event;
+use crate::menu::{self, Menu, Nav};
 
 pub fn map(event: keyboard::Event) -> Option<Message> {
     let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
@@ -17,6 +18,18 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         } else {
             Message::FocusNext
         });
+    }
+    // Alt and a menu's underlined letter opens it, and F10 opens the first, as on Windows and
+    // Linux. macOS keeps Option for typing accented letters.
+    if !cfg!(target_os = "macos") && !modifiers.command() {
+        if modifiers.alt()
+            && let Key::Character(c) = key.as_ref()
+        {
+            return Menu::from_key(c).map(|m| Message::Menu(menu::Event::OpenKey(m)));
+        }
+        if key == Key::Named(Named::F10) && !modifiers.shift() {
+            return Some(Message::Menu(menu::Event::OpenKey(Menu::File)));
+        }
     }
     if modifiers.shift() && !modifiers.command() && key == Key::Named(Named::F3) {
         return Some(Message::Find(Event::Prev));
@@ -58,6 +71,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("c") => Some(Message::Copy),
             Key::Character("s") => Some(Message::Save),
             Key::Character("p") => Some(Message::Print),
+            Key::Character(",") => Some(Message::Preferences(crate::preferences::Event::Open)),
             Key::Character("z") => Some(Message::Annotate(annotate::Event::Undo)),
             Key::Character("y") => Some(Message::Annotate(annotate::Event::Redo)),
             _ => None,
@@ -86,6 +100,25 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         }
         _ => None,
     }
+}
+
+/// Keys while a menu is open: arrows and Enter move around it, Escape, F10 or Alt closes it.
+pub fn menu_keys(event: keyboard::Event) -> Option<Message> {
+    let keyboard::Event::KeyPressed { key, .. } = event else {
+        return None;
+    };
+    let nav = match key {
+        Key::Named(Named::ArrowUp) => Nav::Up,
+        Key::Named(Named::ArrowDown) => Nav::Down,
+        Key::Named(Named::ArrowLeft) => Nav::Left,
+        Key::Named(Named::ArrowRight) => Nav::Right,
+        Key::Named(Named::Enter | Named::Space) => Nav::Enter,
+        Key::Named(Named::Escape | Named::F10 | Named::Alt) => {
+            return Some(Message::Menu(menu::Event::Close));
+        }
+        _ => return None,
+    };
+    Some(Message::MenuNav(nav))
 }
 
 #[cfg(test)]
@@ -119,7 +152,7 @@ mod tests {
             letter("c", Modifiers::empty()),
             Some(Message::ToolKey(annotate::Tool::Cloud))
         ));
-        assert!(letter("r", Modifiers::ALT).is_none());
+        assert!(!matches!(letter("r", Modifiers::ALT), Some(Message::ToolKey(_))));
         assert!(letter("q", Modifiers::empty()).is_none());
         assert!(matches!(
             letter("C", Modifiers::COMMAND | Modifiers::SHIFT),
@@ -141,6 +174,31 @@ mod tests {
         assert!(matches!(
             press(Key::Named(Named::ArrowLeft), Modifiers::empty()),
             Some(Message::Advance(false))
+        ));
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn alt_letters_open_menus() {
+        assert!(matches!(
+            letter("v", Modifiers::ALT),
+            Some(Message::Menu(menu::Event::OpenKey(Menu::View)))
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::F10), Modifiers::empty()),
+            Some(Message::Menu(menu::Event::OpenKey(Menu::File)))
+        ));
+        assert!(matches!(
+            menu_keys(keyboard::Event::KeyPressed {
+                modified_key: Key::Named(Named::ArrowDown),
+                key: Key::Named(Named::ArrowDown),
+                physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+                location: Location::Standard,
+                modifiers: Modifiers::empty(),
+                text: None,
+                repeat: false,
+            }),
+            Some(Message::MenuNav(Nav::Down))
         ));
     }
 

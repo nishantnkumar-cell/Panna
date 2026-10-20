@@ -15,7 +15,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Zoom in/out, fit width, fit page, actual size | V1 | Done |
 | Rotate view | V1 | Done |
 | Page thumbnails sidebar | V1 | Done (F4); left or right edge, remembered |
-| Bookmarks / outline panel | V1 | Done; nested, click to jump |
+| Bookmarks / outline panel | V1 | Done; nested, click to jump. Editing done: in the Bookmarks tab, add one for the page on screen, rename, move up and down, in and out a level, and delete (with the ones under it); changes can be undone and are saved into the file |
 | Go to page, next/previous page | V1 | Done |
 | Text search (find, find next, match case, whole word) | V1 | Done: search panel in the sidebar listing every result in context, like Word (Ctrl+F, F3/Shift+F3); includes hidden OCR text |
 | Select and copy text | V1 | Done; drag or double-click, Ctrl+C; across pages; Linux middle-click paste |
@@ -25,7 +25,8 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Full-screen / presentation mode | Later | Done: full screen keeping the tools (F11), and presenting one page at a time on black (Ctrl+L, as in Acrobat); click, Space or arrows to move, Escape to leave |
 | Night mode / custom page colours (accessibility) | Later | Done: original, dark (hues kept, lightness inverted) and sepia, cycled from the moon button or Ctrl+Shift+D; remembered |
 | Recent files list | V1 | Done; stored locally only |
-| Toolbars dock to any edge or float; position remembered | V1 | Done; icon-only (Lucide, ISC) with hover tips |
+| Toolbars dock to any edge or float; position remembered | V1 | Done: seven bars (File, Page, Zoom, View, Tools, Edit and review, Comment), each floating or snapped to an edge, bottom bars centred or left or right, lockable; icon-only (Lucide, ISC) with hover tips |
+| Menu bar | V1 | Done: File, Edit, View, Comment, Pages, Forms, Protect, Tools, Help, with icons and shortcuts; Alt+letter and F10 open them, arrows and Enter move around |
 | Print | Later | Done: Ctrl+P or the printer button opens the system print dialog: KDE or GNOME through the desktop print portal (also in Flatpak), Windows' print dialog, and macOS's print panel with preview. Prints unsaved changes too, and honours a file's "no printing" permission |
 | Document properties (title, author, page size, PDF version) | V1 | Done (Ctrl+D) |
 | Password-protected (encrypted) PDFs | V1 | Done |
@@ -64,8 +65,8 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Flatten form | Later | Done: fields are drawn with their values and the form is removed |
 | Import / export form data (FDF, XFDF) | Later | Done: All tools fills in a form from an FDF or XFDF file, or saves its data as either. Scripts in data files are ignored |
 | Create and edit form fields | Done | "Prepare a form" in All tools: click or drag to add text fields (one or several lines), check boxes, drop-down lists, list boxes and radio buttons, with a name, a hover tip and "must be filled in"; click a field to delete it. Radio buttons are made as a group, a button for each choice typed: clicked, they go down the page from the click; dragged, they spread evenly along the box. Each change is a page change, undone from the page tools. Moving or resizing fields is not yet here, and fields inside a group can't be deleted yet |
-| Auto-detect form fields | Later | Offline heuristic only |
-| Form JavaScript calculations | Later | **Sandboxed** JS subset only, or skip. JavaScript is a major attack surface in PDF readers |
+| Auto-detect form fields | Later | Done: the wand in Prepare a form finds blanks of underscores, empty boxes, lines to write on and box characters on every page, and adds fields there named after the words beside or above them (check boxes for small squares, several-line fields for tall boxes). Places that already have a field are skipped; undo from the page tools |
+| Form JavaScript calculations | Later | Done without running JavaScript: the standard calculations Acrobat writes (sum, product, average, minimum, maximum and simplified field notation such as `Price * Qty`) are recognised and worked out as fields are filled in, in the form's calculation order. Other calculation scripts are ignored, and no script is ever run |
 | XFA forms (dynamic LiveCycle forms) | Skip | Deprecated, huge attack surface |
 | Fill & Sign: add typed/drawn signature image, initials, dates | Later | Done: the Fill & Sign comment tool (F). Draw a signature or initials on a pad, or type them in a handwriting font (Dancing Script, OFL); click to place them as picture stamps, which can be moved and resized. Also places today's date (editable text), check marks and crosses. Signatures are kept until Panna closes, not stored on disk |
 | Send for signature / e-sign workflows | Skip | Online |
@@ -79,32 +80,32 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Merge / combine files | Later | Done: insert another PDF's pages after the current page |
 | Crop pages | Later | Done: trim margins in millimetres from the edges as shown, on this page or all pages |
 | Headers, footers, page numbers, Bates numbering | Later | Done: left, centre and right text at the top and bottom, with {page}, {pages}, {page:6} for Bates numbers and {date}, on chosen pages. Drawn into the pages, so changing them later is Undo or adding new ones |
-| Watermarks and backgrounds | Later | Done: text watermark (colour, size or fit to page, angle, opacity, over or behind the content) and a page colour, on chosen pages. Picture watermarks not yet |
+| Watermarks and backgrounds | Later | Done: text watermark (colour, size or fit to page, angle, opacity, over or behind the content) and a page colour, on chosen pages. Picture watermarks too (PNG, JPEG or TIFF, such as a logo), sized as a share of the page width and written once however many pages show them |
 
 ## 5. Editing content
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Edit existing text (reflow within a text box) | Later | Hardest feature; font subsetting issues |
+| Edit existing text (reflow within a text box) | Done | Line by line done: Add to pages › Change text, then click a line: the old text is taken out (pictures and drawings behind it stay) and the new text is drawn in its place, at the same size and in the same colour, in the same font where the font can show it (a font embedded with only the letters the page uses can't show others), otherwise in Helvetica. Paragraphs done: clicking a line that's part of a paragraph (lines of the same size, one under the other) opens the whole paragraph, with hyphenated words joined; the new text is drawn in Helvetica, wrapped to the paragraph's width with its line spacing. Paragraphs keep their colour but not their font |
 | Add text, images, links | Later | Done: "Add text, pictures or links to pages" in All tools. Text (Helvetica, size and colour) and PNG or JPEG pictures become part of the page content; links go to a page or open a web or email address. Each addition is a page change, undone from the page tools |
 | Replace / move / resize images | Done | All tools › Move, replace or delete pictures: pick a picture, drag it or its corner, or replace or delete it; undoable as a page change |
 | Redaction (true content removal, search and redact) | Done | Text, pictures, inline images and enclosed drawings in marked areas are removed from the content (forms are copied and redacted too); comments over them are removed; drawings only partly inside stay, covered by the black box. Areas over form fields are refused until the form is flattened |
-| Remove hidden information / sanitise document | Later | Done: document information and XMP metadata, scripts and automatic actions, attached files, and optionally comments. Scripts on form field parents (not widgets) are not yet removed |
+| Remove hidden information / sanitise document | Later | Done: document information and XMP metadata, scripts and automatic actions, attached files, and optionally comments. Scripts are taken off form fields too, including the parent fields that hold calculations |
 
 ## 6. Create and convert
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Images (PNG, JPEG, TIFF) → PDF | Later | Done for PNG and JPEG (JPEGs go in unchanged), a picture a page fitted to A4; TIFF not yet |
+| Images (PNG, JPEG, TIFF) → PDF | Later | Done for PNG, JPEG (which go in unchanged) and TIFF (its first page), a picture a page fitted to A4 |
 | PDF → images | Later | Done: PNG or JPEG per page at a chosen resolution |
 | PDF → plain text | Later | Done: chosen pages into one text file |
-| PDF → Word / Excel / PowerPoint | Later | Acrobat does this offline; quality is a large project |
+| PDF → Word / Excel / PowerPoint | Later | Word done: All tools › Export… › Word document (.docx) writes the text in paragraphs, with headings where the type is larger and each page starting a new page; pictures, tables and layout aren't kept. PowerPoint done: PowerPoint presentation (.pptx) puts a picture of each page on its own slide, at the chosen resolution. Excel done: Excel workbook (.xlsx) gives each page a sheet, each line of text a row, and starts a column wherever words line up, so simple tables land in cells; numbers become numbers |
 | Word / Office → PDF | Skip | Needs Office or LibreOffice installed; could shell out later |
 | Web page → PDF | Skip | Needs network |
-| Scan to PDF (from scanner) | Later | OS scanner APIs |
-| OCR (make scanned PDF searchable) | Later | Local OCR engine; the Tesseract C++ dependency would need sandboxing |
-| Optimise / reduce file size | Later | Done: "Save a smaller copy…" in All tools writes a copy with uncompressed and lightly compressed streams compressed harder, identical streams (fonts, pictures) kept once, unused objects dropped, and small objects packed into compressed object streams. Pages look exactly the same; pictures are not yet downsampled |
-| PDF/A, PDF/X conversion and preflight checks | Later | |
+| Scan to PDF (from scanner) | Later | Done on Linux and Windows: All tools › Scan pages from a scanner… scans page after page and makes them into a PDF. Linux uses SANE (`scanimage`), with the scanner, resolution and colour chosen on the card; Windows uses its own scan dialog (Windows Image Acquisition). Not yet on macOS or in the Flatpak, where Panna says to scan to pictures and use Make a PDF from pictures |
+| OCR (make scanned PDF searchable) | Later | Done: All tools › Recognise text in scanned pages (OCR) reads every page that has no text, offline, with the ocrs engine (pure Rust) and its models built in, and lays the words over the page invisibly, each fitted to where it shows, so they can be found, selected and copied. Undo from the page tools. Reads Latin script best, English especially |
+| Optimise / reduce file size | Later | Done: "Save a smaller copy…" in All tools writes a copy with uncompressed and lightly compressed streams compressed harder, identical streams (fonts, pictures) kept once, unused objects dropped, and small objects packed into compressed object streams. Pages look exactly the same. Optionally, pictures sharper than 300, 150 or 96 dpi where they're drawn (on the page or inside forms) are scaled down to it: photos stay JPEG, other pictures stay lossless; masks, stencils and CMYK, JPEG 2000 or JBIG2 pictures are left as they are |
+| PDF/A, PDF/X conversion and preflight checks | Later | Preflight done: All tools › Check for PDF/A lists what keeps a document from PDF/A-2b (password protection, missing identifier, metadata or output intent, fonts not embedded, scripts, attached files, media, comments without appearances or not set to print, LZW and outside content), each with its page. Converting done too: "Save a PDF/A copy…" on the report writes PDF/A metadata, an sRGB output intent and a file identifier, drops scripts and sets comments to print, then checks the copy; fonts that aren't embedded are reported, not fixed. PDF/X-4 check done: All tools › Check for PDF/X (printing) reports a missing PDF/X marking, printing condition (output intent) or trim box, and fonts not embedded. Converting to PDF/X isn't done, since it needs the printer's colour profile |
 
 ## 7. Security and signatures
 
@@ -112,9 +113,9 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 |---|---|---|
 | Open encrypted PDFs | V1 | Done (see above); changes save back into them encrypted |
 | Encrypt with password, set permissions | Later | Done: AES-256 (revision 6) with an open password, a permissions password and print/change/copy limits; removing or changing it needs the owner password. Checked against poppler |
-| Digitally sign with a local certificate (PKCS#12 / OS store) | Later | |
-| Validate signatures | Later | Revocation checks (OCSP/CRL) are online, so they stay optional and off by default |
-| Certify document | Later | |
+| Digitally sign with a local certificate (PKCS#12 / OS store) | Later | Done for certificate files and the Windows store: All tools › Sign with a certificate… signs with the digital ID in a .p12 or .pfx file (RSA, ECDSA P-256 or P-384; SHA-256), with an optional reason and place, and saves the signed copy as a new file, keeping earlier signatures valid. The signature can be shown in a chosen corner of the current page, with who signed, when, the reason and the place. On Windows the card also lists the certificates installed for the user (Personal store, smart cards included); the key stays in Windows, which signs the digest and asks for a PIN when the key needs one, and nothing is looked up online. The macOS keychain and Linux NSS stores not yet |
+| Validate signatures | Later | Done offline: signed documents open on a Signatures tab in the sidebar listing each signature, whether the signed bytes are unchanged and match the certificate (RSA, including RSA-PSS, and ECDSA P-256/P-384, with SHA-1 to SHA-512), whether the document changed afterwards, whether it certifies the document, and who issued the certificate. Trusted certificates done: each signature has a Trust button for its certificate or the authority that issued it, and Add a trusted certificate… takes a .cer, .crt or .pem file; signatures whose certificates lead to one show as trusted. Revocation checks (OCSP/CRL, which are online) not done |
+| Certify document | Later | Done: the Certify option when signing a document that has no signatures yet (form filling and signing stay allowed) |
 | Adobe Sign, cloud ID | Skip | Online |
 
 ## 8. Accessibility
@@ -123,9 +124,60 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 |---|---|---|
 | Keyboard navigation for all actions | V1 | Done: the document actions have shortcuts shown in their tooltips (Ctrl+Shift+N goes to a page, Ctrl+Shift+C shows the comment tools, Ctrl+Shift+T changes the page layout, Home and End jump to the first and last page), and with the comment tools open a single letter picks each tool (V, H, U, K, N, T, P, R, E, A, L, G, C). Tab moves between form fields |
 | Screen reader support for the app UI | Later | Depends on iced accessibility support |
-| Tag PDF, reading order, accessibility checker | Later | |
+| Tag PDF, reading order, accessibility checker | Later | Checker done: All tools › Check accessibility lists what gets in the way of screen readers (no tags, language or title, title not shown, no bookmarks in long documents, pages that are only pictures, figures without alternate text, tables without header cells, fields without a description, untagged comments and links, tab order, fonts without Unicode mapping), each with its page. Adding tags done: on an untagged document the report offers Save a tagged copy…, which tags each run of text as a paragraph, or a heading where the type is larger, in the order it's drawn, and sets the tab order. Pictures become figures (drawn and inline pictures; drawings stay untagged). Describing figures done: in the report, each figure without alternate text has a box to type a description, and Save descriptions writes them into the tagged copy (or, for a document already tagged, a described copy). Changing the reading order by hand isn't done yet |
 
-## 9. Online-only (always Skip)
+## 9. Backlog
+
+Found by comparing Acrobat's offline features with this list and the code on 2026-10-19. Security
+work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-priority-order).
+
+### 9.1 Planned for 1.0
+
+| Feature | Area | Notes |
+|---|---|---|
+| Add, rename, move and delete bookmarks | Navigation | Done (see section 1) |
+| Hand tool (drag to scroll) | Navigation | Done: the hand button beside the zoom buttons; Esc turns it off |
+| Marquee zoom (drag a box to zoom into it) | Navigation | Done: the zoom tool beside the hand; a click zooms in a step |
+| Initial view: how a file opens (page, zoom, panels), saved into the PDF | Navigation | Done: "When this file opens" in Document properties (Ctrl+D) |
+| Replace pages from another PDF | Pages | Done: the replace button in the Pages tab; bookmarks and links follow the new pages |
+| Create a blank PDF; PDF from a screenshot or the clipboard | Pages | Done: in All tools. A screenshot comes in through the clipboard (every system can copy one there) |
+| Edit page labels (i, ii, iii then 1, 2, 3) | Pages | Done: the labels button in the Pages tab; labels show in the page box and thumbnails, and a label can be typed to go to its page |
+| Split by bookmarks or by file size | Pages | Done: in Extract pages, save a PDF for each top-level bookmark, or PDFs of at most a chosen size |
+| Comment summary: a printable list of comments with their pages | Comments | Done: the summary button in the Comments tab, or All tools, saves the comments by page as a PDF and opens it; highlights quote the words they mark |
+| Print with comments shown | Comments | Done: the print button in the Comments tab, or All tools, prints each commented page followed by a list of its comments |
+| Default PDF app on Windows and macOS, through an installer | Desktop | Done, unsigned: a Windows installer that registers Panna and opens Default apps at its entry, and a macOS disk image; the Mac app now opens files from Finder. The Linux menu entry already registers for PDFs |
+| Preferences window | Desktop | Done: Ctrl+, or All tools; your name on comments, light or dark, how documents open, the measuring unit, and making Panna the default PDF app |
+| Action Wizard: run the same steps (OCR, compress, watermark…) over a folder of PDFs | Batch | Done: Batch actions in All tools; OCR, watermark, page numbers, flatten, remove hidden information and make smaller, each file read in the locked-down process and saved under its own name |
+
+### 9.2 Future enhancements (after 1.0)
+
+Agreed with the owner on 2026-10-19: worth doing, but not needed for 1.0, mostly because
+they're large for how often they're used. Each has a GitHub issue labelled
+`future enhancement` with what it is, why it waits and a rough size.
+
+| Feature | Issue |
+|---|---|
+| Print production tools: output preview, colour separations, ink coverage, fix hairlines | [#18](https://github.com/nishantnkumar-cell/Panna/issues/18) |
+| Page thumbnails and previews in Windows Explorer and macOS Finder | [#19](https://github.com/nishantnkumar-cell/Panna/issues/19) |
+| Interface translations and right-to-left languages | [#20](https://github.com/nishantnkumar-cell/Panna/issues/20) |
+| PDF Portfolios | [#21](https://github.com/nishantnkumar-cell/Panna/issues/21) |
+| Embedded video, audio and 3D models | [#22](https://github.com/nishantnkumar-cell/Panna/issues/22) |
+| Touch and pen input | [#23](https://github.com/nishantnkumar-cell/Panna/issues/23) |
+| Rulers, grids and guides | [#24](https://github.com/nishantnkumar-cell/Panna/issues/24) |
+| Auto-scroll | [#25](https://github.com/nishantnkumar-cell/Panna/issues/25) |
+| Loupe and pan-and-zoom window | [#26](https://github.com/nishantnkumar-cell/Panna/issues/26) |
+| Export to HTML, RTF and EPUB | [#27](https://github.com/nishantnkumar-cell/Panna/issues/27) |
+| Search across a folder of PDFs, with a saved index | [#28](https://github.com/nishantnkumar-cell/Panna/issues/28) |
+| Spell check in comments and form fields | [#29](https://github.com/nishantnkumar-cell/Panna/issues/29) |
+| Convert documents to PDF/X | [#30](https://github.com/nishantnkumar-cell/Panna/issues/30) |
+| Customisable keyboard shortcuts | [#31](https://github.com/nishantnkumar-cell/Panna/issues/31) |
+| Word export: keep pictures, tables and layout | [#32](https://github.com/nishantnkumar-cell/Panna/issues/32) |
+| Embed missing fonts when converting to PDF/A | [#33](https://github.com/nishantnkumar-cell/Panna/issues/33) |
+| Edit the reading order by hand | [#34](https://github.com/nishantnkumar-cell/Panna/issues/34) |
+| Screen-reader support for Panna's own interface | [#35](https://github.com/nishantnkumar-cell/Panna/issues/35) |
+| Sign with the macOS keychain and Linux NSS | [#36](https://github.com/nishantnkumar-cell/Panna/issues/36) |
+| Code-signed and notarised releases | [#37](https://github.com/nishantnkumar-cell/Panna/issues/37) |
+## 10. Online-only (always Skip)
 
 Adobe Document Cloud storage and sync, sharing links, shared review, Adobe Sign, the AI Assistant,
 generative summaries, online export/convert services, Acrobat web, and any telemetry. **The app
