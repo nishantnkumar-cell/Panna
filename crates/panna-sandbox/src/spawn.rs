@@ -266,7 +266,13 @@ mod windows {
         Ok((read, write))
     }
 
+    /// Held while a renderer is set up and started. Two starting at once in one process
+    /// race on making the profile and on rewriting the program's permissions, which can make
+    /// the other's start fail (seen as E_UNEXPECTED, and as the program not being found).
+    static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     pub(super) fn spawn(program: &Path, arg: &str) -> Result<Contained, Error> {
+        let _starting = STARTING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sid = container()?;
         let path = wide(program.as_os_str());
         // Not fatal: the file may already allow it, and starting will say if not.
