@@ -13,7 +13,7 @@ and page navigation. Annotation and form filling come next. See [docs/FEATURES.m
 
 ## Build and run
 
-You need Rust 1.99 or newer (install it from [rustup.rs](https://rustup.rs)).
+You need Rust 1.94 or newer (install it from [rustup.rs](https://rustup.rs)).
 
 ```sh
 cargo run --release -p panna -- path/to/file.pdf
