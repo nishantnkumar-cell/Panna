@@ -29,6 +29,8 @@ pub struct Settings {
     pub appearance: Appearance,
     pub open_zoom: OpenZoom,
     pub unit: Unit,
+    /// Single letters pick tools, as Acrobat's "Use single-key accelerators to access tools".
+    pub single_keys: bool,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -46,6 +48,7 @@ impl Default for Settings {
             appearance: Appearance::System,
             open_zoom: OpenZoom::ActualSize,
             unit: Unit::default(),
+            single_keys: true,
             recent: Vec::new(),
         }
     }
@@ -110,6 +113,7 @@ impl Settings {
                 }
                 "view.open_zoom" => out.open_zoom = OpenZoom::parse(value.trim()).unwrap_or(out.open_zoom),
                 "measure.unit" => out.unit = Unit::parse(value.trim()).unwrap_or(out.unit),
+                "keys.single" => out.single_keys = value.trim() != "false",
                 "comments.author" => out.author = value.trim().chars().take(MAX_AUTHOR).collect(),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
@@ -133,10 +137,11 @@ impl Settings {
             self.colors.as_str(),
         ));
         out.push_str(&format!(
-            "view.appearance={}\nview.open_zoom={}\nmeasure.unit={}\n",
+            "view.appearance={}\nview.open_zoom={}\nmeasure.unit={}\nkeys.single={}\n",
             self.appearance.as_str(),
             self.open_zoom.as_str(),
-            self.unit.as_str()
+            self.unit.as_str(),
+            self.single_keys,
         ));
         // A name with a line break can't be stored in this format.
         if !self.author.contains(['\n', '\r']) {
@@ -202,6 +207,7 @@ mod tests {
             appearance: Appearance::Dark,
             open_zoom: OpenZoom::FitWidth,
             unit: Unit::Inches,
+            single_keys: false,
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);

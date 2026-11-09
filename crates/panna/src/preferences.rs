@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use iced::widget::{button, column, container, pick_list, row, space, text, text_input};
+use iced::widget::{button, checkbox, column, container, pick_list, row, space, text, text_input};
 use iced::{Center, Element};
 
 use crate::Message;
@@ -105,6 +105,7 @@ pub enum Event {
     Appearance(Appearance),
     Zoom(OpenZoom),
     Unit(Unit),
+    SingleKeys(bool),
     /// Asks the system to make Panna the default PDF app, or says how.
     DefaultApp,
     Close,
@@ -118,6 +119,7 @@ pub struct View<'a> {
     pub appearance: Appearance,
     pub zoom: OpenZoom,
     pub unit: Unit,
+    pub single_keys: bool,
     pub note: Option<&'a str>,
 }
 
@@ -165,6 +167,9 @@ pub fn card(view: View<'_>) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Center),
+        checkbox(view.single_keys)
+            .label("Use single-key accelerators to access tools (H hand, Z zoom, S note, U highlight…)")
+            .on_toggle(move |on| ev(Event::SingleKeys(on))),
         row![
             label("Default PDF app"),
             button("Make Panna the default…")

@@ -95,7 +95,10 @@ impl Tool {
                 "Fill & Sign: add your signature, initials, the date or a check mark where you click"
             }
         };
-        format!("{what} ({})", self.key().to_ascii_uppercase())
+        match self.key() {
+            Some(key) => format!("{what} ({key})"),
+            None => what.to_owned(),
+        }
     }
 
     /// The tool's name in the Comment menu.
@@ -119,31 +122,42 @@ impl Tool {
         }
     }
 
-    /// The single key that picks this tool while the comment tools are open.
-    pub fn key(self) -> char {
+    /// The key that picks this tool, as in Acrobat's single-key accelerators: U, S, X, Q and K
+    /// pick a tool, and Shift+U and Shift+D step through the text markups and the drawing
+    /// tools. Fill & Sign has none in Acrobat either.
+    pub fn key(self) -> Option<&'static str> {
         match self {
-            Tool::Select => 'v',
-            Tool::Highlight => 'h',
-            Tool::Underline => 'u',
-            Tool::StrikeOut => 'k',
-            Tool::Note => 'n',
-            Tool::TextBox => 't',
-            Tool::Pen => 'p',
-            Tool::Rect => 'r',
-            Tool::Ellipse => 'e',
-            Tool::Arrow => 'a',
-            Tool::Line => 'l',
-            Tool::Polygon => 'g',
-            Tool::Cloud => 'c',
-            Tool::Stamp => 's',
-            Tool::Sign => 'f',
+            Tool::Select => Some("V"),
+            Tool::Highlight => Some("U"),
+            Tool::Underline | Tool::StrikeOut => Some("Shift+U"),
+            Tool::Note => Some("S"),
+            Tool::TextBox => Some("X"),
+            Tool::Pen | Tool::Rect | Tool::Ellipse | Tool::Arrow | Tool::Line | Tool::Polygon => {
+                Some("Shift+D")
+            }
+            Tool::Cloud => Some("Q"),
+            Tool::Stamp => Some("K"),
+            Tool::Sign => None,
         }
     }
 
-    pub fn from_key(key: &str) -> Option<Tool> {
-        Tool::ALL
-            .into_iter()
-            .find(|t| key.len() == 1 && key.starts_with(t.key()))
+    /// The text markups Shift+U steps through, in Acrobat's order.
+    pub const MARKUPS: [Tool; 3] = [Tool::Highlight, Tool::Underline, Tool::StrikeOut];
+    /// The drawing tools Shift+D steps through, in Acrobat's order.
+    pub const DRAWING: [Tool; 7] = [
+        Tool::Cloud,
+        Tool::Arrow,
+        Tool::Line,
+        Tool::Rect,
+        Tool::Ellipse,
+        Tool::Polygon,
+        Tool::Pen,
+    ];
+
+    /// The tool after `self` in `group`, or the group's first.
+    pub fn next_in(self, group: &[Tool]) -> Tool {
+        let next = group.iter().position(|t| *t == self).map_or(0, |i| i + 1);
+        group.get(next).or_else(|| group.first()).copied().unwrap_or(self)
     }
 
     /// Tools that place one corner per click instead of drawing with a drag.
@@ -1638,13 +1652,14 @@ mod tests {
     }
 
     #[test]
-    fn every_tool_has_its_own_key() {
-        let mut keys: Vec<char> = Tool::ALL.iter().map(|t| t.key()).collect();
-        keys.sort_unstable();
-        keys.dedup();
-        assert_eq!(keys.len(), Tool::ALL.len());
-        assert_eq!(Tool::from_key("r"), Some(Tool::Rect));
-        assert_eq!(Tool::from_key("rr"), None);
+    fn shift_keys_step_through_groups() {
+        assert_eq!(Tool::Highlight.next_in(&Tool::MARKUPS), Tool::Underline);
+        assert_eq!(Tool::StrikeOut.next_in(&Tool::MARKUPS), Tool::Highlight);
+        assert_eq!(Tool::Note.next_in(&Tool::DRAWING), Tool::Cloud);
+        assert_eq!(Tool::Pen.next_in(&Tool::DRAWING), Tool::Cloud);
+        for tool in Tool::DRAWING {
+            assert!(tool.key().is_some());
+        }
     }
 
     #[test]
