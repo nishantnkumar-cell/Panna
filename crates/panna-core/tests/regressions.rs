@@ -124,3 +124,12 @@ fn the_fuzzed_inherited_resources_file_finishes() {
     }
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
+
+/// A checkbox's appearance draws a form that draws itself twice. The engine draws
+/// annotations' appearances with the page, but the fan-out check counted only the page's
+/// content, so finding the page's text never finished.
+#[test]
+fn forms_in_annotation_appearances_are_refused() {
+    let bytes = include_bytes!("regressions/forms-in-annotation-appearance.pdf");
+    assert!(Document::from_bytes(bytes.to_vec(), None, Limits::default()).is_err());
+}
