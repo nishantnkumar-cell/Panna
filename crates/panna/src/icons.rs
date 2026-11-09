@@ -137,6 +137,9 @@ pub enum Icon {
     ChevronDown,
     ExpandAll,
     CollapseAll,
+    Duplicate,
+    Pause,
+    Play,
 }
 
 impl Icon {
@@ -264,6 +267,9 @@ impl Icon {
             Icon::ChevronDown => include_bytes!("../icons/chevron-down.svg"),
             Icon::ExpandAll => include_bytes!("../icons/chevrons-up-down.svg"),
             Icon::CollapseAll => include_bytes!("../icons/chevrons-down-up.svg"),
+            Icon::Duplicate => include_bytes!("../icons/copy-plus.svg"),
+            Icon::Pause => include_bytes!("../icons/pause.svg"),
+            Icon::Play => include_bytes!("../icons/play.svg"),
             Icon::ReadMode => include_bytes!("../icons/book-open-text.svg"),
             Icon::ReadModeExit => include_bytes!("../icons/book-x.svg"),
             Icon::PrevView => include_bytes!("../icons/arrow-big-left.svg"),
@@ -377,7 +383,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 127] = [
+    const ALL: [Icon; 130] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -505,6 +511,9 @@ mod tests {
         Icon::ChevronDown,
         Icon::ExpandAll,
         Icon::CollapseAll,
+        Icon::Duplicate,
+        Icon::Pause,
+        Icon::Play,
     ];
 
     #[test]

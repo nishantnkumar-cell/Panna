@@ -505,6 +505,21 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with a copy of the page at `page` put after it. The copy's comments and
+    /// fields are copies too, not the original's shared, so each page's can change alone.
+    pub fn with_page_duplicated(&self, page: usize) -> Result<Vec<u8>, crate::SaveError> {
+        let count = self.page_count();
+        if page >= count {
+            return Err(crate::SaveError::NoSuchPage(page));
+        }
+        let mut plan: Vec<crate::PageSource> = (0..count)
+            .map(|index| crate::PageSource::Page { doc: 0, index, turns: 0 })
+            .collect();
+        // Taken from the document as if it were another, so everything on it is copied anew.
+        plan.insert(page + 1, crate::PageSource::Page { doc: 1, index: page, turns: 0 });
+        self.rearranged(&plan, &[self])
+    }
+
     /// The document with `count` of its pages from `first` replaced by `other`'s pages from
     /// `from`, as a new file. Bookmarks and links to a replaced page go to its replacement.
     pub fn with_pages_replaced(
@@ -534,6 +549,54 @@ impl Document {
                 pages,
                 margins,
             )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// How much white surrounds what's drawn on the page at `index`, as margins (top, right,
+    /// bottom, left as shown, in points), as Acrobat's Remove White Margins finds it; `None`
+    /// for a blank page or one that can't be drawn.
+    pub fn white_margins(&self, index: usize) -> Option<crate::Margins> {
+        let (w, h) = self.pdf.pages().get(index)?.render_dimensions();
+        // About a point a pixel, smaller for a huge page.
+        let page = self.render_page(&self.new_cache(), index, 1.0).ok()?;
+        let (pw, ph) = (page.width as usize, page.height as usize);
+        if pw == 0 || ph == 0 {
+            return None;
+        }
+        let inked = |x: usize, y: usize| {
+            page.rgba
+                .get((y * pw + x) * 4..(y * pw + x) * 4 + 3)
+                .is_some_and(|px| px.iter().any(|&c| c < 245))
+        };
+        let row_inked = |y: usize| (0..pw).any(|x| inked(x, y));
+        let col_inked = |x: usize, rows: std::ops::Range<usize>| rows.clone().any(|y| inked(x, y));
+        let top = (0..ph).find(|&y| row_inked(y))?;
+        let bottom = (0..ph).rev().find(|&y| row_inked(y))?;
+        let left = (0..pw).find(|&x| col_inked(x, top..bottom + 1))?;
+        let right = (0..pw).rev().find(|&x| col_inked(x, top..bottom + 1))?;
+        #[allow(clippy::cast_precision_loss)]
+        let (sx, sy) = (w / pw as f32, h / ph as f32);
+        #[allow(clippy::cast_precision_loss)]
+        let margins = [
+            top as f32 * sy,
+            (pw - 1 - right) as f32 * sx,
+            (ph - 1 - bottom) as f32 * sy,
+            left as f32 * sx,
+        ];
+        Some(margins)
+    }
+
+    /// The document with the white around what's drawn trimmed from the pages at `pages`
+    /// (pages with no white margins, or blank, are left as they are).
+    pub fn white_trimmed(&self, pages: &[usize]) -> Result<Vec<u8>, crate::SaveError> {
+        let crops: Vec<(usize, crate::Margins)> = pages
+            .iter()
+            .filter_map(|&p| Some((p, self.white_margins(p)?)))
+            .filter(|(_, m)| m.iter().any(|v| *v >= 0.5))
+            .collect();
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::crop_each((&self.pdf, &self.bytes, self.password.as_str()), self.page_count(), &crops)
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }

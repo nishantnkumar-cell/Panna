@@ -31,7 +31,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Print | Later | Done: Ctrl+P or the printer button opens the system print dialog: KDE or GNOME through the desktop print portal (also in Flatpak), Windows' print dialog, and macOS's print panel with preview. Prints unsaved changes too, and honours a file's "no printing" permission |
 | Document properties (title, author, page size, PDF version) | V1 | Done (Ctrl+D) |
 | Password-protected (encrypted) PDFs | V1 | Done |
-| Read-aloud | Later | Done: All tools › Read this page aloud (the selected text, if any) or Read aloud to the end, turning pages as it goes; Ctrl+Shift+V, Ctrl+Shift+B and Ctrl+Shift+E to stop, as in Acrobat. Uses the system speech only: Windows speech, macOS `say`, or Speech Dispatcher or eSpeak on Linux (not yet in the Flatpak). Text is handed over on standard input, never on a command line |
+| Read-aloud | Later | Done: All tools › Read this page aloud (the selected text, if any) or Read aloud to the end, turning pages as it goes; Ctrl+Shift+V, Ctrl+Shift+B and Ctrl+Shift+E to stop, as in Acrobat. Pause and go on from the reading bar or the menu; it goes on from the start of the sentence it was paused in. Uses the system speech only: Windows speech, macOS `say`, or Speech Dispatcher or eSpeak on Linux (not yet in the Flatpak). Text is handed over on standard input, never on a command line |
 | Attachments panel (embedded files) | Later | Done: a paperclip tab in the sidebar, shown when a document has attached files (its own or on pages), lists each with size, page and description and saves a copy; files are never opened |
 | Layers (optional content) toggle | Later | Done: a Layers tab in the sidebar, shown when a document has layers, with a box to show or hide each one. Only the view changes, never the file |
 | Measuring tools (distance, area, perimeter) | Later | Done: the ruler button measures the distance between two points, or the perimeter and area of a shape (double-click its last corner), in millimetres, centimetres, inches or points. Measurements are shown, not saved |
@@ -80,7 +80,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Insert, delete, reorder, rotate pages | Later | Done: tools above the page thumbnails, with undo (Ctrl+Z). Saving writes a fresh file, so deleted pages can't be recovered from it. As Acrobat's Rotate Pages and Delete Pages dialogs, a range such as 2-5, 9 can be rotated (even or odd pages only, landscape or portrait pages only) or deleted (Ctrl+Shift+R, Ctrl+Shift+D) |
 | Extract pages, split document | Later | Done: pick pages such as 1-3, 5, 8- and save them as one PDF or each as its own PDF |
 | Merge / combine files | Later | Done: insert another PDF's pages after the current page |
-| Crop pages | Later | Done: trim margins in millimetres from the edges as shown, on this page or all pages |
+| Crop pages | Later | Done: trim margins in millimetres from the edges as shown, on this page or all pages, or Remove white margins to trim each page to what's drawn on it, as in Acrobat |
 | Headers, footers, page numbers, Bates numbering | Later | Done: left, centre and right text at the top and bottom, with {page}, {pages}, {page:6} for Bates numbers and {date}, on chosen pages. Drawn into the pages, so changing them later is Undo or adding new ones |
 | Watermarks and backgrounds | Later | Done: text watermark (colour, size or fit to page, angle, opacity, over or behind the content) and a page colour, on chosen pages. Picture watermarks too (PNG, JPEG or TIFF, such as a logo), sized as a share of the page width and written once however many pages show them |
 
@@ -142,7 +142,8 @@ work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-pr
 | Marquee zoom (drag a box to zoom into it) | Navigation | Done: the zoom tool beside the hand; a click zooms in a step |
 | Initial view: how a file opens (page, zoom, panels), saved into the PDF | Navigation | Done: "When this file opens" in Document properties (Ctrl+D) |
 | Replace pages from another PDF | Pages | Done: the replace button in the Pages tab; bookmarks and links follow the new pages |
-| Create a blank PDF; PDF from a screenshot or the clipboard | Pages | Done: in All tools. A screenshot comes in through the clipboard (every system can copy one there) |
+| Create a blank PDF; PDF from a screenshot or the clipboard | Pages | Done: in All tools. A screenshot comes in through the clipboard (every system can copy one there). Pages › Insert a page from the clipboard puts the picture on the clipboard into the open document as a page after the current one |
+| Duplicate a page | Pages | Done: Pages › Duplicate this page, or the button in the Pages tab, puts a copy after it; its comments and fields are copies of their own |
 | Edit page labels (i, ii, iii then 1, 2, 3) | Pages | Done: the labels button in the Pages tab; labels show in the page box and thumbnails, and a label can be typed to go to its page |
 | Split by bookmarks or by file size | Pages | Done: in Extract pages, save a PDF for each top-level bookmark, or PDFs of at most a chosen size |
 | Comment summary: a printable list of comments with their pages | Comments | Done: the summary button in the Comments tab, or All tools, saves the comments by page as a PDF and opens it; highlights quote the words they mark |

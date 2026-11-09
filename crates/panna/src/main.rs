@@ -564,6 +564,9 @@ struct App {
     extracting: Option<pages::Extracting>,
     /// Choosing how much to crop.
     cropping: Option<pages::Cropping>,
+    /// Where a picture pasted from the clipboard goes in the document, when it's inserted
+    /// as a page rather than made a new PDF.
+    paste_into: Option<usize>,
     /// The Rotate pages or Delete pages card.
     page_range: Option<ranges::PageRange>,
     /// Choosing headers and footers.
@@ -727,6 +730,22 @@ enum NewPdf {
 }
 
 /// Asks where to save a new PDF, suggesting `name`.
+/// Reads a picture from the clipboard, off the main thread.
+fn read_clipboard_picture() -> Task<Message> {
+    Task::perform(
+        async {
+            let (tx, rx) = futures_channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(clipboard::paste_picture());
+            });
+            rx.await
+                .unwrap_or_else(|_| Err("The clipboard couldn't be read.".into()))
+                .map(|(w, h, rgba)| (w, h, std::sync::Arc::new(rgba)))
+        },
+        Message::ClipboardPicture,
+    )
+}
+
 fn ask_new_pdf_path(name: &'static str) -> Task<Message> {
     Task::perform(
         async move {
@@ -1142,6 +1161,7 @@ impl App {
             printing: false,
             extracting: None,
             cropping: None,
+            paste_into: None,
             page_range: None,
             marking: None,
             watermarking: None,
@@ -2539,6 +2559,13 @@ impl App {
                         self.reader.stop();
                         Task::none()
                     }
+                    speech::Event::Pause => match self.reader.toggle_pause() {
+                        Ok(task) => task.unwrap_or_else(Task::none),
+                        Err(e) => {
+                            self.notice = Some(e);
+                            Task::none()
+                        }
+                    },
                     speech::Event::Page | speech::Event::ToEnd if self.doc.is_some() => {
                         if matches!(event, speech::Event::Page)
                             && let Some(text) = self.selected_text()
@@ -3520,23 +3547,24 @@ impl App {
                 }
                 Task::none()
             }
-            Message::FromClipboard => Task::perform(
-                async {
-                    let (tx, rx) = futures_channel::oneshot::channel();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(clipboard::paste_picture());
-                    });
-                    rx.await
-                        .unwrap_or_else(|_| Err("The clipboard couldn't be read.".into()))
-                        .map(|(w, h, rgba)| (w, h, std::sync::Arc::new(rgba)))
-                },
-                Message::ClipboardPicture,
-            ),
+            Message::FromClipboard => {
+                self.paste_into = None;
+                read_clipboard_picture()
+            }
+            Message::ClipboardPicture(Ok((width, height, rgba))) if self.paste_into.is_some() => {
+                let at = self.paste_into.take().unwrap_or(0);
+                if self.doc.is_none() || self.pages_busy || self.saving {
+                    return Task::none();
+                }
+                let rgba = std::sync::Arc::unwrap_or_clone(rgba);
+                self.edit_pages(PageEdit::InsertPicture { at, width, height, rgba }, at, false)
+            }
             Message::ClipboardPicture(Ok((width, height, rgba))) => {
                 self.new_pdf = Some(NewPdf::Picture { width, height, rgba });
                 ask_new_pdf_path("Clipboard.pdf")
             }
             Message::ClipboardPicture(Err(e)) => {
+                self.paste_into = None;
                 self.notice = Some(e);
                 Task::none()
             }
@@ -3751,11 +3779,14 @@ impl App {
                         }
                     }
                     pages::CropEvent::All(all) => state.all = all,
+                    pages::CropEvent::White(white) => state.white = white,
                     pages::CropEvent::Cancel => self.cropping = None,
                     pages::CropEvent::Go => {
-                        let Ok(margins) = pages::crop_margins(state) else {
+                        let margins = pages::crop_margins(state);
+                        let white = state.white;
+                        if !white && margins.is_err() {
                             return Task::none();
-                        };
+                        }
                         let all = state.all;
                         let current = self.current_page();
                         let pages = if all {
@@ -3767,7 +3798,12 @@ impl App {
                         if self.pages_busy || self.saving {
                             return Task::none();
                         }
-                        return self.edit_pages(PageEdit::Crop { pages, margins }, current, false);
+                        let edit = match margins {
+                            _ if white => PageEdit::TrimWhite(pages),
+                            Ok(margins) => PageEdit::Crop { pages, margins },
+                            Err(_) => return Task::none(),
+                        };
+                        return self.edit_pages(edit, current, false);
                     }
                 }
                 Task::none()
@@ -4305,6 +4341,11 @@ impl App {
         match op {
             pages::Op::Undo if self.page_edits > 0 => self.edit_pages(PageEdit::Undo, current, true),
             pages::Op::Undo => Task::none(),
+            pages::Op::Duplicate => self.edit_pages(PageEdit::Duplicate(current), current + 1, false),
+            pages::Op::InsertClipboard => {
+                self.paste_into = Some(current + 1);
+                read_clipboard_picture()
+            }
             pages::Op::InsertFile => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
@@ -6723,6 +6764,12 @@ impl App {
                         "Insert pages from a PDF…",
                         pages::Op::InsertFile,
                     ),
+                    op(
+                        Icon::FromClipboard,
+                        "Insert a page from the clipboard",
+                        pages::Op::InsertClipboard,
+                    ),
+                    op(Icon::Duplicate, "Duplicate this page", pages::Op::Duplicate),
                     op(Icon::PageReplace, "Replace pages…", pages::Op::Replace),
                     op(Icon::PageExtract, "Extract or split pages…", pages::Op::Extract),
                     op(Icon::Delete, "Delete this page", pages::Op::Delete),
@@ -6818,6 +6865,13 @@ impl App {
                             "To the end",
                             k("Shift+B"),
                             on(Message::ReadAloud(speech::Event::ToEnd)),
+                        ),
+                        plain(
+                            if self.reader.paused() { "Go on" } else { "Pause" },
+                            "",
+                            self.reader
+                                .active()
+                                .then_some(Message::ReadAloud(speech::Event::Pause)),
                         ),
                         plain(
                             "Stop",
