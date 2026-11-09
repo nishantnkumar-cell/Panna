@@ -83,7 +83,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             // Acrobat's page keys: insert blank pages, insert files, delete pages.
             Key::Character("t" | "T") => Some(Message::Pages(crate::pages::Op::InsertBlank)),
             Key::Character("i" | "I") => Some(Message::Pages(crate::pages::Op::InsertFile)),
-            Key::Character("d" | "D") => Some(Message::Pages(crate::pages::Op::Delete)),
+            Key::Character("d" | "D") => Some(Message::Pages(crate::pages::Op::DeletePages)),
+            Key::Character("r" | "R") => Some(Message::Pages(crate::pages::Op::RotatePages)),
             // Automatic scrolling.
             Key::Character("h" | "H") => Some(Message::AutoScroll),
             // Acrobat's Read Out Loud keys.
@@ -113,6 +114,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("f") => Some(Message::Find(Event::Open)),
             Key::Character("g") => Some(Message::Find(Event::Next)),
             Key::Character("c") => Some(Message::Copy),
+            Key::Character("a") => Some(Message::SelectAll),
             Key::Character("s") => Some(Message::Save),
             Key::Character("p") => Some(Message::Print),
             Key::Character("b") => Some(Message::AddBookmark),
@@ -279,7 +281,7 @@ mod tests {
         let cs = Modifiers::COMMAND | Modifiers::SHIFT;
         assert!(matches!(
             letter("D", cs),
-            Some(Message::Pages(crate::pages::Op::Delete))
+            Some(Message::Pages(crate::pages::Op::DeletePages))
         ));
         assert!(matches!(
             letter("T", cs),

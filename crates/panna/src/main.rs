@@ -33,6 +33,7 @@ mod preflight;
 mod prepare;
 mod print;
 mod protect;
+mod ranges;
 mod redact;
 mod scan;
 mod selection;
@@ -182,6 +183,8 @@ enum Message {
     Present,
     /// Next or previous page while presenting; ignored otherwise.
     Advance(bool),
+    /// A frame while presenting, to turn pages on a timer.
+    PresentTick(std::time::Instant),
     /// A page tool from the Pages tab.
     Pages(pages::Op),
     /// The PDF to insert pages from, once chosen.
@@ -190,6 +193,7 @@ enum Message {
     Extract(pages::ExtractEvent),
     /// The Crop pages card.
     Crop(pages::CropEvent),
+    PageRange(ranges::Event),
     /// The Headers and footers card.
     Mark(pages::MarkEvent),
     /// The Watermark card.
@@ -294,6 +298,8 @@ enum Message {
     ShowSidebar,
     /// Opens or closes the tools card.
     ToggleAllTools,
+    /// Selects all the text in the document.
+    SelectAll,
     /// Adds a bookmark for this page, named after the selected text if there is any.
     AddBookmark,
     PageSubmit,
@@ -520,6 +526,8 @@ struct App {
     space_held: Option<bool>,
     /// Read mode is on.
     read_mode: bool,
+    /// When the page being presented came up, for turning pages on a timer.
+    presented_at: Option<std::time::Instant>,
     /// Automatic scrolling is on.
     auto_scroll: bool,
     /// The text markup and drawing tools U and D pick: the last of each used.
@@ -555,6 +563,8 @@ struct App {
     extracting: Option<pages::Extracting>,
     /// Choosing how much to crop.
     cropping: Option<pages::Cropping>,
+    /// The Rotate pages or Delete pages card.
+    page_range: Option<ranges::PageRange>,
     /// Choosing headers and footers.
     marking: Option<pages::Marking>,
     /// Choosing a watermark or page colour.
@@ -823,6 +833,9 @@ struct View {
     zoom: f32,
 }
 
+/// Pages whose text Select All loads, at most.
+const MAX_SELECT_ALL_PAGES: usize = 2_000;
+
 /// Views remembered for Previous View, at most.
 const MAX_VIEWS: usize = 100;
 
@@ -941,7 +954,7 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
             format!("{m}Shift+T, {m}Shift+I"),
             "Insert a blank page, insert a file",
         ),
-        (format!("{m}Shift+D"), "Delete this page"),
+        (format!("{m}Shift+D, {m}Shift+R"), "Delete pages, rotate pages"),
         (format!("{m}B"), "Add a bookmark"),
         ("F4, Shift+F4".into(), "Navigation pane, all tools"),
         (format!("{m}H"), "Read mode"),
@@ -1126,6 +1139,7 @@ impl App {
             printing: false,
             extracting: None,
             cropping: None,
+            page_range: None,
             marking: None,
             watermarking: None,
             exporting: None,
@@ -1161,6 +1175,7 @@ impl App {
             hand: false,
             space_held: None,
             read_mode: false,
+            presented_at: None,
             auto_scroll: false,
             last_markup: annotate::Tool::Highlight,
             last_drawing: annotate::Tool::Pen,
@@ -1232,6 +1247,9 @@ impl App {
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
         if self.auto_scroll {
             subs.push(window::frames().map(|_| Message::AutoScrollTick));
+        }
+        if matches!(self.screen, Screen::Present { .. }) && self.settings.present_seconds > 0 {
+            subs.push(window::frames().map(Message::PresentTick));
         }
         #[cfg(target_os = "macos")]
         subs.push(finder::subscription());
@@ -1610,6 +1628,23 @@ impl App {
                 Task::none()
             }
             Message::ToggleAllTools => self.update(Message::AllTools(!self.all_tools)),
+            Message::SelectAll => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let pages = doc.pages.len();
+                if pages == 0 {
+                    return Task::none();
+                }
+                self.selection = Some(Selection {
+                    anchor: selection::Caret { page: 0, index: 0 },
+                    focus: selection::Caret {
+                        page: pages - 1,
+                        index: usize::MAX,
+                    },
+                });
+                // Every page's text, so copying gets all of it; very long documents are
+                // capped to keep memory in check.
+                self.request_text(0..pages.min(MAX_SELECT_ALL_PAGES))
+            }
             Message::AddBookmark => {
                 if self.doc.is_none() {
                     return Task::none();
@@ -1723,10 +1758,27 @@ impl App {
             },
             Message::Advance(forward) => match self.screen {
                 Screen::Present { page, .. } => {
-                    self.present_page(if forward { page + 1 } else { page.saturating_sub(1) })
+                    let last = self.doc.as_ref().map_or(0, |d| d.pages.len().saturating_sub(1));
+                    // Loop after the last page, as Acrobat's Full Screen preference does.
+                    let next = match (forward, page >= last, page == 0) {
+                        (true, true, _) if self.settings.present_loop => 0,
+                        (false, _, true) if self.settings.present_loop => last,
+                        (true, _, _) => page + 1,
+                        (false, _, _) => page.saturating_sub(1),
+                    };
+                    self.present_page(next)
                 }
                 _ => Task::none(),
             },
+            Message::PresentTick(now) => {
+                let seconds = self.settings.present_seconds;
+                match self.presented_at {
+                    Some(at) if seconds > 0 && now.duration_since(at).as_secs() >= u64::from(seconds) => {
+                        self.update(Message::Advance(true))
+                    }
+                    _ => Task::none(),
+                }
+            }
             Message::PasswordInput(value) => {
                 if let Status::Password { input, .. } = &mut self.status {
                     // Replacing it wipes the previous copy.
@@ -1829,6 +1881,8 @@ impl App {
                     self.extracting = None;
                 } else if self.cropping.is_some() {
                     self.cropping = None;
+                } else if self.page_range.is_some() {
+                    self.page_range = None;
                 } else if self.marking.is_some() {
                     self.marking = None;
                 } else if self.watermarking.is_some() {
@@ -3416,6 +3470,8 @@ impl App {
                         self.measure.unit = unit;
                     }
                     preferences::Event::SingleKeys(on) => self.settings.single_keys = on,
+                    preferences::Event::PresentLoop(on) => self.settings.present_loop = on,
+                    preferences::Event::PresentSeconds(s) => self.settings.present_seconds = s,
                     preferences::Event::DefaultApp => {
                         self.default_app_note = Some(preferences::make_default());
                     }
@@ -3636,6 +3692,32 @@ impl App {
                         }
                         let current = self.current_page();
                         return self.edit_pages(PageEdit::HeaderFooter { pages, marks }, current, false);
+                    }
+                }
+                Task::none()
+            }
+            Message::PageRange(event) => {
+                let Some(state) = &mut self.page_range else {
+                    return Task::none();
+                };
+                match event {
+                    ranges::Event::Pages(v) => {
+                        state.pages = v.chars().filter(|c| !c.is_control()).take(200).collect();
+                    }
+                    ranges::Event::Turns(t) => state.turns = t,
+                    ranges::Event::Parity(p) => state.parity = p,
+                    ranges::Event::Orientation(o) => state.orientation = o,
+                    ranges::Event::Cancel => self.page_range = None,
+                    ranges::Event::Go => {
+                        let Some(doc) = &self.doc else { return Task::none() };
+                        let Ok((plan, show)) = state.plan(&doc.info.pages) else {
+                            return Task::none();
+                        };
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        self.page_range = None;
+                        return self.edit_pages(PageEdit::Plan(plan), show, false);
                     }
                 }
                 Task::none()
@@ -4248,6 +4330,15 @@ impl App {
                 self.marking = Some(pages::Marking::new(count));
                 operation::focus(pages::mark_input_id())
                     .chain(operation::move_cursor_to_end(pages::mark_input_id()))
+            }
+            pages::Op::RotatePages | pages::Op::DeletePages => {
+                let action = if op == pages::Op::RotatePages {
+                    ranges::Action::Rotate
+                } else {
+                    ranges::Action::Delete
+                };
+                self.page_range = Some(ranges::PageRange::new(action, current));
+                operation::focus(ranges::input_id()).chain(operation::select_all(ranges::input_id()))
             }
             pages::Op::Crop => {
                 self.cropping = Some(pages::Cropping::default());
@@ -5660,6 +5751,7 @@ impl App {
         if let Screen::Present { page, .. } = &mut self.screen {
             *page = index;
         }
+        self.presented_at = Some(std::time::Instant::now());
         let fit = (self.window_size.width / size.width.max(1.0))
             .min(self.window_size.height / size.height.max(1.0));
         self.zoom = fit.clamp(MIN_ZOOM, MAX_ZOOM);
@@ -6318,6 +6410,7 @@ impl App {
                 ),
                 Separator,
                 plain("Copy", k("C"), on(Message::Copy)),
+                plain("Select all", k("A"), on(Message::SelectAll)),
                 check("Snapshot", "", self.snapping, on(Message::ToggleSnapshot)),
                 Separator,
                 item(
@@ -6562,7 +6655,8 @@ impl App {
                     let keys = match op {
                         pages::Op::InsertBlank => k("Shift+T"),
                         pages::Op::InsertFile => k("Shift+I"),
-                        pages::Op::Delete => k("Shift+D"),
+                        pages::Op::DeletePages => k("Shift+D"),
+                        pages::Op::RotatePages => k("Shift+R"),
                         _ => String::new(),
                     };
                     item(icon, label, keys, on(Message::Pages(op)))
@@ -6570,6 +6664,7 @@ impl App {
                 vec![
                     op(Icon::RotateCcw, "Rotate this page left", pages::Op::RotateCcw),
                     op(Icon::RotateCw, "Rotate this page right", pages::Op::RotateCw),
+                    op(Icon::RotateCw, "Rotate pages…", pages::Op::RotatePages),
                     op(Icon::MoveUp, "Move this page up", pages::Op::MoveUp),
                     op(Icon::MoveDown, "Move this page down", pages::Op::MoveDown),
                     Separator,
@@ -6586,6 +6681,7 @@ impl App {
                     op(Icon::PageReplace, "Replace pages…", pages::Op::Replace),
                     op(Icon::PageExtract, "Extract or split pages…", pages::Op::Extract),
                     op(Icon::Delete, "Delete this page", pages::Op::Delete),
+                    op(Icon::Delete, "Delete pages…", pages::Op::DeletePages),
                     Separator,
                     op(Icon::Crop, "Crop pages…", pages::Op::Crop),
                     op(
@@ -6879,6 +6975,12 @@ impl App {
                 Message::Extract(pages::ExtractEvent::Cancel),
             ));
         }
+        if let (Some(state), Some(doc)) = (&self.page_range, &self.doc) {
+            layers.push(modal(
+                ranges::card(state, &doc.info.pages),
+                Message::PageRange(ranges::Event::Cancel),
+            ));
+        }
         if let Some(state) = &self.cropping {
             layers.push(modal(
                 pages::crop_card(state),
@@ -6936,6 +7038,8 @@ impl App {
                     zoom: self.settings.open_zoom,
                     unit: self.settings.unit,
                     single_keys: self.settings.single_keys,
+                    present_loop: self.settings.present_loop,
+                    present_seconds: self.settings.present_seconds,
                     note: self.default_app_note.as_deref(),
                 }),
                 Message::Preferences(preferences::Event::Close),

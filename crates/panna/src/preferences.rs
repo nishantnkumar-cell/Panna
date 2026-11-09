@@ -106,6 +106,8 @@ pub enum Event {
     Zoom(OpenZoom),
     Unit(Unit),
     SingleKeys(bool),
+    PresentLoop(bool),
+    PresentSeconds(u32),
     /// Asks the system to make Panna the default PDF app, or says how.
     DefaultApp,
     Close,
@@ -120,6 +122,8 @@ pub struct View<'a> {
     pub zoom: OpenZoom,
     pub unit: Unit,
     pub single_keys: bool,
+    pub present_loop: bool,
+    pub present_seconds: u32,
     pub note: Option<&'a str>,
 }
 
@@ -170,6 +174,37 @@ pub fn card(view: View<'_>) -> Element<'_, Message> {
         checkbox(view.single_keys)
             .label("Use single-key accelerators to access tools (H hand, Z zoom, S note, U highlight…)")
             .on_toggle(move |on| ev(Event::SingleKeys(on))),
+        row![
+            label("Full screen, pages only"),
+            checkbox(view.present_loop)
+                .label("Loop after the last page")
+                .on_toggle(move |on| ev(Event::PresentLoop(on))),
+        ]
+        .spacing(8)
+        .align_y(Center),
+        row![
+            label(""),
+            checkbox(view.present_seconds > 0)
+                .label("Advance every")
+                .on_toggle(move |on| ev(Event::PresentSeconds(if on { 5 } else { 0 }))),
+            text_input(
+                "5",
+                &if view.present_seconds > 0 {
+                    view.present_seconds.to_string()
+                } else {
+                    String::new()
+                }
+            )
+            .on_input(move |s| ev(Event::PresentSeconds(
+                s.trim()
+                    .parse::<u32>()
+                    .map_or(0, |n| n.min(crate::settings::MAX_SECONDS))
+            )))
+            .width(50),
+            text("seconds"),
+        ]
+        .spacing(8)
+        .align_y(Center),
         row![
             label("Default PDF app"),
             button("Make Panna the default…")

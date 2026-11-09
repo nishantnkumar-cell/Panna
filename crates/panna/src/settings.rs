@@ -15,6 +15,8 @@ const MAX_BYTES: u64 = 64 * 1024;
 const MAX_RECENT: usize = 10;
 /// Longest name kept for comments.
 const MAX_AUTHOR: usize = 200;
+/// Longest wait between pages when presenting on a timer, in seconds.
+pub const MAX_SECONDS: u32 = 3600;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -31,6 +33,10 @@ pub struct Settings {
     pub unit: Unit,
     /// Single letters pick tools, as Acrobat's "Use single-key accelerators to access tools".
     pub single_keys: bool,
+    /// Full screen: go back to the first page after the last.
+    pub present_loop: bool,
+    /// Full screen: turn the page every this many seconds; 0 for never.
+    pub present_seconds: u32,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -49,6 +55,8 @@ impl Default for Settings {
             open_zoom: OpenZoom::ActualSize,
             unit: Unit::default(),
             single_keys: true,
+            present_loop: false,
+            present_seconds: 0,
             recent: Vec::new(),
         }
     }
@@ -114,6 +122,10 @@ impl Settings {
                 "view.open_zoom" => out.open_zoom = OpenZoom::parse(value.trim()).unwrap_or(out.open_zoom),
                 "measure.unit" => out.unit = Unit::parse(value.trim()).unwrap_or(out.unit),
                 "keys.single" => out.single_keys = value.trim() != "false",
+                "present.loop" => out.present_loop = value.trim() == "true",
+                "present.seconds" => {
+                    out.present_seconds = value.trim().parse::<u32>().map_or(0, |s| s.min(MAX_SECONDS));
+                }
                 "comments.author" => out.author = value.trim().chars().take(MAX_AUTHOR).collect(),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
@@ -137,11 +149,13 @@ impl Settings {
             self.colors.as_str(),
         ));
         out.push_str(&format!(
-            "view.appearance={}\nview.open_zoom={}\nmeasure.unit={}\nkeys.single={}\n",
+            "view.appearance={}\nview.open_zoom={}\nmeasure.unit={}\nkeys.single={}\npresent.loop={}\npresent.seconds={}\n",
             self.appearance.as_str(),
             self.open_zoom.as_str(),
             self.unit.as_str(),
             self.single_keys,
+            self.present_loop,
+            self.present_seconds,
         ));
         // A name with a line break can't be stored in this format.
         if !self.author.contains(['\n', '\r']) {
@@ -208,6 +222,8 @@ mod tests {
             open_zoom: OpenZoom::FitWidth,
             unit: Unit::Inches,
             single_keys: false,
+            present_loop: true,
+            present_seconds: 7,
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
