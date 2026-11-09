@@ -60,6 +60,7 @@ fn reads_nested_bookmarks_with_explicit_and_named_destinations() {
                     number: 7,
                     generation: 0
                 }),
+                ..Default::default()
             },
             OutlineItem {
                 title: "Details".into(),
@@ -69,6 +70,7 @@ fn reads_nested_bookmarks_with_explicit_and_named_destinations() {
                     number: 9,
                     generation: 0
                 }),
+                ..Default::default()
             },
             OutlineItem {
                 title: "Ch 2".into(),
@@ -78,6 +80,7 @@ fn reads_nested_bookmarks_with_explicit_and_named_destinations() {
                     number: 8,
                     generation: 0
                 }),
+                ..Default::default()
             },
         ]
     );
@@ -132,6 +135,7 @@ fn bookmarks_are_renamed_moved_added_and_removed() {
         depth: 0,
         page: Some(0),
         id: None,
+        ..Default::default()
     };
     let bytes = doc.with_bookmarks(&[two, one, new]).unwrap();
     let edited = reopen(&doc, bytes.clone());
@@ -150,12 +154,46 @@ fn bookmarks_are_renamed_moved_added_and_removed() {
     // "One" kept its exact destination and colour: its page didn't change.
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("/Dest [3 0 R /XYZ 0 500 2]"), "{text}");
-    assert!(text.contains("/C [1 0 0]"));
+    assert_eq!(edited[1].color, Some([255, 0, 0]));
+    assert!(text.contains("/C [1.000 0.000 0.000]"), "{text}");
 
     // Removing every bookmark leaves an empty outline.
     let edited = doc.reopen(bytes).unwrap();
     let bytes = edited.with_bookmarks(&[]).unwrap();
     assert!(reopen(&edited, bytes).is_empty());
+}
+
+#[test]
+fn bookmark_colour_style_and_open_state_are_read_and_saved() {
+    let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>"];
+    objects.extend(PAGES);
+    objects.extend([
+        "<< /Type /Outlines /First 7 0 R /Last 7 0 R /Count 1 >>",
+        "<< /Title (Parent) /Parent 6 0 R /First 8 0 R /Last 8 0 R /Count -1 /F 3 /C [0 0 1] \
+         /Dest [3 0 R /Fit] >>",
+        "<< /Title (Child) /Parent 7 0 R /Dest [4 0 R /Fit] >>",
+    ]);
+    let doc = Document::from_bytes(build(&objects), None, Limits::default()).unwrap();
+    let mut items = doc.info().unwrap().outline;
+    let parent = items.first().unwrap();
+    assert_eq!(
+        (parent.color, parent.bold, parent.italic, parent.closed),
+        (Some([0, 0, 255]), true, true, true)
+    );
+    let child = items.get(1).unwrap();
+    assert_eq!((child.color, child.bold, child.italic, child.closed), (None, false, false, false));
+
+    // Restyled: the parent plain and open, the child bold red.
+    items[0].bold = false;
+    items[0].italic = false;
+    items[0].color = None;
+    items[0].closed = false;
+    items[1].bold = true;
+    items[1].color = Some([204, 0, 0]);
+    let bytes = doc.with_bookmarks(&items).unwrap();
+    let saved = reopen(&doc, bytes);
+    let looks: Vec<_> = saved.iter().map(|i| (i.color, i.bold, i.italic, i.closed)).collect();
+    assert_eq!(looks, [(None, false, false, false), (Some([204, 0, 0]), true, false, false)]);
 }
 
 #[test]
@@ -169,6 +207,7 @@ fn bookmarks_can_be_added_to_a_file_without_any() {
             depth: 0,
             page: Some(0),
             id: None,
+            ..Default::default()
         },
         // Too deep for where it is: becomes a child of "Start".
         OutlineItem {
@@ -176,6 +215,7 @@ fn bookmarks_can_be_added_to_a_file_without_any() {
             depth: 5,
             page: Some(2),
             id: None,
+            ..Default::default()
         },
     ];
     let bytes = doc.with_bookmarks(&items).unwrap();

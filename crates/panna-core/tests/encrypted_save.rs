@@ -182,6 +182,7 @@ fn bookmarks_added_to_encrypted_files_read_back() {
             depth: 0,
             page: Some(0),
             id: None,
+            ..Default::default()
         }];
         let saved = doc.with_bookmarks(&added).unwrap();
         let again = doc.reopen(saved.clone()).unwrap();

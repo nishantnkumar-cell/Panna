@@ -15,7 +15,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Zoom in/out, fit width, fit page, actual size | V1 | Done |
 | Rotate view | V1 | Done |
 | Page thumbnails sidebar | V1 | Done (F4); left or right edge, remembered |
-| Bookmarks / outline panel | V1 | Done; nested, click to jump. Editing done: in the Bookmarks tab, add one for the page on screen, rename, move up and down, in and out a level, and delete (with the ones under it); changes can be undone and are saved into the file |
+| Bookmarks / outline panel | V1 | Done; nested, click to jump. Editing done: in the Bookmarks tab, add one for the page on screen, rename, move up and down, in and out a level, and delete (with the ones under it); changes can be undone and are saved into the file. As in Acrobat's bookmark properties, a title can be coloured and made bold or italic; bookmarks with others under them open and close, Expand all and Collapse all do every one, and the open state is saved with the next bookmark change |
 | Go to page, next/previous page | V1 | Done |
 | Text search (find, find next, match case, whole word) | V1 | Done: search panel in the sidebar listing every result in context, like Word (Ctrl+F, F3/Shift+F3); includes hidden OCR text |
 | Select and copy text | V1 | Done; drag or double-click, Ctrl+C; across pages; Linux middle-click paste |

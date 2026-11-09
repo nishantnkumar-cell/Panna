@@ -590,6 +590,7 @@ mod tests {
             depth: 0,
             page,
             id: None,
+            ..Default::default()
         };
         let outline = [
             item(Some(2)),
