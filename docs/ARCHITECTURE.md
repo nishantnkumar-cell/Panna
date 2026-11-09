@@ -47,11 +47,12 @@ without iced.
 
 ## Security model
 
-See [SECURITY.md](../SECURITY.md) for the policy. The technical controls are:
+See [SECURITY.md](../SECURITY.md) for the policy and [THREAT_MODEL.md](THREAT_MODEL.md) for the full\nthreat model. The technical controls are:
 
 1. `#![forbid(unsafe_code)]` in every crate we write, except `panna-print`, which calls the
-   Windows and macOS print dialogs. It never sees the original file, only the password-free
-   copy made for printing, and each `unsafe` block there says why it is sound.
+   Windows and macOS print dialogs and, on macOS, receives the files opened from Finder. The
+   print code never sees the original file, only the password-free copy made for printing; the
+   Finder code passes on file paths only. Each `unsafe` block there says why it is sound.
 2. Input limits: maximum file size, maximum page count, a cap on render bitmap dimensions and
    total pixels. These stop "decompression bomb" style PDFs from exhausting memory.
 3. Panic containment around all engine calls.
@@ -63,9 +64,14 @@ See [SECURITY.md](../SECURITY.md) for the policy. The technical controls are:
 7. Supply chain: `cargo-audit` (RustSec advisories) and `cargo-deny` (licenses, bans, sources)
    run on every push. `Cargo.lock` is committed.
 
-### Process isolation (planned, before 1.0)
+### Process isolation
 
-Move the render worker into a child process that has no file system or network access
-(seccomp on Linux, App Sandbox on macOS, an AppContainer / restricted token on Windows). The
-UI sends it the file bytes and gets back bitmaps. That way even a bug in a dependency's
-`unsafe` code (SIMD, image decoders) can't reach the user's files.
+Pages shown on screen are drawn in a child process: the app starts a copy of itself with
+`--panna-render`, which locks itself down (`crates/panna-sandbox`) before it reads PDF data,
+then loads the document's bytes and returns bitmaps over its standard input and output
+(`panna_core::isolate`). A crash, a page over 30 seconds or one that runs out of memory
+loses only that page; the next one starts a fresh renderer. On Linux the renderer has no
+file-system access (Landlock), no sockets or program starts (seccomp) and a 4 GB address
+space; on Windows it runs at low integrity in a job object with a 4 GB memory cap; on macOS
+only the memory cap applies so far. Text extraction, export, printing and editing still run
+in the app's worker thread.

@@ -1,9 +1,13 @@
-//! The system print dialogs on Windows and macOS.
+//! The system print dialogs on Windows and macOS, and on macOS the files opened from Finder.
 //!
 //! Both are reachable only through OS calls that Rust can't check, so this is the one crate in
 //! Panna that may use `unsafe`, and only in the module for each system. Everything else here,
 //! such as where a page goes on the paper, is ordinary safe code. On Linux, Panna prints through
 //! the desktop's print portal instead, which needs none of this.
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub mod finder;
 
 /// A page's size in points (1/72 inch), as it is shown, its turn included.
 #[derive(Debug, Clone, Copy, PartialEq)]

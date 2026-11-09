@@ -11,7 +11,7 @@ use super::picture::StampImage;
 use crate::{ObjRef, ReviewState, TextBox};
 
 /// An RGB colour, each channel 0–1.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Color(pub [f32; 3]);
 
 impl Color {
@@ -22,7 +22,7 @@ impl Color {
 
 /// What an annotation looks like. Coordinates are in page points as displayed: origin at the
 /// top left, y down, the page's own `/Rotate` applied (the same space as [`TextBox`]).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     Highlight(Vec<TextBox>),
     Underline(Vec<TextBox>),
@@ -76,7 +76,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Annotation {
     pub page: usize,
     pub kind: Kind,

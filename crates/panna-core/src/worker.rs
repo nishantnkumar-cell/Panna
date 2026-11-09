@@ -5,6 +5,7 @@ use std::thread;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::remote::{Answer, Doc, Engine, Op, Revision};
 use crate::{
     Changes, Comment, Document, DocumentInfo, Limits, OpenError, PageSource, PageText, RenderError,
     RenderedPage, SaveError,
@@ -17,9 +18,33 @@ type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type SplitReply = Box<dyn FnOnce(Result<usize, SaveError>) + Send>;
+
+/// Splitting pages into files of at most a size.
+struct SizeSplit {
+    pages: Vec<usize>,
+    limit: u64,
+    /// Files are named `{stem} part {n}.pdf` in this folder.
+    dir: PathBuf,
+    stem: String,
+}
 type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), String>) + Send>;
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
+type ArchiveReply = Box<dyn FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send>;
+type TagReply = Box<dyn FnOnce(Result<Vec<crate::AccessFinding>, SaveError>) + Send>;
+/// What signing needs.
+pub(crate) struct SignJob {
+    path: PathBuf,
+    id: crate::DigitalId,
+    options: crate::SignOptions,
+}
+
+type SignReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
+type AccessReply = Box<dyn FnOnce(Vec<crate::AccessFinding>) + Send>;
+type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
 type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
+type LeftoversReply = Box<dyn FnOnce(crate::Leftovers) + Send>;
 type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 
@@ -27,12 +52,19 @@ type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
 const MAX_PAGE_UNDO: usize = 20;
 
 /// A change to the document's pages. Unsaved changes are made part of the document first.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PageEdit {
     /// The new page list (see [`Document::rearranged`]).
     Plan(Vec<PageSource>),
     /// Every page of another file, inserted before page `at`.
     InsertFile { at: usize, path: PathBuf },
+    /// `count` pages from `first` replaced by another file's pages from `from`.
+    ReplaceFromFile {
+        first: usize,
+        count: usize,
+        from: usize,
+        path: PathBuf,
+    },
     /// Trims margins (top, right, bottom, left as shown, in points) from these pages.
     Crop {
         pages: Vec<usize>,
@@ -43,6 +75,12 @@ pub enum PageEdit {
         pages: Vec<usize>,
         marks: crate::HeaderFooter,
     },
+    /// Replaces the bookmarks with these, in reading order.
+    Bookmarks(Vec<crate::OutlineItem>),
+    /// Sets how the document opens.
+    InitialView(crate::InitialView),
+    /// Labels the pages with these ranges, by start page.
+    PageLabels(Vec<crate::LabelRange>),
     /// Draws a watermark or background on these pages.
     Watermark {
         pages: Vec<usize>,
@@ -60,8 +98,12 @@ pub enum PageEdit {
         changes: Vec<(usize, crate::PictureChange)>,
     },
     /// Takes everything inside these areas (as page text boxes, per page) out for good, and
-    /// covers them in black.
-    Redact(Vec<(usize, Vec<crate::TextBox>)>),
+    /// covers them in black; and the comments and bookmark titles that mention one of
+    /// `scrub` (see [`Document::leftovers`]).
+    Redact {
+        areas: Vec<(usize, Vec<crate::TextBox>)>,
+        scrub: Vec<String>,
+    },
     /// Adds new form fields and takes out these ones.
     FormFields {
         add: Vec<crate::NewField>,
@@ -71,8 +113,13 @@ pub enum PageEdit {
     Clean(crate::Cleanup),
     /// Gives the document new password protection, or removes it.
     Protect(Option<crate::Protection>),
+    /// Redoes RC4 or AES-128 protection with AES-256 (see [`Document::strengthened`]).
+    Strengthen,
     /// Draws comments, form fields or both into the pages.
     Flatten { comments: bool, fields: bool },
+    /// Recognises the text on these pages (those without text of their own), and lays it over
+    /// them invisibly.
+    Recognise(Vec<usize>),
     /// Goes back to before the last page change.
     Undo,
 }
@@ -101,11 +148,13 @@ enum Reply {
     Save(PathBuf, SaveReply),
     Pages(PageEdit, PagesReply),
     Extract(Vec<(Vec<PageSource>, PathBuf)>, ExtractReply),
+    SplitBySize(SizeSplit, SplitReply),
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
-    Print(PrintReply),
+    Print(bool, PrintReply),
+    CommentSummary(PathBuf, String, ExtractReply),
     /// Writes a smaller copy of the document.
-    Compact(PathBuf, CompactReply),
+    Compact(PathBuf, Option<u32>, CompactReply),
     /// Writes the document's comments to a comments file.
     ExportComments(PathBuf, crate::DataFormat, String, ExtractReply),
     /// Reads a comments file into annotations for this document.
@@ -114,6 +163,17 @@ enum Reply {
     Compare(PathBuf, CompareReply),
     /// Where the pictures on a page are.
     Pictures(usize, PicturesReply),
+    /// What redacting these areas would leave in bookmarks and comments.
+    Leftovers(Vec<(usize, Vec<crate::TextBox>)>, LeftoversReply),
+    /// Where form fields could go.
+    DetectFields(DetectReply),
+    /// What keeps the document from being PDF/A.
+    Preflight(crate::Standard, PreflightReply),
+    Accessibility(AccessReply),
+    /// Writes a PDF/A copy.
+    Archive(PathBuf, ArchiveReply),
+    Tag(PathBuf, TagReply),
+    Sign(Box<SignJob>, SignReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
     /// A page drawn at a scale and turned, then cut to an area.
@@ -246,6 +306,32 @@ impl RenderWorker {
         });
     }
 
+    /// Saves `pages`, with unsaved changes, as files of at most `limit` bytes each in `dir`,
+    /// named `{stem} part 1.pdf` and so on, keeping the pages in order. A page bigger than
+    /// the limit on its own gets a file of its own. Replies with how many files were written.
+    pub fn split_by_size(
+        &self,
+        pages: Vec<usize>,
+        limit: u64,
+        dir: PathBuf,
+        stem: String,
+        reply: impl FnOnce(Result<usize, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::SplitBySize(
+                SizeSplit {
+                    pages,
+                    limit,
+                    dir,
+                    stem,
+                },
+                Box::new(reply),
+            ),
+        });
+    }
+
     /// Saves attached file `index` (in [`DocumentInfo::attachments`]) to `path`.
     pub fn save_attachment(
         &self,
@@ -306,16 +392,18 @@ impl RenderWorker {
     }
 
     /// Writes a smaller copy of the document (with the changes last given to it) to `path`,
-    /// and replies with the sizes before and after, in bytes.
+    /// with pictures sharper than `pictures` dots per inch scaled down when given, and replies
+    /// with the sizes before and after, in bytes.
     pub fn save_compacted(
         &self,
         path: PathBuf,
+        pictures: Option<u32>,
         reply: impl FnOnce(Result<(u64, u64), SaveError>) + Send + 'static,
     ) {
         let _ = self.jobs.send(Job {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
-            reply: Reply::Compact(path, Box::new(reply)),
+            reply: Reply::Compact(path, pictures, Box::new(reply)),
         });
     }
 
@@ -361,6 +449,86 @@ impl RenderWorker {
         });
     }
 
+    /// What keeps the document, with unsaved changes, from being PDF/A or PDF/X (see
+    /// [`Document::preflight`] and [`Document::preflight_x`]).
+    pub fn preflight(
+        &self,
+        standard: crate::Standard,
+        reply: impl FnOnce(Vec<crate::Finding>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Preflight(standard, Box::new(reply)),
+        });
+    }
+
+    /// What makes the document, with unsaved changes, harder to use with assistive
+    /// technology (see [`Document::accessibility`]).
+    pub fn accessibility(&self, reply: impl FnOnce(Vec<crate::AccessFinding>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Accessibility(Box::new(reply)),
+        });
+    }
+
+    /// Writes a PDF/A copy of the document (with the changes last given to it) to `path`,
+    /// and replies with what still keeps the copy from being PDF/A.
+    pub fn save_archived(
+        &self,
+        path: PathBuf,
+        reply: impl FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Archive(path, Box::new(reply)),
+        });
+    }
+
+    /// Writes a copy of the document (with the changes last given to it) with tags added for
+    /// screen readers to `path`, and replies with the accessibility check of the copy.
+    pub fn save_tagged(
+        &self,
+        path: PathBuf,
+        reply: impl FnOnce(Result<Vec<crate::AccessFinding>, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Tag(path, Box::new(reply)),
+        });
+    }
+
+    /// Signs the document, with unsaved changes, and writes the signed copy to `path` (see
+    /// [`Document::signed`]).
+    pub fn sign(
+        &self,
+        path: PathBuf,
+        id: crate::DigitalId,
+        options: crate::SignOptions,
+        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Sign(Box::new(SignJob { path, id, options }), Box::new(reply)),
+        });
+    }
+
+    /// Where form fields could go (see [`Document::detect_fields`]).
+    pub fn detect_fields(
+        &self,
+        reply: impl FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::DetectFields(Box::new(reply)),
+        });
+    }
+
     /// Where the pictures on page `page` are, as shown.
     pub fn pictures(&self, page: usize, reply: impl FnOnce(Vec<crate::TextBox>) + Send + 'static) {
         let _ = self.jobs.send(Job {
@@ -370,12 +538,46 @@ impl RenderWorker {
         });
     }
 
-    /// The whole document with unsaved changes, without password protection, for printing.
-    pub fn print_copy(&self, reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static) {
+    /// What redacting `areas` would leave in bookmarks and comments (see
+    /// [`Document::leftovers`]).
+    pub fn leftovers(
+        &self,
+        areas: Vec<(usize, Vec<crate::TextBox>)>,
+        reply: impl FnOnce(crate::Leftovers) + Send + 'static,
+    ) {
         let _ = self.jobs.send(Job {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
-            reply: Reply::Print(Box::new(reply)),
+            reply: Reply::Leftovers(areas, Box::new(reply)),
+        });
+    }
+
+    /// The whole document with unsaved changes, without password protection, for printing.
+    /// With `comments`, each page that has comments is followed by pages listing them.
+    pub fn print_copy(
+        &self,
+        comments: bool,
+        reply: impl FnOnce(Result<Vec<u8>, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Print(comments, Box::new(reply)),
+        });
+    }
+
+    /// Writes the document's comments, with unsaved changes, listed by page under a heading
+    /// naming it `title`, to `path` as a PDF.
+    pub fn comment_summary(
+        &self,
+        path: PathBuf,
+        title: String,
+        reply: impl FnOnce(Result<(), SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::CommentSummary(path, title, Box::new(reply)),
         });
     }
 
@@ -400,32 +602,88 @@ enum Swap {
     Promote,
 }
 
-/// Writes to a temporary file next to `path`, then renames it over `path`, so a failed write
-/// never leaves a half-written PDF behind.
-/// Writes the pages `export` asks for.
-fn export_pages<'a>(
+/// The files the pages `export` asks for make, each with where it goes.
+pub(crate) fn export_files<'a>(
     doc: &'a Document,
     cache: &hayro::RenderCache<'a>,
     export: &crate::Export,
-) -> Result<(), SaveError> {
+) -> Result<Vec<(PathBuf, Vec<u8>)>, SaveError> {
     use crate::ExportFormat;
     match export.format {
         ExportFormat::Text => {
             let Some((_, path)) = export.pages.first() else {
-                return Ok(());
+                return Ok(Vec::new());
             };
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
-            write_atomically(path, crate::export::text(doc, &pages)?.as_bytes())
+            Ok(vec![(
+                path.clone(),
+                crate::export::text(doc, &pages)?.into_bytes(),
+            )])
         }
-        format => export.pages.iter().try_for_each(|(index, path)| {
-            let page = doc
-                .render_page(cache, *index, export.dpi / 72.0)
-                .map_err(|_| SaveError::NoSuchPage(*index))?;
-            write_atomically(path, &crate::export::picture(&page, format)?)
-        }),
+        ExportFormat::Word => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(Vec::new());
+            };
+            let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
+            Ok(vec![(path.clone(), crate::office::docx(doc, &pages)?)])
+        }
+        ExportFormat::Excel => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(Vec::new());
+            };
+            let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
+            Ok(vec![(path.clone(), crate::office::xlsx(doc, &pages)?)])
+        }
+        ExportFormat::PowerPoint => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(Vec::new());
+            };
+            let mut slides = Vec::with_capacity(export.pages.len());
+            for (index, _) in &export.pages {
+                let page = doc
+                    .render_page(cache, *index, export.dpi / 72.0)
+                    .map_err(|_| SaveError::NoSuchPage(*index))?;
+                let size = doc.page_size(*index).ok_or(SaveError::NoSuchPage(*index))?;
+                let png = crate::export::picture(&page, ExportFormat::Png)?;
+                slides.push((png, f64::from(size.width), f64::from(size.height)));
+            }
+            Ok(vec![(path.clone(), crate::office::pptx(&slides)?)])
+        }
+        format => export
+            .pages
+            .iter()
+            .map(|(index, path)| {
+                let page = doc
+                    .render_page(cache, *index, export.dpi / 72.0)
+                    .map_err(|_| SaveError::NoSuchPage(*index))?;
+                Ok((path.clone(), crate::export::picture(&page, format)?))
+            })
+            .collect(),
     }
 }
 
+/// Gives figures in the file at `source` descriptions (see [`Document::described`]),
+/// writes the result to `target` (which may be the same file), and gives the accessibility
+/// check of what was written. Blocks; call it off the interface's thread.
+pub fn describe_file(
+    source: &Path,
+    target: &Path,
+    alts: &[((u32, u16), String)],
+) -> Result<Vec<crate::AccessFinding>, SaveError> {
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, _) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    match doc.call(Op::Described(alts.to_vec())) {
+        Answer::Tagged(result) => result.and_then(|(bytes, findings)| {
+            write_atomically(target, &bytes)?;
+            Ok(findings)
+        }),
+        _ => Err(SaveError::EngineCrashed),
+    }
+}
+
+/// Writes to a temporary file next to `path`, then renames it over `path`, so a failed write
+/// never leaves a half-written PDF behind.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
     let io = |e: std::io::Error| SaveError::Io(e.to_string());
     let dir = path
@@ -453,28 +711,43 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
 }
 
 fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenReply, queue: Receiver<Job>) {
-    let document = match Document::open(&path, password.as_deref(), limits) {
-        Ok(document) => document,
+    // Only the bytes are kept here; they're parsed in a locked-down process when there is
+    // one (see `remote`).
+    let bytes = match Document::read_file(&path, limits) {
+        Ok(bytes) => bytes,
         Err(e) => return on_open(Err(e)),
     };
-    match document.info() {
-        Ok(info) => on_open(Ok(info)),
-        Err(e) => return on_open(Err(e)),
+    let mut engine = Engine::default();
+    let opened = Doc::new(
+        bytes,
+        zeroize::Zeroizing::new(password.unwrap_or_default()),
+        limits,
+    );
+    match engine.call(&opened, None, Op::Info) {
+        Answer::Info(Ok(info)) => on_open(Ok(info)),
+        Answer::Info(Err(e)) => return on_open(Err(e)),
+        _ => return on_open(Err(OpenError::EngineCrashed)),
     }
 
     // `base` is the document as last saved; `live` adds the unsaved annotations to it.
-    let mut base = document;
-    let mut live: Option<Document> = None;
+    let mut base = opened;
+    let mut live: Option<Doc> = None;
     let mut pending: Vec<Job> = Vec::new();
-    let mut history: Vec<Document> = Vec::new();
+    let mut history: Vec<Doc> = Vec::new();
     let mut hidden: Option<Vec<crate::ObjRef>> = None;
     loop {
-        let current = live.as_ref().unwrap_or(&base);
-        // What's shown: the document with the layers the user hid, when they've chosen.
-        let with_layers = hidden.as_ref().and_then(|h| current.with_layers_hidden(h).ok());
-        let view = with_layers.as_ref().unwrap_or(current);
-        let cache = view.new_cache();
-        // Render from `current` until an edit or save needs to swap documents.
+        let current = live.as_ref().unwrap_or(&base).clone();
+        let shown = hidden.as_deref();
+        // Asks about the document as it is now; the answer is always the kind asked for.
+        macro_rules! ask {
+            ($op:expr, $kind:ident) => {
+                match engine.call(&current, shown, $op) {
+                    Answer::$kind(answer) => answer,
+                    _ => unreachable!("an answer of another kind"),
+                }
+            };
+        }
+        // Serve from `current` until an edit or save needs to swap documents.
         let swap = loop {
             if pending.is_empty() {
                 match queue.recv() {
@@ -505,35 +778,65 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     rotation,
                     reply,
                 } => {
-                    let page = view.render_page(&cache, job.index, scale);
+                    let page = engine.render(&current, shown, job.index, scale);
                     reply(page.map(|p| p.rotated(rotation)));
                 }
-                Reply::Text(reply) => reply(view.page_text(job.index)),
+                Reply::Text(reply) => reply(ask!(Op::Text(job.index), Text)),
                 Reply::Save(path, reply) => {
-                    let result = write_atomically(&path, current.bytes()).map(|()| current.comments());
+                    let result =
+                        write_atomically(&path, &current.bytes).map(|()| ask!(Op::Comments, Comments));
                     let saved = result.is_ok();
                     reply(result);
                     if saved && live.is_some() {
                         break Swap::Promote;
                     }
                 }
-                Reply::Print(reply) => reply(current.print_copy()),
-                Reply::ExportComments(path, format, name, reply) => {
-                    reply(write_atomically(&path, &current.comments_file(format, &name)));
+                Reply::Print(comments, reply) => reply(ask!(Op::PrintCopy(comments), Bytes)),
+                Reply::CommentSummary(path, title, reply) => {
+                    reply(
+                        ask!(Op::CommentSummary(title), Bytes)
+                            .and_then(|bytes| write_atomically(&path, &bytes)),
+                    );
                 }
-                Reply::Compact(path, reply) => reply(current.compacted().and_then(|bytes| {
+                Reply::ExportComments(path, format, name, reply) => {
+                    reply(
+                        ask!(Op::CommentsFile(format, name), Bytes)
+                            .and_then(|bytes| write_atomically(&path, &bytes)),
+                    );
+                }
+                Reply::Compact(path, pictures, reply) => {
+                    reply(ask!(Op::Compacted(pictures), Bytes).and_then(|bytes| {
+                        write_atomically(&path, &bytes)?;
+                        Ok((current.bytes.len() as u64, bytes.len() as u64))
+                    }))
+                }
+                Reply::Pictures(page, reply) => reply(ask!(Op::Pictures(page), Boxes)),
+                Reply::Leftovers(areas, reply) => reply(ask!(Op::Leftovers(areas), Leftovers)),
+                Reply::DetectFields(reply) => reply(ask!(Op::DetectFields, Fields)),
+                Reply::Preflight(standard, reply) => reply(ask!(Op::Preflight(standard), Findings)),
+                Reply::Accessibility(reply) => reply(ask!(Op::Accessibility, Access)),
+                Reply::Archive(path, reply) => {
+                    reply(ask!(Op::Archived, Archived).and_then(|(bytes, findings)| {
+                        write_atomically(&path, &bytes)?;
+                        Ok(findings)
+                    }))
+                }
+                Reply::Tag(path, reply) => reply(ask!(Op::Tagged, Tagged).and_then(|(bytes, findings)| {
                     write_atomically(&path, &bytes)?;
-                    Ok((current.bytes().len() as u64, bytes.len() as u64))
+                    Ok(findings)
                 })),
-                Reply::Pictures(page, reply) => reply(current.pictures(page)),
-                Reply::ReadComments(bytes, reply) => reply(current.comments_from_file(&bytes)),
-                Reply::Compare(path, reply) => reply(match Document::open(&path, None, current.limits()) {
-                    Ok(other) => current
-                        .compare_with(&other)
-                        .map_err(|e| format!("The files couldn't be compared: {e}")),
-                    Err(OpenError::PasswordRequired) => {
-                        Err("That file is password protected, so it can't be compared yet.".into())
-                    }
+                // Signing needs the key, which may be in the system's certificate store, so
+                // it's done here. Only on the user's request, for a file they chose to sign.
+                Reply::Sign(job, reply) => reply(
+                    current
+                        .parse()
+                        .map_err(|_| SaveError::Damaged)
+                        .and_then(|doc| doc.signed_by(&job.id, &job.options))
+                        .and_then(|bytes| write_atomically(&job.path, &bytes)),
+                ),
+                Reply::ReadComments(bytes, reply) => reply(ask!(Op::CommentsFromFile(bytes), Annotations)),
+                Reply::Compare(path, reply) => reply(match Document::read_file(&path, current.limits) {
+                    Ok(bytes) => ask!(Op::Compare(bytes), Changes),
                     Err(e) => Err(format!("That file couldn't be opened: {e}")),
                 }),
                 Reply::Snapshot {
@@ -543,27 +846,50 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     area,
                     reply,
                 } => {
-                    let page = view.render_page(&cache, page, scale);
+                    let page = engine.render(&current, shown, page, scale);
                     reply(page.map(|p| p.rotated(rotation).cropped(area)));
                 }
                 Reply::Edit(list, reply) => break Swap::Edit(list, reply),
                 Reply::Layers(list) => break Swap::Layers(list),
                 Reply::Pages(edit, reply) => break Swap::Pages(edit, reply),
-                Reply::Export(export, reply) => reply(export_pages(view, &cache, &export)),
-                Reply::Attachment(index, path, reply) => reply(match current.attachment(index) {
-                    Some(bytes) => write_atomically(&path, &bytes),
-                    None => Err(SaveError::Io("the attached file couldn't be read".into())),
-                }),
-                Reply::Extract(files, reply) => {
-                    reply(files.iter().try_for_each(|(pages, path)| {
-                        current
-                            .rearranged(pages, &[])
-                            .and_then(|bytes| write_atomically(path, &bytes))
+                Reply::Export(export, reply) => {
+                    let paths = crate::remote::destinations(&export);
+                    reply(ask!(Op::Export(export), Files).and_then(|files| {
+                        if files.len() != paths.len() {
+                            return Err(SaveError::EngineCrashed);
+                        }
+                        paths
+                            .iter()
+                            .zip(&files)
+                            .try_for_each(|(path, bytes)| write_atomically(path, bytes))
                     }));
+                }
+                Reply::Attachment(index, path, reply) => {
+                    reply(
+                        ask!(Op::Attachment(index), Bytes).and_then(|bytes| write_atomically(&path, &bytes)),
+                    );
+                }
+                Reply::Extract(files, reply) => {
+                    reply(files.into_iter().try_for_each(|(pages, path)| {
+                        ask!(Op::Rearranged(pages), Bytes).and_then(|bytes| write_atomically(&path, &bytes))
+                    }));
+                }
+                Reply::SplitBySize(split, reply) => {
+                    let mut built = |pages: &[usize]| {
+                        let plan = pages
+                            .iter()
+                            .map(|&index| PageSource::Page {
+                                doc: 0,
+                                index,
+                                turns: 0,
+                            })
+                            .collect();
+                        ask!(Op::Rearranged(plan), Bytes)
+                    };
+                    reply(split_by_size(&split, &mut built));
                 }
             }
         };
-        drop(cache);
         match swap {
             Swap::Layers(list) => hidden = list,
             Swap::Promote => {
@@ -573,54 +899,45 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
             }
             Swap::Pages(edit, reply) => {
                 let undoing = matches!(edit, PageEdit::Undo);
-                let current = live.as_ref().unwrap_or(&base);
-                let result = match edit {
-                    PageEdit::Undo => match history.pop() {
-                        Some(earlier) => Ok(earlier),
-                        None => Err(SaveError::Damaged),
-                    },
-                    PageEdit::Plan(plan) => current
-                        .rearranged(&plan, &[])
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::InsertFile { at, path } => insert_file(current, at, &path),
-                    PageEdit::Crop { pages, margins } => current
-                        .cropped(&pages, margins)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::HeaderFooter { pages, marks } => current
-                        .with_header_footer(&pages, &marks)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Protect(protection) => {
-                        current
-                            .protected(protection.as_ref())
-                            .and_then(|(bytes, password)| {
-                                Document::from_bytes(bytes, Some(&password), current.limits())
-                                    .map_err(|_| SaveError::Damaged)
-                            })
-                    }
-                    PageEdit::Clean(clean) => current
-                        .cleaned(clean)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Flatten { comments, fields } => current
-                        .flattened(comments, fields)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::FormFields { add, remove } => current
-                        .with_form_fields(&add, &remove)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Pictures { page, changes } => current
-                        .with_pictures_changed(page, &changes)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Redact(areas) => current
-                        .redacted(&areas)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Add { page, additions } => current
-                        .with_additions(page, &additions)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                    PageEdit::Watermark { pages, mark } => current
-                        .with_watermark(&pages, &mark)
-                        .and_then(|bytes| current.reopen(bytes).map_err(|_| SaveError::Damaged)),
-                };
-                match result.and_then(|doc| Ok((doc.info().map_err(|_| SaveError::Damaged)?, doc))) {
-                    Ok((info, doc)) => {
+                let result =
+                    match edit {
+                        PageEdit::Undo => history.pop().ok_or(SaveError::Damaged).and_then(|earlier| {
+                            match engine.call(&earlier, None, Op::Info) {
+                                Answer::Info(Ok(info)) => Ok((earlier, info)),
+                                _ => Err(SaveError::Damaged),
+                            }
+                        }),
+                        PageEdit::InsertFile { at, path } => match other_file(&path, current.limits) {
+                            Ok((bytes, name)) => {
+                                revised(&current, ask!(Op::InsertFile { at, bytes, name }, Revised))
+                            }
+                            Err(e) => Err(e),
+                        },
+                        PageEdit::ReplaceFromFile {
+                            first,
+                            count,
+                            from,
+                            path,
+                        } => match other_file(&path, current.limits) {
+                            Ok((bytes, name)) => revised(
+                                &current,
+                                ask!(
+                                    Op::ReplaceFromFile {
+                                        first,
+                                        count,
+                                        from,
+                                        bytes,
+                                        name
+                                    },
+                                    Revised
+                                ),
+                            ),
+                            Err(e) => Err(e),
+                        },
+                        edit => revised(&current, ask!(Op::Edit(edit), Revised)),
+                    };
+                match result {
+                    Ok((doc, info)) => {
                         // Unsaved changes are now part of the document; undo goes back to it
                         // as it was, those changes included.
                         let before = std::mem::replace(&mut base, doc);
@@ -643,35 +960,136 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     continue;
                 }
                 // The password goes along: an encrypted file stays encrypted with it.
-                let result = base
-                    .with_changes(&list)
-                    .and_then(|bytes| base.reopen(bytes).map_err(|_| SaveError::Damaged));
-                match result {
-                    Ok(doc) => {
-                        live = Some(doc);
+                match engine.call(&base, None, Op::WithChanges(list)) {
+                    Answer::Revised(Ok(revision)) => {
+                        live = Some(base.revised(revision.bytes));
                         reply(Ok(()));
                     }
-                    Err(e) => reply(Err(e)),
+                    Answer::Revised(Err(e)) => reply(Err(e)),
+                    _ => reply(Err(SaveError::EngineCrashed)),
                 }
             }
         }
     }
 }
 
-/// `current` with every page of the file at `path` inserted before page `at`.
-fn insert_file(current: &Document, at: usize, path: &Path) -> Result<Document, SaveError> {
-    let other = Document::open(path, None, current.limits()).map_err(|e| {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        SaveError::Io(format!("couldn't open “{name}”: {e}"))
-    })?;
-    let own = current.page_count();
-    let at = at.min(own);
-    let page = |doc, index| PageSource::Page { doc, index, turns: 0 };
-    let plan: Vec<PageSource> = (0..at)
-        .map(|i| page(0, i))
-        .chain((0..other.page_count()).map(|i| page(1, i)))
-        .chain((at..own).map(|i| page(0, i)))
+/// Writes `split`'s pages as files of at most its limit, with `built` making the file of some
+/// pages. Each file takes as many pages as fit: the count doubles until a file is too big,
+/// then halves back to the most that fit.
+/// Makes the file of some pages, for [`split_by_size`].
+type BuildPages<'a> = dyn FnMut(&[usize]) -> Result<Vec<u8>, SaveError> + 'a;
+
+fn split_by_size(split: &SizeSplit, built: &mut BuildPages<'_>) -> Result<usize, SaveError> {
+    let mut parts: Vec<Vec<u8>> = Vec::new();
+    let mut rest = split.pages.as_slice();
+    while !rest.is_empty() {
+        // The most pages known to fit, with their file, and the fewest known not to.
+        let mut fit = (1, built(rest.get(..1).unwrap_or_default())?);
+        let mut too_many = None;
+        let mut try_count = 2;
+        while too_many.is_none() && fit.1.len() as u64 <= split.limit && try_count <= rest.len() {
+            let bytes = built(rest.get(..try_count).unwrap_or_default())?;
+            if bytes.len() as u64 <= split.limit {
+                fit = (try_count, bytes);
+                try_count *= 2;
+            } else {
+                too_many = Some(try_count);
+            }
+        }
+        if fit.1.len() as u64 <= split.limit && too_many.is_none() && fit.0 < rest.len() {
+            // Doubling went past the end with every file fitting: try them all.
+            let bytes = built(rest)?;
+            if bytes.len() as u64 <= split.limit {
+                fit = (rest.len(), bytes);
+            } else {
+                too_many = Some(rest.len());
+            }
+        }
+        if let Some(mut high) = too_many {
+            while high - fit.0 > 1 {
+                let mid = fit.0 + (high - fit.0) / 2;
+                let bytes = built(rest.get(..mid).unwrap_or_default())?;
+                if bytes.len() as u64 <= split.limit {
+                    fit = (mid, bytes);
+                } else {
+                    high = mid;
+                }
+            }
+        }
+        parts.push(fit.1);
+        rest = rest.get(fit.0..).unwrap_or_default();
+    }
+    let paths: Vec<PathBuf> = (1..=parts.len())
+        .map(|n| split.dir.join(format!("{} part {n}.pdf", split.stem)))
         .collect();
-    let bytes = current.rearranged(&plan, &[&other])?;
-    current.reopen(bytes).map_err(|_| SaveError::Damaged)
+    if let Some(taken) = paths.iter().find(|p| p.exists()) {
+        return Err(SaveError::OtherFile(format!(
+            "“{}” is already in that folder. Choose another folder, or move it first.",
+            taken.file_name().unwrap_or_default().to_string_lossy()
+        )));
+    }
+    for (bytes, path) in parts.iter().zip(&paths) {
+        write_atomically(path, bytes)?;
+    }
+    Ok(parts.len())
+}
+
+/// The bytes of another file to take pages from, and its name for messages.
+fn other_file(path: &Path, limits: Limits) -> Result<(Vec<u8>, String), SaveError> {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    Document::read_file(path, limits)
+        .map(|bytes| (bytes, name.clone()))
+        .map_err(|e| SaveError::OtherFile(format!("Couldn't open “{name}”: {e}")))
+}
+
+fn revised(current: &Doc, revision: Result<Revision, SaveError>) -> Result<(Doc, DocumentInfo), SaveError> {
+    let revision = revision?;
+    let doc = Doc::new(revision.bytes, revision.password, current.limits);
+    Ok((doc, revision.info))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_splits_fill_each_file_and_keep_page_order() {
+        let dir = std::env::temp_dir().join(format!("panna-split-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+        // Each page takes 100 bytes and every file 50 more; page 5 alone takes 400.
+        let mut written: Vec<Vec<usize>> = Vec::new();
+        let mut built = |pages: &[usize]| -> Result<Vec<u8>, SaveError> {
+            let size = 50
+                + pages
+                    .iter()
+                    .map(|&p| if p == 5 { 400 } else { 100 })
+                    .sum::<usize>();
+            written.push(pages.to_vec());
+            Ok(pages
+                .iter()
+                .flat_map(|p| (*p as u32).to_le_bytes())
+                .chain(std::iter::repeat_n(0, size))
+                .take(size)
+                .collect())
+        };
+        let split = SizeSplit {
+            pages: (0..9).collect(),
+            limit: 350,
+            dir: dir.clone(),
+            stem: "doc".into(),
+        };
+        let files = split_by_size(&split, &mut built).unwrap_or_else(|e| panic!("{e}"));
+        let sizes: Vec<u64> = (1..=files)
+            .map(|n| std::fs::metadata(dir.join(format!("doc part {n}.pdf"))).map_or(0, |m| m.len()))
+            .collect();
+        // 0-2 fit (350), 3-4 (250, as 5 won't fit with them), 5 alone (450), then 6-8.
+        assert_eq!(sizes, [350, 250, 450, 350]);
+        // Writing them again would overwrite, so it's refused.
+        assert!(split_by_size(&split, &mut built).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

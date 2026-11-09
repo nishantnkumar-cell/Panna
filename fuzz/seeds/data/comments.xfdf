@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve">
+  <fields><field name="name"><value>Pat</value></field><field name="agree"><value>Yes</value></field></fields>
+  <annots>
+    <text page="0" rect="240,170,260,190" color="#FFFF00" title="Reviewer" name="n1"><contents>A note</contents></text>
+    <highlight page="0" rect="20,165,120,185" coords="20,185,120,185,20,165,120,165" color="#FFFF00"/>
+    <ink page="0" rect="10,10,100,100" width="2"><inklist><gesture>10,10;50,80;100,20</gesture></inklist></ink>
+    <freetext page="0" rect="20,20,200,60"><contents>Typed</contents></freetext>
+  </annots>
+</xfdf>

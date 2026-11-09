@@ -16,7 +16,7 @@ const MAX_DEPTH: usize = 64;
 
 /// One difference: text in this document that the other doesn't have, text the other has
 /// that this one doesn't, or both.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Change {
     /// The page of this document it's on.
     pub page: usize,
@@ -39,7 +39,7 @@ impl Change {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChangeKind {
     /// Only in this document.
     Added,

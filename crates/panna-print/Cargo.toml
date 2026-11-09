@@ -1,6 +1,6 @@
 [package]
 name = "panna-print"
-description = "The Windows and macOS print dialogs for Panna; the only crate allowed unsafe code, for the OS calls"
+description = "The Windows and macOS print dialogs, and files opened from Finder, for Panna; the only crate allowed unsafe code, for the OS calls"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,8 +16,8 @@ windows-sys = { version = "0.61", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSString"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPrintInfo", "NSPrintOperation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSNotification", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSPrintInfo", "NSPrintOperation", "NSResponder"] }
 objc2-pdf-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "PDFDocument"] }
 
 # Unsafe code is allowed only in the modules that call the OS, which say why each call is sound.

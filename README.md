@@ -31,6 +31,7 @@ with `libxkbcommon-x11`, which every desktop install already has.
 | Actual size | Ctrl+0 |
 | Fit width | Ctrl+2 |
 | Next / previous page | Page Down / Page Up |
+| Preferences | Ctrl+, |
 
 You can also drop a PDF onto the window to open it.
 
@@ -55,6 +56,16 @@ Install options:
 CI builds Linux (x86_64 and ARM64), Windows (x86_64 and ARM64), a universal macOS app and a
 Flatpak on every push. The macOS app is ad-hoc signed. Opening it the first time needs
 right-click → Open until it's notarised with an Apple developer account.
+
+To make Panna the default PDF app:
+
+- **Windows:** run `panna-windows-…-setup.exe`. It installs for you alone, with no administrator
+  rights needed, and its last page opens Settings → Default apps at Panna's entry, since
+  Windows lets only you choose the default.
+- **macOS:** open `panna-macos-universal.dmg` and drag Panna to Applications. Then select any
+  PDF in Finder, choose File → Get Info, pick Panna under "Open with" and click Change All.
+- **Linux:** the menu entry registers Panna for PDFs; choose it as the default in your
+  desktop's settings (Default Applications in KDE, Default Apps in GNOME).
 
 ## Security
 

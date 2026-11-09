@@ -1,11 +1,11 @@
-//! Saving pages as plain text or as pictures.
+//! Saving pages as plain text, a Word document or pictures.
 
 use std::path::PathBuf;
 
 use crate::{Document, RenderedPage, SaveError};
 
 /// What pages become.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExportFormat {
     /// One text file, pages one after another.
     Text,
@@ -13,10 +13,34 @@ pub enum ExportFormat {
     Png,
     /// A JPEG picture for each page.
     Jpeg,
+    /// One Word document (.docx): the text, in paragraphs and headings.
+    Word,
+    /// One PowerPoint presentation (.pptx): a picture of each page as a slide.
+    PowerPoint,
+    /// One Excel workbook (.xlsx): a sheet for each page, its lines as rows.
+    Excel,
+}
+
+impl ExportFormat {
+    /// Whether every page goes into one file, rather than a file each.
+    pub fn one_file(self) -> bool {
+        matches!(
+            self,
+            ExportFormat::Text | ExportFormat::Word | ExportFormat::PowerPoint
+        )
+    }
+
+    /// Whether pages are drawn as pictures, at a resolution.
+    pub fn pictures(self) -> bool {
+        matches!(
+            self,
+            ExportFormat::Png | ExportFormat::Jpeg | ExportFormat::PowerPoint
+        )
+    }
 }
 
 /// Pages to save and where.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Export {
     pub format: ExportFormat,
     /// Pictures' resolution, in dots per inch.

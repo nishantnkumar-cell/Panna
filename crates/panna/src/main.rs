@@ -6,39 +6,55 @@
 
 mod add;
 mod annotate;
+mod batch;
+mod bookmarks;
+mod certstore;
 mod clipboard;
 mod colors;
 mod comments;
 mod compare;
+mod create;
 mod export;
 mod find;
+#[cfg(target_os = "macos")]
+mod finder;
 mod form;
 mod icons;
+mod initial;
+mod labels;
 mod layout;
 mod links;
 mod measure;
+mod menu;
 mod pages;
 mod pictures;
+mod preferences;
+mod preflight;
 mod prepare;
 mod print;
 mod protect;
 mod redact;
+mod scan;
 mod selection;
 mod settings;
 mod shortcuts;
+mod shrink;
 mod sidebar;
 mod sign;
+mod signatures;
+mod signing;
 mod speech;
 mod toolbar;
 mod tools;
+mod trust;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
-    Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, scrollable,
-    space, stack, text, text_input,
+    Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, rule,
+    scrollable, space, text, text_input,
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
@@ -51,7 +67,7 @@ use layout::{PAGE_GAP, PageLayout, Spread};
 use selection::{Caret, PageMap, Selection, TextSlot};
 use settings::Settings;
 use sidebar::{Sidebar, ThumbLayout};
-use toolbar::{Dock, Toolbar};
+use toolbar::{Bar, Bars};
 
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
@@ -64,9 +80,26 @@ const KEEP_MARGIN: usize = 2;
 const HANDLE: f32 = 8.0;
 
 fn main() -> iced::Result {
+    // A copy of the app started to draw pages: locked down before it sees any PDF data.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == panna_core::isolate::ARG)
+    {
+        match panna_sandbox::lock_down() {
+            Ok(()) => panna_core::isolate::serve(),
+            Err(e) => eprintln!("panna: the page renderer couldn't be locked down ({e})"),
+        }
+        std::process::exit(0);
+    }
+    if let Ok(program) = std::env::current_exe() {
+        panna_core::isolate::use_renderer(program);
+    }
+    #[cfg(target_os = "macos")]
+    finder::install();
     iced::application(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
+        .theme(App::theme)
         .window(window_settings())
         .centered()
         .run()
@@ -108,6 +141,8 @@ struct Snapshot {
     dragging: bool,
     /// Its picture is on the clipboard.
     copied: bool,
+    /// Dragged with the zoom tool: the view zooms in to the area instead.
+    zoom: bool,
 }
 
 impl Snapshot {
@@ -163,6 +198,9 @@ enum Message {
     Export(export::Event),
     /// The Flatten card.
     Flatten(pages::FlattenEvent),
+    ReplaceFileChosen(Option<PathBuf>),
+    Replace(pages::ReplaceEvent),
+    Labels(labels::Event),
     /// The Password protection card.
     Protect(protect::Event),
     /// The Remove hidden information card.
@@ -178,8 +216,18 @@ enum Message {
     PicturesSaveTo(Option<PathBuf>),
     /// The PDF made of pictures was saved here, or why not.
     PicturesMade(Result<PathBuf, String>),
+    /// The New blank PDF card.
+    Blank(create::Event),
+    /// Makes a PDF of the picture on the clipboard.
+    FromClipboard,
+    /// The clipboard's picture, as width, height and RGBA, or why there isn't one.
+    ClipboardPicture(Result<(u32, u32, std::sync::Arc<Vec<u8>>), String>),
+    /// Where to save a new blank or clipboard PDF.
+    NewSaveTo(Option<PathBuf>),
     /// Where to save extracted pages as one file, once chosen.
     ExtractChosen(Option<PathBuf>),
+    /// How many files splitting by size saved, or why it couldn't.
+    SplitBySize(Result<usize, SaveError>),
     /// The folder to save extracted pages to, a file each, once chosen.
     ExtractFolder(Option<PathBuf>),
     PagesChanged {
@@ -199,6 +247,17 @@ enum Message {
     StampPictureLoaded(Result<(panna_core::StampImage, String), String>),
     /// Prints the document with its unsaved changes (Ctrl+P).
     Print,
+    /// The Preferences card (Ctrl+,).
+    Preferences(preferences::Event),
+    /// The Batch actions card.
+    Batch(batch::Event),
+    /// Prints it with each page that has comments followed by a list of them.
+    PrintWithComments,
+    /// Asks where to save a list of the comments, by page, as a PDF.
+    SummarizeComments,
+    SummaryTo(Option<PathBuf>),
+    /// The summary was saved there, to open.
+    Summarized(Result<PathBuf, SaveError>),
     /// The copy to print is ready.
     PrintCopy(Result<Vec<u8>, SaveError>),
     Printed(Result<(), String>),
@@ -212,12 +271,29 @@ enum Message {
     ToolKey(annotate::Tool),
     PageSubmit,
     Toolbar(toolbar::Event),
+    /// Opening, closing and moving around the menus.
+    Menu(menu::Event),
+    /// A movement key while a menu is open.
+    MenuNav(menu::Nav),
+    /// A command picked from a menu: closes the menu, then runs it.
+    MenuPick(Box<Message>),
+    /// Turns the comment tools on if needed and picks a tool, from the Comment menu.
+    CommentTool(annotate::Tool),
+    SetSpread(Spread),
+    SetColors(colors::PageColors),
+    /// Shows or hides the keyboard shortcuts card.
+    Shortcuts(bool),
+    About,
+    /// Closes the window, as its close button does.
+    Quit,
     WindowResized(Size),
     PasswordInput(String),
     PasswordSubmit,
     ToggleProperties,
     CloseOverlays,
     Sidebar(sidebar::Event),
+    Bookmarks(bookmarks::Event),
+    InitialView(initial::Event),
     GoToPage(usize),
     /// Scroll to a comment, from the comments list.
     /// Scrolls to a comment, and selects it when it can be changed.
@@ -239,9 +315,16 @@ enum Message {
     FormDataExportTo(Option<PathBuf>),
     ImportFormData,
     FormDataChosen(Option<PathBuf>),
-    /// Save a smaller copy of the document.
-    Compact,
-    CompactTo(Option<PathBuf>),
+    /// The Save a smaller copy card.
+    Shrink(shrink::Event),
+    /// Recognise the text in pages without any (OCR).
+    Recognise,
+    /// The Scan pages card.
+    Scan(scan::Event),
+    /// Where to save the PDF of scanned pages.
+    ScansSaveTo(Option<PathBuf>),
+    /// Where to save the smaller copy, and the resolution pictures may be scaled down to.
+    CompactTo(Option<PathBuf>, Option<u32>),
     Compacted(Result<(u64, u64), SaveError>),
     ExportComments,
     CommentsExportTo(Option<PathBuf>),
@@ -260,6 +343,47 @@ enum Message {
     Redact(redact::Event),
     Prepare(prepare::Event),
     EditPictures(pictures::Event),
+    Preflight(preflight::Event),
+    Preflighted {
+        doc: u64,
+        standard: panna_core::Standard,
+        findings: Vec<panna_core::Finding>,
+    },
+    AccessChecked {
+        doc: u64,
+        findings: Vec<panna_core::AccessFinding>,
+    },
+    ArchiveTo(Option<PathBuf>),
+    TagTo(Option<PathBuf>),
+    Tagged {
+        doc: u64,
+        name: String,
+        path: PathBuf,
+        result: Result<Vec<panna_core::AccessFinding>, SaveError>,
+    },
+    DescribeTo(Option<PathBuf>),
+    Described {
+        doc: u64,
+        name: String,
+        path: PathBuf,
+        result: Result<Vec<panna_core::AccessFinding>, SaveError>,
+    },
+    Signing(signing::Event),
+    Trust(trust::Event),
+    SignTo(Option<PathBuf>),
+    SignSaved {
+        path: PathBuf,
+        result: Result<(), SaveError>,
+    },
+    Archived {
+        doc: u64,
+        name: String,
+        result: Result<Vec<panna_core::Finding>, SaveError>,
+    },
+    FieldsDetected {
+        doc: u64,
+        result: Result<Vec<panna_core::NewField>, String>,
+    },
     ReadAloud(speech::Event),
     /// A reading aloud ended: whether all was said, or why not.
     SpeechDone {
@@ -282,6 +406,11 @@ enum Message {
     AddPictureLoaded(Result<panna_core::StampImage, String>),
     /// Turn the snapshot tool on or off.
     ToggleSnapshot,
+    ToggleHand,
+    ToggleZoomBox,
+    /// The pointer moved in the window while the hand tool is on.
+    HandMoved(Point),
+    HandReleased,
     SnapshotTaken(Result<panna_core::RenderedPage, String>),
     PagePress(usize),
     PageDoubleClick(usize),
@@ -321,6 +450,9 @@ enum Message {
     CloseTabAt(usize),
     Confirm(Choice),
     DismissNotice,
+    /// The answer to "Use stronger password protection?" before saving: AES-256 or not, or
+    /// `None` to not save.
+    Strengthen(Option<bool>),
     Ignore,
 }
 
@@ -341,7 +473,8 @@ struct App {
     viewport: ViewportState,
     page_input: String,
     settings: Settings,
-    toolbar: Toolbar,
+    trusted: trust::Trusted,
+    bars: Bars,
     sidebar: Sidebar,
     window_size: Size,
     show_properties: bool,
@@ -354,12 +487,21 @@ struct App {
     /// The snapshot tool is on: dragging over a page copies a picture of the area.
     snapping: bool,
     snapshot: Option<Snapshot>,
+    /// The hand tool is on: dragging a page scrolls the view.
+    hand: bool,
+    /// Where the pointer was in the window, and the scroll position, when the hand grabbed.
+    panning: Option<(Point, f32, f32)>,
+    /// The pointer in the window, followed while the hand tool is on.
+    cursor: Point,
+    /// The zoom tool is on: dragging a box over a page zooms in to it.
+    zoom_box: bool,
     measure: measure::Measure,
     adder: add::Adder,
     redactor: redact::Redactor,
     preparer: prepare::Preparer,
     picture_editor: pictures::PictureEditor,
     reader: speech::Reader,
+    preflight: Option<preflight::Report>,
     /// The comparison with another file, while it's shown.
     comparison: Option<compare::Comparison>,
     annotate: annotate::Annotate,
@@ -385,19 +527,52 @@ struct App {
     exporting: Option<export::Exporting>,
     /// Choosing what to flatten.
     flattening: Option<pages::Flattening>,
+    replacing: Option<pages::Replacing>,
+    labelling: Option<labels::Labelling>,
     /// Choosing password protection.
     protecting: Option<protect::Protecting>,
+    signing: Option<signing::Signing>,
     /// Choosing hidden information to remove.
     cleaning: Option<panna_core::Cleanup>,
+    /// The Save a smaller copy card.
+    shrinking: Option<shrink::Shrinking>,
+    /// Text is being recognised in the pages.
+    recognising: bool,
+    /// The Scan pages card.
+    scanning: Option<scan::Scanning>,
+    /// Scanned pages waiting to be saved as a PDF.
+    scanned: Vec<Vec<u8>>,
     /// The All tools card is showing.
     all_tools: bool,
+    /// The keyboard shortcuts card is showing.
+    shortcuts: bool,
+    menus: menu::State,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
+    /// The New blank PDF card, while open.
+    blank: Option<create::Blank>,
+    /// The Preferences card is open.
+    preferences: bool,
+    /// The Batch actions card, while open.
+    batch: Option<batch::Batch>,
+    /// The account's name, shown in Preferences as the name used when none is set.
+    account: String,
+    /// What happened after asking to be the default PDF app, shown on the card.
+    default_app_note: Option<String>,
+    /// A new PDF waiting for where to save it.
+    new_pdf: Option<NewPdf>,
     /// The pages being extracted, while their file or folder is chosen.
     extract_pages: Vec<usize>,
+    /// How the extracted pages are being split, and the size limit when by size.
+    extract_split: pages::Split,
+    extract_limit: u64,
     /// What to do once unsaved changes are saved or discarded.
     confirm: Option<Pending>,
     after_save: Option<Pending>,
+    /// Where to save once asked about RC4 or AES-128 protection.
+    strengthen: Option<PathBuf>,
+    /// Where to save once the protection has been redone with AES-256.
+    save_after_pages: Option<PathBuf>,
     /// A problem to show the user, such as a failed save.
     notice: Option<String>,
     screen: Screen,
@@ -405,6 +580,15 @@ struct App {
     page_edits: usize,
     /// A page change is being made; the tools wait for it.
     pages_busy: bool,
+    bookmarks: bookmarks::Editor,
+    initial: initial::Editor,
+    /// The bookmark to select once a bookmark change is made.
+    bookmark_select: Option<usize>,
+    /// The change being made leaves the pages as they are (bookmarks, how the file opens).
+    pages_kept: bool,
+    /// The page and zoom a file just opened asks for, applied once the pages' viewport is
+    /// measured.
+    opening: Option<panna_core::InitialView>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -428,6 +612,20 @@ enum Pending {
 }
 
 /// Reads `files`, makes a PDF of them and writes it to `target`, on a thread of its own.
+/// Writes scanned pages (PNG files) to `target` as a PDF, a page each, off the interface's
+/// thread.
+async fn make_pdf_from_scans(pages: Vec<Vec<u8>>, target: PathBuf) -> Result<PathBuf, String> {
+    let (tx, rx) = futures_channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = panna_core::pictures_to_pdf(pages).and_then(|pdf| {
+            std::fs::write(&target, pdf).map_err(|e| format!("Couldn't write the PDF: {e}"))?;
+            Ok(target)
+        });
+        let _ = tx.send(result);
+    });
+    rx.await.unwrap_or_else(|_| Err("Making the PDF stopped.".into()))
+}
+
 async fn make_pdf_from_pictures(files: Vec<PathBuf>, target: PathBuf) -> Result<PathBuf, String> {
     let (tx, rx) = futures_channel::oneshot::channel();
     std::thread::spawn(move || {
@@ -467,6 +665,52 @@ async fn make_pdf_from_pictures(files: Vec<PathBuf>, target: PathBuf) -> Result<
         .unwrap_or_else(|_| Err("Making the PDF stopped unexpectedly.".into()))
 }
 
+/// A new PDF to make once there's somewhere to save it.
+enum NewPdf {
+    Blank {
+        width: f32,
+        height: f32,
+        count: usize,
+    },
+    Picture {
+        width: u32,
+        height: u32,
+        rgba: std::sync::Arc<Vec<u8>>,
+    },
+}
+
+/// Asks where to save a new PDF, suggesting `name`.
+fn ask_new_pdf_path(name: &'static str) -> Task<Message> {
+    Task::perform(
+        async move {
+            rfd::AsyncFileDialog::new()
+                .set_title("Save the new PDF as")
+                .add_filter("PDF documents", &["pdf"])
+                .set_file_name(name)
+                .save_file()
+                .await
+                .map(|f| f.path().to_path_buf())
+        },
+        Message::NewSaveTo,
+    )
+}
+
+/// Makes `new` and saves it at `target`.
+async fn make_new_pdf(new: NewPdf, target: PathBuf) -> Result<PathBuf, String> {
+    let (tx, rx) = futures_channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = match new {
+            NewPdf::Blank { width, height, count } => panna_core::blank_pdf(width, height, count),
+            NewPdf::Picture { width, height, rgba } => panna_core::rgba_to_pdf(width, height, &rgba),
+        }
+        .and_then(|pdf| std::fs::write(&target, pdf).map_err(|e| format!("Couldn't write the PDF: {e}")))
+        .map(|()| target);
+        let _ = tx.send(result);
+    });
+    rx.await
+        .unwrap_or_else(|_| Err("Making the PDF stopped unexpectedly.".into()))
+}
+
 /// The answer to "Save changes?".
 #[derive(Debug, Clone, Copy)]
 enum Choice {
@@ -481,7 +725,7 @@ enum Status {
     Error(String),
     Password {
         path: PathBuf,
-        input: String,
+        input: zeroize::Zeroizing<String>,
         /// A password was tried and rejected.
         wrong: bool,
     },
@@ -518,6 +762,8 @@ struct OpenDoc {
     id: u64,
     path: PathBuf,
     used_password: bool,
+    /// Asked already whether to save weak protection with AES-256.
+    strengthen_asked: bool,
     info: DocumentInfo,
     worker: RenderWorker,
     layout: PageLayout,
@@ -527,6 +773,8 @@ struct OpenDoc {
     texts: Vec<TextSlot>,
     /// Whether each layer is shown.
     layers_shown: Vec<bool>,
+    /// The page layout the file asks for, until the user picks another.
+    spread: Option<Spread>,
 }
 
 #[derive(Default)]
@@ -556,15 +804,29 @@ fn scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("pages")
 }
 
+/// Files dropped on the window, and its size and scale changing.
+fn window_event(event: iced::Event) -> Option<Message> {
+    match event {
+        iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::FileChosen(Some(path))),
+        iced::Event::Window(window::Event::Rescaled(factor)) => Some(Message::ScaleFactor(factor)),
+        iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size)),
+        _ => None,
+    }
+}
+
 fn page_box_id() -> iced::widget::Id {
     iced::widget::Id::new("page-number")
 }
 
 /// A card listing document properties, centred over the page view. Clicking outside closes it.
-fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
+fn properties_view<'a>(
+    info: &'a DocumentInfo,
+    initial: &'a initial::Editor,
+    busy: bool,
+) -> Element<'a, Message> {
     let rows = info.properties.iter().map(|(label, value)| {
         row![
-            text(*label).width(110).style(text::secondary),
+            text(label.as_ref()).width(110).style(text::secondary),
             text(value.as_str()).width(Fill)
         ]
         .spacing(12)
@@ -574,6 +836,8 @@ fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
         column![
             text("Document properties").size(18),
             iced::widget::Column::with_children(rows).spacing(6),
+            rule::horizontal(1),
+            initial.view(&info.initial_view, busy),
             button("Close").on_press(Message::ToggleProperties),
         ]
         .spacing(14)
@@ -592,6 +856,68 @@ fn properties_view(info: &DocumentInfo) -> Element<'_, Message> {
 }
 
 /// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
+/// The keyboard shortcuts, in two columns.
+fn shortcuts_card<'a>() -> Element<'a, Message> {
+    let m = icons::MOD;
+    let keys: [(String, &str); 24] = [
+        (format!("{m}O"), "Open"),
+        (format!("{m}S"), "Save"),
+        (format!("{m}Shift+S"), "Save as"),
+        (format!("{m}P"), "Print"),
+        (format!("{m}W"), "Close the document"),
+        (format!("{m}Tab"), "Next tab"),
+        (format!("{m}D"), "Document properties"),
+        (format!("{m}F, F3"), "Find, find next"),
+        (format!("{m}Z, {m}Y"), "Undo, redo"),
+        (format!("{m}C"), "Copy"),
+        (format!("{m}, (comma)"), "Preferences"),
+        ("F10, Alt+letter".into(), "Open a menu"),
+        (format!("{m}+, {m}−"), "Zoom in, zoom out"),
+        (format!("{m}1, {m}2, {m}0"), "Actual size, fit width, fit page"),
+        ("Page Up, Page Down".into(), "Previous, next page"),
+        ("Home, End".into(), "First, last page"),
+        (format!("{m}Shift+N"), "Go to page"),
+        (format!("{m}Shift+T"), "Page layout"),
+        (format!("{m}Shift+D"), "Page colours"),
+        (format!("{m}Shift+−, {m}Shift++"), "Rotate the view"),
+        ("F4".into(), "Sidebar"),
+        ("F11".into(), "Full screen"),
+        (format!("{m}L"), "Present"),
+        (
+            format!("{m}Shift+C"),
+            "Comment tools (then a letter picks a tool)",
+        ),
+    ];
+    let line = |(k, what): (String, &'a str)| -> Element<'a, Message> {
+        row![text(k).size(13).width(200), text(what).size(13)]
+            .spacing(8)
+            .into()
+    };
+    let mut left: Vec<Element<'a, Message>> = keys.into_iter().map(line).collect();
+    let right = left.split_off(12);
+    container(
+        column![
+            text("Keyboard shortcuts").size(16),
+            row![
+                iced::widget::Column::with_children(left).spacing(6).width(390),
+                iced::widget::Column::with_children(right).spacing(6).width(470),
+            ]
+            .spacing(16),
+            row![
+                space::horizontal(),
+                button("Close")
+                    .style(button::secondary)
+                    .on_press(Message::Shortcuts(false)),
+            ],
+        ]
+        .spacing(12)
+        .width(876),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
 fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
     opaque(
         mouse_area(
@@ -671,6 +997,16 @@ fn reset_view<'a>() -> Element<'a, Message> {
     .into()
 }
 
+/// A typed password without control characters and at most `max` long. Each keystroke
+/// brings the whole password again, so that copy is wiped once read, and the result is made
+/// at its full size up front so growing it leaves no copies behind.
+fn clean_secret(mut typed: String, max: usize) -> zeroize::Zeroizing<String> {
+    let mut kept = zeroize::Zeroizing::new(String::with_capacity(typed.len()));
+    kept.extend(typed.chars().filter(|c| !c.is_control()).take(max));
+    zeroize::Zeroize::zeroize(&mut typed);
+    kept
+}
+
 fn password_id() -> iced::widget::Id {
     iced::widget::Id::new("password")
 }
@@ -678,6 +1014,8 @@ fn password_id() -> iced::widget::Id {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
+        let unit = settings.unit;
+        let annotate = annotator(&settings);
         let mut app = Self {
             parked: Vec::new(),
             active_tab: 0,
@@ -695,19 +1033,25 @@ impl App {
                 height: 800.0,
             },
             page_input: String::new(),
-            toolbar: Toolbar::new(settings.toolbar_dock, settings.toolbar_pos),
+            bars: Bars::new(settings.bars, menu::HEIGHT),
             sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
             settings,
+            trusted: trust::Trusted::load(),
             window_size: INITIAL_SIZE,
             screen: Screen::Windowed,
             page_edits: 0,
             pages_busy: false,
+            bookmarks: bookmarks::Editor::default(),
+            initial: initial::Editor::default(),
+            bookmark_select: None,
+            pages_kept: false,
+            opening: None,
             show_properties: false,
             find: find::Find::default(),
             selection: None,
             hover: None,
             selecting: false,
-            annotate: annotate::Annotate::new(),
+            annotate,
             form: form::Form::default(),
             confirm_reset: false,
             pending_link: None,
@@ -720,15 +1064,38 @@ impl App {
             watermarking: None,
             exporting: None,
             flattening: None,
+            replacing: None,
+            labelling: None,
             protecting: None,
+            signing: None,
             cleaning: None,
+            shrinking: None,
+            recognising: false,
+            scanning: None,
+            scanned: Vec::new(),
             all_tools: false,
+            shortcuts: false,
+            menus: menu::State::default(),
             pictures: Vec::new(),
+            blank: None,
+            preferences: false,
+            batch: None,
+            account: preferences::account_name(),
+            default_app_note: None,
+            new_pdf: None,
             extract_pages: Vec::new(),
+            extract_split: pages::Split::One,
+            extract_limit: 0,
             confirm: None,
             after_save: None,
+            strengthen: None,
+            save_after_pages: None,
             notice: None,
             snapping: false,
+            hand: false,
+            panning: None,
+            cursor: Point::ORIGIN,
+            zoom_box: false,
             snapshot: None,
             measure: measure::Measure::default(),
             adder: add::Adder::default(),
@@ -736,8 +1103,10 @@ impl App {
             preparer: prepare::Preparer::default(),
             picture_editor: pictures::PictureEditor::default(),
             reader: speech::Reader::default(),
+            preflight: None,
             comparison: None,
         };
+        app.measure.unit = unit;
         let scale = window::oldest()
             .and_then(window::scale_factor)
             .map(Message::ScaleFactor);
@@ -754,6 +1123,11 @@ impl App {
         (app, Task::batch([scale, open]))
     }
 
+    /// Light or dark as chosen in Preferences; `None` follows the system.
+    fn theme(&self) -> Option<iced::Theme> {
+        self.settings.appearance.theme()
+    }
+
     fn title(&self) -> String {
         match &self.doc {
             Some(doc) => {
@@ -763,6 +1137,8 @@ impl App {
                     .clone()
                     .or_else(|| doc.path.file_name().map(|n| n.to_string_lossy().into_owned()))
                     .unwrap_or_default();
+                // Window titles can't hold control characters such as NUL.
+                let name: String = name.chars().filter(|c| !c.is_control()).collect();
                 format!("{name} — Panna")
             }
             None => "Panna".into(),
@@ -770,14 +1146,33 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let base = event::listen_with(|event, status, _window| match event {
-            iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::FileChosen(Some(path))),
-            iced::Event::Window(window::Event::Rescaled(factor)) => Some(Message::ScaleFactor(factor)),
-            iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size)),
-            iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
-            _ => None,
-        });
+        // While a menu is open, the keys move around it instead of reaching the document.
+        let base = if self.menus.is_open() {
+            event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(key) => shortcuts::menu_keys(key),
+                event => window_event(event),
+            })
+        } else {
+            event::listen_with(|event, status, _window| match event {
+                iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
+                event => window_event(event),
+            })
+        };
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
+        #[cfg(target_os = "macos")]
+        subs.push(finder::subscription());
+        if self.hand {
+            // The hand follows the pointer anywhere in the window, as the pages move under it.
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                    Some(Message::HandMoved(position))
+                }
+                iced::Event::Mouse(
+                    mouse::Event::ButtonReleased(mouse::Button::Left) | mouse::Event::CursorLeft,
+                ) => Some(Message::HandReleased),
+                _ => None,
+            }));
+        }
         if self.selecting || self.annotate.busy() {
             // Finish a text selection even when the button is released outside the page.
             subs.push(event::listen_with(|event, _status, _window| match event {
@@ -787,7 +1182,7 @@ impl App {
                 _ => None,
             }));
         }
-        if !self.toolbar.dragging() {
+        if !self.bars.dragging() {
             return Subscription::batch(subs);
         }
         // Follow the cursor anywhere in the window while a toolbar is being dragged.
@@ -809,9 +1204,16 @@ impl App {
         if matches!(
             message,
             Message::FromPictures
+                | Message::FromClipboard
+                | Message::Blank(create::Event::Open)
+                | Message::Preferences(preferences::Event::Open)
+                | Message::Batch(batch::Event::Open)
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
+                | Message::Signing(signing::Event::Open)
                 | Message::Clean(protect::CleanEvent::Open)
+                | Message::Shrink(shrink::Event::Open)
+                | Message::Scan(scan::Event::Open)
         ) {
             self.all_tools = false;
         }
@@ -833,17 +1235,51 @@ impl App {
                 let Some(doc) = self.doc.as_mut().filter(|d| d.id == id) else {
                     return Task::none();
                 };
+                self.bookmarks.reset();
                 match result {
                     Ok(info) => {
                         self.settings.add_recent(doc.path.clone());
                         self.settings.save();
                         self.rotation = 0;
-                        doc.layout = PageLayout::new(&info.pages, self.settings.spread);
+                        let mut view = info.initial_view;
+                        if view.zoom == panna_core::OpenZoom::Default {
+                            view.zoom = self.settings.open_zoom.zoom();
+                        }
+                        doc.spread = match view.layout {
+                            panna_core::OpenLayout::Default => None,
+                            panna_core::OpenLayout::Single => Some(Spread::Single),
+                            panna_core::OpenLayout::Two => Some(Spread::Two),
+                            panna_core::OpenLayout::TwoCover => Some(Spread::TwoCover),
+                        };
+                        doc.layout = PageLayout::new(&info.pages, doc.spread.unwrap_or(self.settings.spread));
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
                         doc.thumb_layout = ThumbLayout::new(&info.pages);
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
                         doc.texts = info.pages.iter().map(|_| TextSlot::default()).collect();
                         doc.layers_shown = info.layers.iter().map(|l| l.shown).collect();
+                        // The panel the file asks for, for this time only.
+                        let panel = match view.panel {
+                            panna_core::OpenPanel::Bookmarks if !info.outline.is_empty() => {
+                                Some(sidebar::Tab::Bookmarks)
+                            }
+                            panna_core::OpenPanel::Pages => Some(sidebar::Tab::Thumbnails),
+                            panna_core::OpenPanel::Attachments if !info.attachments.is_empty() => {
+                                Some(sidebar::Tab::Files)
+                            }
+                            panna_core::OpenPanel::Layers if !info.layers.is_empty() => {
+                                Some(sidebar::Tab::Layers)
+                            }
+                            _ => None,
+                        };
+                        if let Some(tab) = panel {
+                            self.sidebar.open = true;
+                            self.sidebar.tab = tab;
+                        }
+                        // Signed documents open on their signatures, as in Acrobat.
+                        if !info.signatures.is_empty() {
+                            self.sidebar.open = true;
+                            self.sidebar.tab = sidebar::Tab::Signatures;
+                        }
                         doc.info = info;
                         self.selection = None;
                         self.hover = None;
@@ -853,13 +1289,20 @@ impl App {
                         self.status = Status::Idle;
                         self.zoom = 1.0;
                         self.viewport.offset_y = 0.0;
-                        let shown = Task::batch([
+                        let mut shown = Task::batch([
                             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y: 0.0 }),
                             self.request_visible(),
                             self.request_thumbnails(),
                             self.request_search_text(),
                             self.request_comment_text(),
                         ]);
+                        // Then the page and zoom the file asks for, once the viewport's size is
+                        // known, and full screen.
+                        self.opening =
+                            (view.page > 0 || view.zoom != panna_core::OpenZoom::Default).then_some(view);
+                        if view.full_screen && matches!(self.screen, Screen::Windowed) {
+                            shown = Task::batch([shown, self.update(Message::ToggleFullScreen)]);
+                        }
                         match self.to_open.pop() {
                             Some(next) => Task::batch([shown, self.open(next, None)]),
                             None => shown,
@@ -868,7 +1311,7 @@ impl App {
                     Err(OpenError::PasswordRequired) => {
                         self.status = Status::Password {
                             path: doc.path.clone(),
-                            input: String::new(),
+                            input: Default::default(),
                             wrong: doc.used_password,
                         };
                         self.doc = None;
@@ -924,7 +1367,10 @@ impl App {
                     height: bounds.height,
                 };
                 self.page_input.clear();
-                self.request_visible()
+                match self.opening.take() {
+                    Some(view) => self.open_at(view),
+                    None => self.request_visible(),
+                }
             }
             Message::ZoomIn => {
                 let next = ZOOM_STEPS.iter().copied().find(|z| *z > self.zoom + 0.001);
@@ -956,8 +1402,9 @@ impl App {
                 Task::batch([zoom_task, self.go_to_page(page)])
             }
             Message::RotateCw => self.rotate(1),
-            Message::NextColors => {
-                self.settings.colors = self.settings.colors.next();
+            Message::NextColors => self.update(Message::SetColors(self.settings.colors.next())),
+            Message::SetColors(colors) => {
+                self.settings.colors = colors;
                 self.settings.save();
                 // Every page and thumbnail is drawn again in the new colours.
                 if let Some(doc) = &mut self.doc {
@@ -967,7 +1414,14 @@ impl App {
                 Task::batch([self.request_visible(), self.request_thumbnails()])
             }
             Message::NextSpread => {
-                self.settings.spread = self.settings.spread.next();
+                let current = self.doc.as_ref().and_then(|d| d.spread);
+                self.update(Message::SetSpread(current.unwrap_or(self.settings.spread).next()))
+            }
+            Message::SetSpread(spread) => {
+                if let Some(doc) = &mut self.doc {
+                    doc.spread = None;
+                }
+                self.settings.spread = spread;
                 self.settings.save();
                 self.relayout()
             }
@@ -987,15 +1441,12 @@ impl App {
                 Task::none()
             }
             Message::PageInput(value) => {
-                self.page_input = value.chars().filter(char::is_ascii_digit).take(6).collect();
+                // A page number, or a label such as "iv" when the pages have labels.
+                self.page_input = value.chars().filter(|c| !c.is_control()).take(24).collect();
                 Task::none()
             }
             Message::PageSubmit => {
-                let target = self
-                    .page_input
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|n| n.checked_sub(1));
+                let target = self.typed_page();
                 self.page_input.clear();
                 // Hand the keyboard back to the page, so Home, End and the tool keys work again.
                 // Focusing the (unfocusable) page view takes focus off the box.
@@ -1005,14 +1456,56 @@ impl App {
                     None => release,
                 }
             }
+            Message::Toolbar(toolbar::Event::Show(Bar::Comment, shown)) => {
+                // The Comment bar shows while the comment tools are on.
+                if shown != self.annotate.open {
+                    return self.update(Message::Annotate(annotate::Event::Toggle));
+                }
+                Task::none()
+            }
             Message::Toolbar(event) => {
-                if self.toolbar.update(event, self.window_size) {
-                    self.settings.toolbar_dock = self.toolbar.dock;
-                    self.settings.toolbar_pos = self.toolbar.pos;
+                if self.bars.update(event, self.window_size) {
+                    self.settings.bars = self.bars.layout;
                     self.settings.save();
                 }
                 Task::none()
             }
+            Message::Menu(event) => {
+                let mut menus = std::mem::take(&mut self.menus);
+                menus.update(event, |m| self.menu_entries(m));
+                self.menus = menus;
+                Task::none()
+            }
+            Message::MenuNav(nav) => {
+                let mut menus = std::mem::take(&mut self.menus);
+                let picked = menus.nav(nav, |m| self.menu_entries(m));
+                self.menus = menus;
+                picked.map_or_else(Task::none, |m| self.update(m))
+            }
+            Message::MenuPick(message) => {
+                self.menus = menu::State::default();
+                self.update(*message)
+            }
+            Message::CommentTool(tool) => {
+                let open = if self.annotate.open {
+                    Task::none()
+                } else {
+                    self.update(Message::Annotate(annotate::Event::Toggle))
+                };
+                open.chain(Task::done(Message::Annotate(annotate::Event::Tool(tool))))
+            }
+            Message::Shortcuts(show) => {
+                self.shortcuts = show;
+                Task::none()
+            }
+            Message::About => {
+                self.notice = Some(format!(
+                    "Panna {}\n\nAn offline PDF viewer and editor, written in Rust. Nothing you open leaves this computer.",
+                    env!("CARGO_PKG_VERSION")
+                ));
+                Task::none()
+            }
+            Message::Quit => window::latest().and_then(|id| Task::done(Message::CloseRequested(id))),
             Message::WindowResized(size) => {
                 self.window_size = size;
                 // Refit the page once the window has gone full screen.
@@ -1055,7 +1548,8 @@ impl App {
             },
             Message::PasswordInput(value) => {
                 if let Status::Password { input, .. } = &mut self.status {
-                    *input = value;
+                    // Replacing it wipes the previous copy.
+                    *input = value.into();
                 }
                 Task::none()
             }
@@ -1063,22 +1557,58 @@ impl App {
                 let Status::Password { path, input, .. } = &mut self.status else {
                     return Task::none();
                 };
-                let (path, password) = (path.clone(), std::mem::take(input));
+                // The worker wipes the password once the file is open.
+                let (path, password) = (path.clone(), std::mem::take(&mut **input));
                 self.open(path, Some(password))
             }
             Message::ToggleProperties => {
                 self.show_properties = !self.show_properties && self.doc.is_some();
+                if let (true, Some(doc)) = (self.show_properties, &self.doc) {
+                    self.initial.load(doc.info.initial_view, doc.info.pages.len());
+                }
                 Task::none()
             }
+            Message::InitialView(event) => match self.initial.update(event) {
+                initial::Outcome::None => Task::none(),
+                initial::Outcome::UseCurrent => {
+                    let Some(doc) = &self.doc else { return Task::none() };
+                    let panel = match (self.sidebar.open, self.sidebar.tab) {
+                        (false, _) => panna_core::OpenPanel::None,
+                        (true, sidebar::Tab::Bookmarks) => panna_core::OpenPanel::Bookmarks,
+                        (true, sidebar::Tab::Files) => panna_core::OpenPanel::Attachments,
+                        (true, sidebar::Tab::Layers) => panna_core::OpenPanel::Layers,
+                        (true, _) => panna_core::OpenPanel::Pages,
+                    };
+                    let layout = match doc.spread.unwrap_or(self.settings.spread) {
+                        Spread::Single => panna_core::OpenLayout::Single,
+                        Spread::Two => panna_core::OpenLayout::Two,
+                        Spread::TwoCover => panna_core::OpenLayout::TwoCover,
+                    };
+                    let view = panna_core::InitialView {
+                        page: self.current_page(),
+                        zoom: panna_core::OpenZoom::Scale((self.zoom * 100.0).round() / 100.0),
+                        panel,
+                        layout,
+                        full_screen: !matches!(self.screen, Screen::Windowed),
+                        show_title: doc.info.initial_view.show_title,
+                    };
+                    self.initial.load(view, doc.info.pages.len());
+                    Task::none()
+                }
+                initial::Outcome::Apply(view) => {
+                    self.pages_kept = true;
+                    let page = self.current_page();
+                    self.edit_pages(PageEdit::InitialView(view), page, false)
+                }
+            },
             Message::CloseOverlays => {
                 if matches!(self.screen, Screen::Present { .. }) {
                     return self.stop_presenting();
                 }
                 if self.confirm_link.is_some() {
                     self.confirm_link = None;
-                } else if self.snapping {
-                    self.snapping = false;
-                    self.snapshot = None;
+                } else if self.snapping || self.hand || self.zoom_box {
+                    self.stop_page_tools();
                 } else if self.picture_editor.on {
                     if self.picture_editor.busy() {
                         self.picture_editor.cancel();
@@ -1121,12 +1651,30 @@ impl App {
                     self.exporting = None;
                 } else if self.flattening.is_some() {
                     self.flattening = None;
+                } else if self.blank.is_some() {
+                    self.blank = None;
+                } else if self.preferences {
+                    self.preferences = false;
+                } else if self.batch.as_ref().is_some_and(|b| !b.running()) {
+                    self.batch = None;
+                } else if self.replacing.is_some() {
+                    self.replacing = None;
+                } else if self.labelling.is_some() {
+                    self.labelling = None;
                 } else if self.protecting.is_some() {
                     self.protecting = None;
+                } else if self.signing.is_some() {
+                    self.signing = None;
                 } else if self.cleaning.is_some() {
                     self.cleaning = None;
+                } else if self.shrinking.is_some() {
+                    self.shrinking = None;
+                } else if self.scanning.as_ref().is_some_and(|s| !s.busy) {
+                    self.scanning = None;
                 } else if self.all_tools {
                     self.all_tools = false;
+                } else if self.shortcuts {
+                    self.shortcuts = false;
                 } else if self.confirm_reset {
                     self.confirm_reset = false;
                 } else if self.show_properties {
@@ -1154,6 +1702,21 @@ impl App {
                     self.save_sidebar();
                 }
                 Task::batch([self.request_thumbnails(), self.request_comment_text()])
+            }
+            Message::Bookmarks(event) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = self.current_page();
+                match self.bookmarks.update(event, &doc.info.outline, page) {
+                    bookmarks::Outcome::None => Task::none(),
+                    bookmarks::Outcome::GoTo(page) => self.go_to_page(page),
+                    bookmarks::Outcome::Focus => operation::focus(bookmarks::name_id())
+                        .chain(operation::select_all(bookmarks::name_id())),
+                    bookmarks::Outcome::Save(list, select) => {
+                        self.bookmark_select = select;
+                        self.pages_kept = true;
+                        self.edit_pages(PageEdit::Bookmarks(list), page, false)
+                    }
+                }
             }
             Message::GoToPage(index) => match self.screen {
                 Screen::Present { .. } => self.present_page(index),
@@ -1287,8 +1850,9 @@ impl App {
                 }
                 Task::none()
             }
-            Message::PagePress(page) if self.snapping => {
+            Message::PagePress(page) if self.snapping || self.zoom_box => {
                 self.selection = None;
+                let zoom = self.zoom_box;
                 self.snapshot = self.hover.filter(|(p, _)| *p == page).map(|(_, position)| {
                     let at = Point::new(position.x / self.zoom, position.y / self.zoom);
                     Snapshot {
@@ -1297,8 +1861,14 @@ impl App {
                         to: at,
                         dragging: true,
                         copied: false,
+                        zoom,
                     }
                 });
+                Task::none()
+            }
+            Message::PagePress(_) if self.hand => {
+                self.selection = None;
+                self.panning = Some((self.cursor, self.viewport.offset_x, self.viewport.offset_y));
                 Task::none()
             }
             Message::ExportFormData => {
@@ -1380,8 +1950,44 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Compact => {
+            Message::Scan(event) => self.scan(event),
+            Message::ScansSaveTo(None) => {
+                self.scanned.clear();
+                Task::none()
+            }
+            Message::ScansSaveTo(Some(target)) => {
+                let pages = std::mem::take(&mut self.scanned);
+                self.notice = Some("Making a PDF of the scanned pages…".into());
+                Task::perform(make_pdf_from_scans(pages, target), Message::PicturesMade)
+            }
+            Message::Recognise => {
                 self.all_tools = false;
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.pages_busy || self.saving {
+                    return Task::none();
+                }
+                let pages = (0..doc.pages.len()).collect();
+                self.recognising = true;
+                self.notice = Some("Recognising text in pages without any…".into());
+                let current = self.current_page();
+                self.edit_pages(PageEdit::Recognise(pages), current, false)
+            }
+            Message::Shrink(event) => {
+                let state = self.shrinking.get_or_insert_default();
+                match event {
+                    shrink::Event::Open => {
+                        state.pictures = false;
+                        return Task::none();
+                    }
+                    shrink::Event::Pictures(v) => state.pictures = v,
+                    shrink::Event::Dpi(v) => state.dpi = v,
+                    shrink::Event::Cancel => self.shrinking = None,
+                    shrink::Event::Go => {}
+                }
+                if !matches!(event, shrink::Event::Go) {
+                    return Task::none();
+                }
+                let pictures = self.shrinking.take().and_then(shrink::Shrinking::pictures);
                 let name = format!("{} (smaller).pdf", self.file_stem());
                 Task::perform(
                     async move {
@@ -1393,18 +1999,18 @@ impl App {
                             .await
                             .map(|f| f.path().to_path_buf())
                     },
-                    Message::CompactTo,
+                    move |path| Message::CompactTo(path, pictures),
                 )
             }
-            Message::CompactTo(None) => Task::none(),
-            Message::CompactTo(Some(path)) => {
+            Message::CompactTo(None, _) => Task::none(),
+            Message::CompactTo(Some(path), pictures) => {
                 let Some(doc) = &self.doc else { return Task::none() };
                 // Unsaved changes go into the copy too.
                 if self.dirty() {
                     doc.worker.set_changes(self.changes(), |_| {});
                 }
                 let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.save_compacted(path, move |result| {
+                doc.worker.save_compacted(path, pictures, move |result| {
                     let _ = tx.send(result);
                 });
                 Task::perform(rx, |result| {
@@ -1637,6 +2243,23 @@ impl App {
                         let show = add.first().map_or(self.current_page(), |f| f.page);
                         self.edit_pages(PageEdit::FormFields { add, remove }, show, false)
                     }
+                    prepare::Outcome::Detect => {
+                        let Some(doc) = &self.doc else { return Task::none() };
+                        let (tx, rx) = futures_channel::oneshot::channel();
+                        doc.worker.detect_fields(move |result| {
+                            let _ = tx.send(result);
+                        });
+                        self.notice = Some("Looking for fields…".into());
+                        let id = doc.id;
+                        Task::perform(rx, move |result| Message::FieldsDetected {
+                            doc: id,
+                            result: match result {
+                                Ok(Ok(fields)) => Ok(fields),
+                                Ok(Err(e)) => Err(format!("Fields couldn't be looked for: {e}")),
+                                Err(_) => Err("Fields couldn't be looked for.".into()),
+                            },
+                        })
+                    }
                 }
             }
             Message::EditPictures(event) => {
@@ -1704,6 +2327,284 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Preflight(preflight::Event::Close) => {
+                self.preflight = None;
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Convert) => {
+                self.preflight = None;
+                let name = format!("{} (PDF-A).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a PDF/A copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::ArchiveTo,
+                )
+            }
+            Message::Preflight(preflight::Event::Tag) => {
+                self.preflight = None;
+                let name = format!("{} (tagged).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a tagged copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::TagTo,
+                )
+            }
+            Message::TagTo(None) => Task::none(),
+            Message::TagTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Unsaved changes go into the copy too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_tagged(path.clone(), move |result| {
+                    let _ = tx.send(result);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::Tagged {
+                    doc: id,
+                    name: name.clone(),
+                    path: path.clone(),
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::Tagged {
+                doc,
+                name,
+                path,
+                result,
+            } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    match result {
+                        Ok(findings) => {
+                            self.preflight = Some(preflight::Report::tagged(name, path, findings))
+                        }
+                        Err(e) => self.notice = Some(e.to_string()),
+                    }
+                }
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Alt(element, typed)) => {
+                if let Some(report) = &mut self.preflight {
+                    let typed: String = typed.chars().filter(|c| !c.is_control()).take(2_000).collect();
+                    report.alts.insert(element, typed);
+                }
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Describe) => {
+                let Some(report) = &self.preflight else {
+                    return Task::none();
+                };
+                // Into the tagged copy just saved, or a new copy of the file as it's saved.
+                if let Some(copy) = report.copy.clone() {
+                    return self.update(Message::DescribeTo(Some(copy)));
+                }
+                if self.dirty() {
+                    self.notice =
+                        Some("Save your changes first: descriptions are added to the saved file.".into());
+                    return Task::none();
+                }
+                let name = format!("{} (described).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a described copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::DescribeTo,
+                )
+            }
+            Message::DescribeTo(None) => Task::none(),
+            Message::DescribeTo(Some(target)) => {
+                let (Some(doc), Some(report)) = (&self.doc, &mut self.preflight) else {
+                    return Task::none();
+                };
+                let source = report.copy.clone().unwrap_or_else(|| doc.path.clone());
+                let alts = report.descriptions();
+                report.busy = true;
+                let name = target.file_name().map_or_else(
+                    || target.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                let path = target.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(panna_core::describe_file(&source, &path, &alts));
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::Described {
+                    doc: id,
+                    name: name.clone(),
+                    path: target.clone(),
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::Described {
+                doc,
+                name,
+                path,
+                result,
+            } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    match result {
+                        Ok(findings) => {
+                            self.preflight = Some(preflight::Report::tagged(name, path, findings))
+                        }
+                        Err(e) => {
+                            if let Some(report) = &mut self.preflight {
+                                report.busy = false;
+                            }
+                            self.notice = Some(e.to_string());
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::ArchiveTo(None) => Task::none(),
+            Message::ArchiveTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Unsaved changes go into the copy too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_archived(path, move |result| {
+                    let _ = tx.send(result);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::Archived {
+                    doc: id,
+                    name,
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::Archived { doc, name, result } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    match result {
+                        Ok(findings) => self.preflight = Some(preflight::Report::saved(name, findings)),
+                        Err(e) => self.notice = Some(e.to_string()),
+                    }
+                }
+                Task::none()
+            }
+            Message::Preflight(preflight::Event::Show(page)) => {
+                self.preflight = None;
+                self.go_to_page(page)
+            }
+            Message::Preflight(event @ (preflight::Event::Run | preflight::Event::RunPrint)) => {
+                self.all_tools = false;
+                let standard = match event {
+                    preflight::Event::RunPrint => panna_core::Standard::PdfX,
+                    _ => panna_core::Standard::PdfA,
+                };
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.preflight(standard, move |findings| {
+                    let _ = tx.send(findings);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |findings| Message::Preflighted {
+                    doc: id,
+                    standard,
+                    findings: findings.unwrap_or_default(),
+                })
+            }
+            Message::Preflight(preflight::Event::RunAccessibility) => {
+                self.all_tools = false;
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.accessibility(move |findings| {
+                    let _ = tx.send(findings);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |findings| Message::AccessChecked {
+                    doc: id,
+                    findings: findings.unwrap_or_default(),
+                })
+            }
+            Message::AccessChecked { doc, findings } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    self.preflight = Some(preflight::Report::accessibility(findings));
+                }
+                Task::none()
+            }
+            Message::Preflighted {
+                doc,
+                standard,
+                findings,
+            } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    self.preflight = Some(match standard {
+                        panna_core::Standard::PdfA => preflight::Report::new(findings),
+                        panna_core::Standard::PdfX => preflight::Report::print(findings),
+                    });
+                }
+                Task::none()
+            }
+            Message::FieldsDetected { doc, result } => {
+                if self.doc.as_ref().is_none_or(|d| d.id != doc) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(add) if add.is_empty() => {
+                        self.notice = Some("No more places for fields were found.".into());
+                        Task::none()
+                    }
+                    Ok(add) => {
+                        self.notice = Some(match add.len() {
+                            1 => "Added 1 field. Undo it from the page tools if it isn't right.".into(),
+                            n => format!(
+                                "Added {n} fields. Undo them from the page tools if they aren't right."
+                            ),
+                        });
+                        let show = add.first().map_or(0, |f| f.page);
+                        self.edit_pages(
+                            PageEdit::FormFields {
+                                add,
+                                remove: Vec::new(),
+                            },
+                            show,
+                            false,
+                        )
+                    }
+                    Err(e) => {
+                        self.notice = Some(e);
+                        Task::none()
+                    }
+                }
+            }
             Message::PicturesFound { doc, page, boxes } => {
                 if self.doc.as_ref().is_some_and(|d| d.id == doc) {
                     self.picture_editor.found(page, boxes);
@@ -1718,9 +2619,20 @@ impl App {
                 match self.redactor.update(event) {
                     redact::Outcome::Nothing => {}
                     redact::Outcome::MarkResults => self.mark_find_results(),
-                    redact::Outcome::Apply(areas) => {
+                    redact::Outcome::LookFor(areas) => {
+                        if let Some(doc) = &self.doc {
+                            let (tx, rx) = futures_channel::oneshot::channel();
+                            doc.worker.leftovers(areas, move |found| {
+                                let _ = tx.send(found);
+                            });
+                            return Task::perform(rx, |found| {
+                                Message::Redact(redact::Event::Found(found.unwrap_or_default()))
+                            });
+                        }
+                    }
+                    redact::Outcome::Apply(areas, scrub) => {
                         let show = areas.first().map_or(0, |(page, _)| *page);
-                        return self.edit_pages(PageEdit::Redact(areas), show, false);
+                        return self.edit_pages(PageEdit::Redact { areas, scrub }, show, false);
                     }
                 }
                 if self.redactor.on {
@@ -1777,6 +2689,10 @@ impl App {
                 self.after_adding(outcome)
             }
             Message::Measure(event) => {
+                if let measure::Event::Unit(unit) = event {
+                    self.settings.unit = unit;
+                    self.settings.save();
+                }
                 self.measure.update(event);
                 if self.measure.on {
                     self.redactor.stop();
@@ -1791,15 +2707,36 @@ impl App {
                 Task::none()
             }
             Message::ToggleSnapshot => {
-                self.redactor.stop();
-                self.preparer.stop();
-                self.picture_editor.stop();
-                self.adder.on = false;
-                self.adder.cancel();
-                self.measure.on = false;
-                self.measure.clear();
-                self.snapping = !self.snapping;
-                self.snapshot = None;
+                let on = !self.snapping;
+                self.stop_page_tools();
+                self.snapping = on;
+                Task::none()
+            }
+            Message::ToggleHand => {
+                let on = !self.hand;
+                self.stop_page_tools();
+                self.hand = on;
+                Task::none()
+            }
+            Message::ToggleZoomBox => {
+                let on = !self.zoom_box;
+                self.stop_page_tools();
+                self.zoom_box = on;
+                Task::none()
+            }
+            Message::HandMoved(position) => {
+                self.cursor = position;
+                let Some((from, x, y)) = self.panning else {
+                    return Task::none();
+                };
+                let offset = AbsoluteOffset {
+                    x: (x - (position.x - from.x)).max(0.0),
+                    y: (y - (position.y - from.y)).max(0.0),
+                };
+                operation::scroll_to(scroll_id(), offset)
+            }
+            Message::HandReleased => {
+                self.panning = None;
                 Task::none()
             }
             Message::SnapshotTaken(result) => {
@@ -2048,6 +2985,42 @@ impl App {
                 Task::none()
             }
             Message::Protect(event) => self.protect(event),
+            Message::Signing(event) => self.signing(event),
+            Message::Trust(event) => self.trust(event),
+            Message::SignTo(None) => Task::none(),
+            Message::SignTo(Some(path)) => {
+                let (Some(doc), Some(state)) = (&self.doc, &self.signing) else {
+                    return Task::none();
+                };
+                let Some(id) = state.id() else {
+                    return Task::none();
+                };
+                // Unsaved changes are signed too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.sign(path.clone(), id, state.options(), move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, move |result| Message::SignSaved {
+                    path: path.clone(),
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::SignSaved { path, result } => match result {
+                Ok(()) => {
+                    self.signing = None;
+                    self.open(path, None)
+                }
+                Err(e) => {
+                    match &mut self.signing {
+                        Some(state) => state.error = Some(e.to_string()),
+                        None => self.notice = Some(e.to_string()),
+                    }
+                    Task::none()
+                }
+            },
             Message::Clean(protect::CleanEvent::Open) => {
                 if self.doc.is_some() {
                     self.cleaning = Some(protect::default_cleanup());
@@ -2097,11 +3070,76 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ReplaceFileChosen(Some(path)) => {
+                let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                self.replacing = Some(pages::Replacing::new(path, self.current_page(), count));
+                operation::focus(pages::replace_input_id())
+                    .chain(operation::select_all(pages::replace_input_id()))
+            }
+            Message::Labels(event) => {
+                let current = self.current_page();
+                let Some(state) = &mut self.labelling else {
+                    return Task::none();
+                };
+                match event {
+                    labels::Event::Cancel => self.labelling = None,
+                    labels::Event::Go => {
+                        let Some(ranges) = state.ranges() else {
+                            return Task::none();
+                        };
+                        self.labelling = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        self.pages_kept = true;
+                        return self.edit_pages(PageEdit::PageLabels(ranges), current, false);
+                    }
+                    event => state.update(event, current),
+                }
+                Task::none()
+            }
+            Message::Replace(event) => {
+                let Some(state) = &mut self.replacing else {
+                    return Task::none();
+                };
+                match event {
+                    pages::ReplaceEvent::First(s) => state.first = s,
+                    pages::ReplaceEvent::Last(s) => state.last = s,
+                    pages::ReplaceEvent::From(s) => state.from = s,
+                    pages::ReplaceEvent::Cancel => self.replacing = None,
+                    pages::ReplaceEvent::Go => {
+                        let Some((first, count, from)) = state.range() else {
+                            return Task::none();
+                        };
+                        let path = state.path.clone();
+                        self.replacing = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        return self.edit_pages(
+                            PageEdit::ReplaceFromFile {
+                                first,
+                                count,
+                                from,
+                                path,
+                            },
+                            first,
+                            false,
+                        );
+                    }
+                }
+                Task::none()
+            }
             Message::FromPictures => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Make a PDF from pictures")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_files()
                         .await
                         .map(|files| files.iter().map(|f| f.path().to_path_buf()).collect())
@@ -2150,6 +3188,100 @@ impl App {
                 ));
                 Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
             }
+            Message::Batch(batch::Event::Open) => {
+                self.batch.get_or_insert_with(batch::Batch::default);
+                Task::none()
+            }
+            Message::Batch(event) => {
+                let Some(state) = self.batch.take() else {
+                    return Task::none();
+                };
+                let (state, task) = state.update(event);
+                self.batch = state;
+                task
+            }
+            Message::Preferences(event) => {
+                match event {
+                    preferences::Event::Open => {
+                        self.preferences = true;
+                        self.default_app_note = None;
+                    }
+                    preferences::Event::Close => self.preferences = false,
+                    preferences::Event::Author(name) => {
+                        self.settings.author = name.chars().filter(|c| !c.is_control()).take(200).collect();
+                        let author = annotator(&self.settings);
+                        let name = author.author().to_owned();
+                        self.annotate.set_author(name.clone());
+                        for parked in &mut self.parked {
+                            parked.annotate.set_author(name.clone());
+                        }
+                    }
+                    preferences::Event::Appearance(appearance) => self.settings.appearance = appearance,
+                    preferences::Event::Zoom(zoom) => self.settings.open_zoom = zoom,
+                    preferences::Event::Unit(unit) => {
+                        self.settings.unit = unit;
+                        self.measure.unit = unit;
+                    }
+                    preferences::Event::DefaultApp => {
+                        self.default_app_note = Some(preferences::make_default());
+                    }
+                }
+                self.settings.save();
+                Task::none()
+            }
+            Message::Blank(create::Event::Open) => {
+                self.blank = Some(create::Blank::default());
+                operation::focus(create::pages_input_id())
+                    .chain(operation::select_all(create::pages_input_id()))
+            }
+            Message::Blank(create::Event::Cancel) => {
+                self.blank = None;
+                Task::none()
+            }
+            Message::Blank(create::Event::Go) => {
+                let Some((width, height, count)) = self.blank.as_ref().and_then(create::Blank::pages) else {
+                    return Task::none();
+                };
+                self.blank = None;
+                self.new_pdf = Some(NewPdf::Blank { width, height, count });
+                ask_new_pdf_path("Untitled.pdf")
+            }
+            Message::Blank(event) => {
+                if let Some(state) = &mut self.blank {
+                    state.update(event);
+                }
+                Task::none()
+            }
+            Message::FromClipboard => Task::perform(
+                async {
+                    let (tx, rx) = futures_channel::oneshot::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(clipboard::paste_picture());
+                    });
+                    rx.await
+                        .unwrap_or_else(|_| Err("The clipboard couldn't be read.".into()))
+                        .map(|(w, h, rgba)| (w, h, std::sync::Arc::new(rgba)))
+                },
+                Message::ClipboardPicture,
+            ),
+            Message::ClipboardPicture(Ok((width, height, rgba))) => {
+                self.new_pdf = Some(NewPdf::Picture { width, height, rgba });
+                ask_new_pdf_path("Clipboard.pdf")
+            }
+            Message::ClipboardPicture(Err(e)) => {
+                self.notice = Some(e);
+                Task::none()
+            }
+            Message::NewSaveTo(None) => {
+                self.new_pdf = None;
+                Task::none()
+            }
+            Message::NewSaveTo(Some(target)) => {
+                let Some(new) = self.new_pdf.take() else {
+                    return Task::none();
+                };
+                Task::perform(make_new_pdf(new, target), Message::PicturesMade)
+            }
             Message::PicturesMade(Ok(path)) => {
                 self.notice = None;
                 self.update(Message::FileChosen(Some(path)))
@@ -2170,7 +3302,7 @@ impl App {
                 let Ok((pages, dpi)) = export::settings(&state, count) else {
                     return Task::none();
                 };
-                let pages: Vec<(usize, PathBuf)> = if state.format == panna_core::ExportFormat::Text {
+                let pages: Vec<(usize, PathBuf)> = if state.format.one_file() {
                     pages.into_iter().map(|i| (i, target.clone())).collect()
                 } else {
                     let stem = self.file_stem();
@@ -2224,6 +3356,49 @@ impl App {
                     }
                     pages::WatermarkEvent::Paper(i) => state.paper = Some(i),
                     pages::WatermarkEvent::Range(v) => state.range = clean(v, 200),
+                    pages::WatermarkEvent::Scale(v) => state.scale = v,
+                    pages::WatermarkEvent::RemovePicture => state.picture = None,
+                    pages::WatermarkEvent::ChoosePicture => {
+                        return Task::perform(
+                            async {
+                                rfd::AsyncFileDialog::new()
+                                    .set_title("Choose a picture for the watermark")
+                                    .add_filter(
+                                        "Pictures",
+                                        &[
+                                            "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff",
+                                            "TIFF",
+                                        ],
+                                    )
+                                    .pick_file()
+                                    .await
+                                    .map(|f| f.path().to_path_buf())
+                            },
+                            |path| Message::Watermark(pages::WatermarkEvent::PictureChosen(path)),
+                        );
+                    }
+                    pages::WatermarkEvent::PictureChosen(None) => {}
+                    pages::WatermarkEvent::PictureChosen(Some(path)) => {
+                        let (tx, rx) = futures_channel::oneshot::channel();
+                        std::thread::spawn(move || {
+                            let name = path.file_name().map_or_else(
+                                || path.display().to_string(),
+                                |n| n.to_string_lossy().into_owned(),
+                            );
+                            let result = std::fs::read(&path)
+                                .map_err(|e| format!("Couldn't open the picture: {e}"))
+                                .and_then(|bytes| panna_core::StampImage::decode(&bytes))
+                                .map(|image| (name, image));
+                            let _ = tx.send(result);
+                        });
+                        return Task::perform(rx, |result| {
+                            Message::Watermark(pages::WatermarkEvent::PictureLoaded(
+                                result.unwrap_or_else(|_| Err("The picture couldn't be read.".into())),
+                            ))
+                        });
+                    }
+                    pages::WatermarkEvent::PictureLoaded(Ok(picture)) => state.picture = Some(picture),
+                    pages::WatermarkEvent::PictureLoaded(Err(e)) => self.notice = Some(e),
                     pages::WatermarkEvent::Cancel => self.watermarking = None,
                     pages::WatermarkEvent::Go => {
                         let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
@@ -2314,6 +3489,63 @@ impl App {
                     .collect();
                 self.write_extracted(vec![(pages, path)])
             }
+            Message::ExtractFolder(Some(dir)) if self.extract_split == pages::Split::Size => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let pages = std::mem::take(&mut self.extract_pages);
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                self.notice = Some("Splitting the pages into files…".into());
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker
+                    .split_by_size(pages, self.extract_limit, dir, self.file_stem(), move |result| {
+                        let _ = tx.send(result);
+                    });
+                Task::perform(rx, |result| {
+                    Message::SplitBySize(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::SplitBySize(result) => {
+                self.notice = Some(match result {
+                    Ok(1) => "The pages fit in one file.".into(),
+                    Ok(n) => format!("Saved {n} files."),
+                    Err(e) => e.to_string(),
+                });
+                Task::none()
+            }
+            Message::ExtractFolder(Some(dir)) if self.extract_split == pages::Split::Bookmarks => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                self.extract_pages.clear();
+                let count = doc.pages.len();
+                let parts = pages::bookmark_parts(&doc.info.outline, count);
+                let stem = self.file_stem();
+                let mut files: Vec<(Vec<panna_core::PageSource>, PathBuf)> = Vec::new();
+                for (n, (start, title)) in parts.iter().enumerate() {
+                    let end = parts.get(n + 1).map_or(count, |(next, _)| *next);
+                    let name = pages::file_name_part(title);
+                    let path = dir.join(if name.is_empty() {
+                        format!("{stem} {}.pdf", n + 1)
+                    } else {
+                        format!("{stem} {} {name}.pdf", n + 1)
+                    });
+                    if path.exists() {
+                        self.notice = Some(format!(
+                            "“{}” is already in that folder. Choose another folder, or move it first.",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ));
+                        return Task::none();
+                    }
+                    let plan = (*start..end)
+                        .map(|index| panna_core::PageSource::Page {
+                            doc: 0,
+                            index,
+                            turns: 0,
+                        })
+                        .collect();
+                    files.push((plan, path));
+                }
+                self.write_extracted(files)
+            }
             Message::ExtractFolder(Some(dir)) => {
                 let stem = self.file_stem();
                 let mut files: Vec<(Vec<panna_core::PageSource>, PathBuf)> = Vec::new();
@@ -2340,14 +3572,20 @@ impl App {
                 }
                 self.write_extracted(files)
             }
-            Message::InsertFileChosen(None) | Message::ExtractChosen(None) | Message::ExtractFolder(None) => {
-                Task::none()
-            }
+            Message::InsertFileChosen(None)
+            | Message::ReplaceFileChosen(None)
+            | Message::ExtractChosen(None)
+            | Message::ExtractFolder(None) => Task::none(),
             Message::StampPicture => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Stamp a picture")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())
@@ -2382,7 +3620,8 @@ impl App {
             Message::StampPictureLoaded(Ok((image, name))) => {
                 self.update(Message::Annotate(annotate::Event::StampPicture(image, name)))
             }
-            Message::Print => {
+            Message::Print | Message::PrintWithComments => {
+                self.all_tools = false;
                 let Some(doc) = &self.doc else { return Task::none() };
                 if self.printing {
                     return Task::none();
@@ -2391,8 +3630,9 @@ impl App {
                 if self.dirty() {
                     doc.worker.set_changes(self.changes(), |_| {});
                 }
+                let comments = matches!(message, Message::PrintWithComments);
                 let (tx, rx) = futures_channel::oneshot::channel();
-                doc.worker.print_copy(move |result| {
+                doc.worker.print_copy(comments, move |result| {
                     let _ = tx.send(result);
                 });
                 Task::perform(rx, |result| {
@@ -2411,6 +3651,50 @@ impl App {
                         Task::none()
                     }
                 }
+            }
+            Message::SummarizeComments => {
+                self.all_tools = false;
+                if self.doc.is_none() {
+                    return Task::none();
+                }
+                let name = format!("{} comments.pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save the comment summary as")
+                            .add_filter("PDF documents", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::SummaryTo,
+                )
+            }
+            Message::SummaryTo(None) => Task::none(),
+            Message::SummaryTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let title = doc
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| self.file_stem());
+                let (tx, rx) = futures_channel::oneshot::channel();
+                let saved = path.clone();
+                doc.worker.comment_summary(path, title, move |result| {
+                    let _ = tx.send(result.map(|()| saved));
+                });
+                Task::perform(rx, |result| {
+                    Message::Summarized(result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::Summarized(Ok(path)) => self.update(Message::FileChosen(Some(path))),
+            Message::Summarized(Err(e)) => {
+                self.notice = Some(e.to_string());
+                Task::none()
             }
             Message::Printed(result) => {
                 if let Err(e) = result {
@@ -2459,16 +3743,58 @@ impl App {
                 result,
             } => {
                 self.pages_busy = false;
+                let recognised = std::mem::take(&mut self.recognising);
+                let pages_kept = std::mem::take(&mut self.pages_kept);
+                let select = self.bookmark_select.take();
                 let Some(open) = self.doc.as_mut().filter(|d| d.id == doc) else {
                     return Task::none();
                 };
+                // Only the bookmarks changed: the pages on screen stay as they are.
+                if pages_kept {
+                    match result {
+                        Ok(info) if info.pages == open.info.pages => {
+                            self.bookmarks.reloaded(&info.outline, select);
+                            self.initial.load(info.initial_view, info.pages.len());
+                            open.info = info;
+                            self.page_edits += 1;
+                            return if self.bookmarks.renaming() {
+                                operation::focus(bookmarks::name_id())
+                                    .chain(operation::select_all(bookmarks::name_id()))
+                            } else {
+                                Task::none()
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            self.bookmarks.reloaded(&open.info.outline, None);
+                            self.notice = Some(format!("The bookmarks couldn't be changed: {e}"));
+                            return Task::none();
+                        }
+                    }
+                }
                 let info = match result {
                     Ok(info) => info,
+                    Err(e) if recognised => {
+                        self.notice = Some(e.to_string());
+                        return Task::none();
+                    }
+                    Err(e) if self.save_after_pages.take().is_some() => {
+                        self.after_save = None;
+                        self.notice = Some(format!(
+                            "The protection couldn't be changed, so nothing was saved: {e}"
+                        ));
+                        return Task::none();
+                    }
                     Err(e) => {
                         self.notice = Some(format!("The pages couldn't be changed: {e}"));
                         return Task::none();
                     }
                 };
+                if recognised {
+                    self.notice = Some(
+                        "Text recognised. It can now be found, selected and copied; save to keep it.".into(),
+                    );
+                }
                 self.page_edits = if undo {
                     self.page_edits.saturating_sub(1)
                 } else {
@@ -2476,7 +3802,7 @@ impl App {
                 };
                 // Unsaved comments and form entries are now part of the document.
                 let sizes = rotated_sizes(&info.pages, self.rotation);
-                open.layout = PageLayout::new(&sizes, self.settings.spread);
+                open.layout = PageLayout::new(&sizes, open.spread.unwrap_or(self.settings.spread));
                 open.pages = info.pages.iter().map(|_| Slot::default()).collect();
                 open.thumb_layout = ThumbLayout::new(&sizes);
                 open.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
@@ -2494,12 +3820,17 @@ impl App {
                 self.annotate.saved(&open.info.comments);
                 self.form.load(&open.info.fields);
                 self.find.rescan(&open.texts);
+                let save = match self.save_after_pages.take() {
+                    Some(path) => self.save_to(path),
+                    None => Task::none(),
+                };
                 Task::batch([
                     self.ask_pictures(show),
                     self.go_to_page(show),
                     self.request_thumbnails(),
                     self.request_search_text(),
                     self.request_comment_text(),
+                    save,
                 ])
             }
             Message::Save => {
@@ -2631,6 +3962,30 @@ impl App {
                     }
                 }
             }
+            Message::Strengthen(choice) => {
+                let Some(path) = self.strengthen.take() else {
+                    return Task::none();
+                };
+                let Some(doc) = self.doc.as_mut() else {
+                    return Task::none();
+                };
+                match choice {
+                    None => {
+                        self.after_save = None;
+                        Task::none()
+                    }
+                    Some(false) => {
+                        doc.strengthen_asked = true;
+                        self.save_to(path)
+                    }
+                    Some(true) => {
+                        doc.strengthen_asked = true;
+                        self.save_after_pages = Some(path);
+                        let page = self.current_page();
+                        self.edit_pages(PageEdit::Strengthen, page, false)
+                    }
+                }
+            }
             Message::DismissNotice => {
                 self.notice = None;
                 Task::none()
@@ -2667,6 +4022,21 @@ impl App {
                 },
                 Message::InsertFileChosen,
             ),
+            pages::Op::Labels => {
+                self.labelling = Some(labels::Labelling::new(&doc.info.page_labels, doc.pages.len()));
+                Task::none()
+            }
+            pages::Op::Replace => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Replace pages with pages from")
+                        .add_filter("PDF documents", &["pdf", "PDF"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::ReplaceFileChosen,
+            ),
             pages::Op::Flatten => {
                 self.flattening = Some(pages::Flattening {
                     comments: true,
@@ -2690,10 +4060,7 @@ impl App {
                 operation::focus(pages::crop_input_id()).chain(operation::select_all(pages::crop_input_id()))
             }
             pages::Op::Extract => {
-                self.extracting = Some(pages::Extracting {
-                    range: (current + 1).to_string(),
-                    split: false,
-                });
+                self.extracting = Some(pages::Extracting::new((current + 1).to_string()));
                 operation::focus(pages::extract_input_id())
                     .chain(operation::select_all(pages::extract_input_id()))
             }
@@ -2725,13 +4092,26 @@ impl App {
         match event {
             pages::ExtractEvent::Range(range) => state.range = range,
             pages::ExtractEvent::Split(split) => state.split = split,
+            pages::ExtractEvent::Size(size) => state.size_mb = size.chars().take(8).collect(),
             pages::ExtractEvent::Cancel => self.extracting = None,
             pages::ExtractEvent::Go => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                let Ok(pages) = pages::parse_range(&state.range, count) else {
-                    return Task::none();
+                let pages = if state.split == pages::Split::Bookmarks {
+                    (0..count).collect()
+                } else {
+                    let Ok(pages) = pages::parse_range(&state.range, count) else {
+                        return Task::none();
+                    };
+                    pages
                 };
-                let split = state.split;
+                self.extract_split = state.split;
+                if state.split == pages::Split::Size {
+                    let Some(limit) = state.size_limit() else {
+                        return Task::none();
+                    };
+                    self.extract_limit = limit;
+                }
+                let split = state.split != pages::Split::One;
                 let label = if pages.len() == 1 {
                     format!("page {}", pages.first().map_or(1, |p| p + 1))
                 } else {
@@ -2744,7 +4124,7 @@ impl App {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save each page in")
+                                .set_title("Save the files in")
                                 .pick_folder()
                                 .await
                                 .map(|f| f.path().to_path_buf())
@@ -2788,6 +4168,240 @@ impl App {
         })
     }
 
+    /// Trusting a certificate, or no longer trusting it.
+    fn trust(&mut self, event: trust::Event) -> Task<Message> {
+        let result = match event {
+            trust::Event::Add(cert) => self.trusted.add(cert),
+            trust::Event::Remove(fingerprint) => self.trusted.remove(&fingerprint),
+            trust::Event::Import => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Choose a certificate to trust")
+                            .add_filter(
+                                "Certificates",
+                                &["cer", "crt", "pem", "der", "CER", "CRT", "PEM", "DER"],
+                            )
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    |path| Message::Trust(trust::Event::Imported(path)),
+                );
+            }
+            trust::Event::Imported(None) => Ok(()),
+            trust::Event::Imported(Some(path)) => trust::read(&path)
+                .and_then(|bytes| panna_core::Cert::from_file(&bytes))
+                .and_then(|cert| self.trusted.add(cert)),
+        };
+        if let Err(e) = result {
+            self.notice = Some(format!("Couldn't change the trusted certificates: {e}"));
+        }
+        Task::none()
+    }
+
+    /// The Sign with a certificate card's events.
+    fn scan(&mut self, event: scan::Event) -> Task<Message> {
+        if let scan::Event::Open = event {
+            if let Some(why) = scan::unavailable() {
+                self.notice = Some(why.into());
+                return Task::none();
+            }
+            self.scanning = Some(scan::Scanning::default());
+            if cfg!(windows) {
+                return Task::none();
+            }
+            return Task::perform(scan::find(), |found| Message::Scan(scan::Event::Found(found)));
+        }
+        let Some(state) = &mut self.scanning else {
+            return Task::none();
+        };
+        match event {
+            scan::Event::Open => {}
+            scan::Event::Found(found) => {
+                if let Ok(list) = &found {
+                    state.device = list.first().cloned();
+                }
+                state.devices = Some(found);
+            }
+            scan::Event::Device(d) => state.device = Some(d),
+            scan::Event::Dpi(v) => state.dpi = v,
+            scan::Event::Colour(v) => state.colour = v,
+            scan::Event::Scan => {
+                if state.busy || state.pages.len() >= scan::MAX_PAGES {
+                    return Task::none();
+                }
+                state.busy = true;
+                state.error = None;
+                let device = state.device.as_ref().map(|d| d.id.clone());
+                return Task::perform(scan::scan(device, state.dpi.0, state.colour), |result| {
+                    Message::Scan(scan::Event::Scanned(result))
+                });
+            }
+            scan::Event::Scanned(result) => {
+                state.busy = false;
+                match result {
+                    Ok(Some(page)) => state.pages.push(page),
+                    Ok(None) => {}
+                    Err(e) => state.error = Some(format!("Couldn't scan: {e}")),
+                }
+            }
+            scan::Event::RemoveLast => {
+                state.pages.pop();
+            }
+            scan::Event::Cancel => {
+                if !state.busy {
+                    self.scanning = None;
+                }
+            }
+            scan::Event::Done => {
+                if state.busy || state.pages.is_empty() {
+                    return Task::none();
+                }
+                self.scanned = std::mem::take(&mut state.pages);
+                self.scanning = None;
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save the scanned pages as")
+                            .add_filter("PDF documents", &["pdf"])
+                            .set_file_name("Scan.pdf")
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::ScansSaveTo,
+                );
+            }
+        }
+        Task::none()
+    }
+
+    fn signing(&mut self, event: signing::Event) -> Task<Message> {
+        if let signing::Event::Open = event {
+            let page = self.current_page();
+            let Some(doc) = &self.doc else { return Task::none() };
+            self.signing = Some(signing::Signing {
+                can_certify: doc.info.signatures.is_empty(),
+                page,
+                ..signing::Signing::default()
+            });
+            if !certstore::AVAILABLE {
+                return Task::none();
+            }
+            return Task::perform(certstore::find(), |found| {
+                Message::Signing(signing::Event::Found(found))
+            });
+        }
+        let Some(state) = &mut self.signing else {
+            return Task::none();
+        };
+        let clean = |v: String| {
+            v.chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect::<String>()
+        };
+        match event {
+            signing::Event::Open => Task::none(),
+            signing::Event::Choose => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a certificate file")
+                        .add_filter("Certificate files", &["p12", "pfx", "P12", "PFX"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                |path| Message::Signing(signing::Event::Chosen(path)),
+            ),
+            signing::Event::Chosen(None) => Task::none(),
+            signing::Event::Chosen(Some(path)) => {
+                let read = std::fs::metadata(&path).map_err(|e| e.to_string()).and_then(|m| {
+                    if m.len() > signing::MAX_FILE {
+                        Err("That file is too large to be a certificate file.".into())
+                    } else {
+                        std::fs::read(&path).map_err(|e| e.to_string())
+                    }
+                });
+                match read {
+                    Ok(bytes) => {
+                        let name = path.file_name().map_or_else(
+                            || path.display().to_string(),
+                            |n| n.to_string_lossy().into_owned(),
+                        );
+                        state.file = Some((name, Arc::new(bytes)));
+                        state.stored = None;
+                        state.error = None;
+                        iced::widget::operation::focus(signing::input_id())
+                    }
+                    Err(e) => {
+                        state.error = Some(format!("Couldn't read the certificate file: {e}"));
+                        Task::none()
+                    }
+                }
+            }
+            signing::Event::Found(found) => {
+                // Without the store, a certificate file still works, so nothing is said.
+                state.store = found.unwrap_or_default();
+                Task::none()
+            }
+            signing::Event::Stored(id) => {
+                state.stored = Some(id);
+                state.file = None;
+                state.error = None;
+                Task::none()
+            }
+            signing::Event::Password(v) => {
+                state.password = clean_secret(v, 200);
+                Task::none()
+            }
+            signing::Event::Reason(v) => {
+                state.reason = clean(v);
+                Task::none()
+            }
+            signing::Event::Location(v) => {
+                state.location = clean(v);
+                Task::none()
+            }
+            signing::Event::Certify(v) => {
+                state.certify = v;
+                Task::none()
+            }
+            signing::Event::Shown(v) => {
+                state.shown = v;
+                Task::none()
+            }
+            signing::Event::Corner(v) => {
+                state.corner = v;
+                Task::none()
+            }
+            signing::Event::Cancel => {
+                self.signing = None;
+                Task::none()
+            }
+            signing::Event::Go => {
+                if state.file.is_none() && state.stored.is_none() {
+                    return Task::none();
+                }
+                state.error = None;
+                let name = format!("{} (signed).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save the signed copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::SignTo,
+                )
+            }
+        }
+    }
+
     /// The Password protection card's events.
     fn protect(&mut self, event: protect::Event) -> Task<Message> {
         if let protect::Event::Open = event {
@@ -2798,7 +4412,7 @@ impl App {
         let Some(state) = &mut self.protecting else {
             return Task::none();
         };
-        let clean = |v: String| v.chars().filter(|c| !c.is_control()).take(127).collect();
+        let clean = |v: String| clean_secret(v, 127);
         let protection = match event {
             protect::Event::Open => return Task::none(),
             protect::Event::OpenPassword(v) => {
@@ -2874,15 +4488,29 @@ impl App {
                 if export::settings(state, count).is_err() {
                     return Task::none();
                 }
-                let text = state.format == panna_core::ExportFormat::Text;
+                let format = state.format;
                 let stem = self.file_stem();
-                return if text {
+                return if format.one_file() {
+                    let (title, kind, ext) = match format {
+                        panna_core::ExportFormat::Word => {
+                            ("Export as a Word document", "Word documents", "docx")
+                        }
+                        panna_core::ExportFormat::PowerPoint => (
+                            "Export as a PowerPoint presentation",
+                            "PowerPoint presentations",
+                            "pptx",
+                        ),
+                        panna_core::ExportFormat::Excel => {
+                            ("Export as an Excel workbook", "Excel workbooks", "xlsx")
+                        }
+                        _ => ("Export text as", "Text files", "txt"),
+                    };
                     Task::perform(
                         async move {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Export text as")
-                                .add_filter("Text files", &["txt"])
-                                .set_file_name(format!("{stem}.txt"))
+                                .set_title(title)
+                                .add_filter(kind, &[ext])
+                                .set_file_name(format!("{stem}.{ext}"))
                                 .save_file()
                                 .await
                                 .map(|f| f.path().to_path_buf())
@@ -2974,13 +4602,31 @@ impl App {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Add a picture")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())
                 },
                 Message::AddPictureChosen,
             ),
+            add::Outcome::FindLine(page, (x, y)) => {
+                let line = self
+                    .doc
+                    .as_ref()
+                    .and_then(|d| d.texts.get(page))
+                    .and_then(|slot| slot.text.as_ref())
+                    .and_then(|t| t.paragraph_at(x, y));
+                if line.is_none() {
+                    self.notice = Some("There's no text there to change.".into());
+                }
+                self.adder.edit_line(page, line);
+                self.adder.focus().map_or_else(Task::none, operation::focus)
+            }
             add::Outcome::Nothing => self.adder.focus().map_or_else(Task::none, operation::focus),
         }
     }
@@ -3036,7 +4682,12 @@ impl App {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title("Replace the picture with")
-                        .add_filter("Pictures", &["png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())
@@ -3097,6 +4748,10 @@ impl App {
     fn save_to(&mut self, path: PathBuf) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
         if self.saving {
+            return Task::none();
+        }
+        if doc.info.weak_protection && !doc.strengthen_asked {
+            self.strengthen = Some(path);
             return Task::none();
         }
         self.saving = true;
@@ -3203,6 +4858,10 @@ impl App {
         };
         snap.dragging = false;
         let snap = *snap;
+        if snap.zoom {
+            self.snapshot = None;
+            return self.zoom_to_area(snap);
+        }
         let (x, y, w, h) = snap.rect();
         // A click rather than a drag.
         if w * self.zoom < 4.0 || h * self.zoom < 4.0 {
@@ -3465,6 +5124,7 @@ impl App {
         self.preparer.stop();
         self.picture_editor.stop();
         self.reader.stop();
+        self.preflight = None;
         self.snapping = false;
         self.snapshot = None;
         self.selection = None;
@@ -3476,7 +5136,7 @@ impl App {
             rotation: self.rotation,
             offset: (self.viewport.offset_x, self.viewport.offset_y),
             find: std::mem::take(&mut self.find),
-            annotate: std::mem::replace(&mut self.annotate, annotate::Annotate::new()),
+            annotate: std::mem::replace(&mut self.annotate, annotator(&self.settings)),
             form: std::mem::take(&mut self.form),
             comparison: self.comparison.take(),
             page_edits: std::mem::take(&mut self.page_edits),
@@ -3486,6 +5146,7 @@ impl App {
 
     /// Shows a parked document again where it was left.
     fn unpark(&mut self, tab: Parked) -> Task<Message> {
+        self.bookmarks.reset();
         let mut doc = tab.doc;
         // Replies for it while it was out of view were dropped, so it asks again.
         for slot in &mut doc.pages {
@@ -3550,7 +5211,7 @@ impl App {
     fn close_tab(&mut self) -> Task<Message> {
         let _ = self.park();
         self.find = find::Find::default();
-        self.annotate = annotate::Annotate::new();
+        self.annotate = annotator(&self.settings);
         self.form = form::Form::default();
         self.comparison = None;
         self.page_edits = 0;
@@ -3666,6 +5327,7 @@ impl App {
             id,
             path,
             used_password,
+            strengthen_asked: false,
             info: DocumentInfo {
                 pages: Vec::new(),
                 title: None,
@@ -3675,8 +5337,12 @@ impl App {
                 fields: Vec::new(),
                 links: Vec::new(),
                 protected: false,
+                weak_protection: false,
                 attachments: Vec::new(),
                 layers: Vec::new(),
+                signatures: Vec::new(),
+                initial_view: panna_core::InitialView::default(),
+                page_labels: Vec::new(),
             },
             worker,
             layout: PageLayout::default(),
@@ -3685,10 +5351,61 @@ impl App {
             thumbs: Vec::new(),
             texts: Vec::new(),
             layers_shown: Vec::new(),
+            spread: None,
         });
         Task::perform(rx, move |result| {
             Message::Opened(id, result.unwrap_or(Err(OpenError::EngineCrashed)))
         })
+    }
+
+    /// Turns off the tools that take over dragging on pages.
+    fn stop_page_tools(&mut self) {
+        self.redactor.stop();
+        self.preparer.stop();
+        self.picture_editor.stop();
+        self.adder.on = false;
+        self.adder.cancel();
+        self.measure.on = false;
+        self.measure.clear();
+        self.snapping = false;
+        self.snapshot = None;
+        self.hand = false;
+        self.panning = None;
+        self.zoom_box = false;
+    }
+
+    /// Zooms in so the area dragged with the zoom tool fills the view; a click zooms in a
+    /// step there.
+    fn zoom_to_area(&mut self, area: Snapshot) -> Task<Message> {
+        let (x, y, w, h) = area.rect();
+        let clicked = w * self.zoom < 4.0 || h * self.zoom < 4.0;
+        let zoom = if clicked {
+            self.zoom * 1.5
+        } else {
+            (self.viewport.width / w.max(1.0)).min(self.viewport.height / h.max(1.0)) * 0.95
+        }
+        .clamp(MIN_ZOOM, MAX_ZOOM);
+        let Some(doc) = &self.doc else { return Task::none() };
+        self.zoom = zoom;
+        // The area's middle goes to the middle of the view.
+        let content_w = doc.layout.content_width(zoom, self.viewport.width);
+        let left = doc.layout.page_left(area.page, zoom, content_w);
+        let top = doc.layout.page_top(area.page, zoom) + PAGE_GAP;
+        let middle = (left + (x + w / 2.0) * zoom, top + (y + h / 2.0) * zoom);
+        self.viewport.offset_x = if content_w <= self.viewport.width {
+            0.0
+        } else {
+            (middle.0 - self.viewport.width / 2.0).max(0.0)
+        };
+        self.viewport.offset_y = (middle.1 - self.viewport.height / 2.0).max(0.0);
+        let scroll = operation::scroll_to(
+            scroll_id(),
+            AbsoluteOffset {
+                x: self.viewport.offset_x,
+                y: self.viewport.offset_y,
+            },
+        );
+        Task::batch([scroll, self.request_visible()])
     }
 
     fn set_zoom(&mut self, zoom: f32) -> Task<Message> {
@@ -3719,7 +5436,7 @@ impl App {
             return Task::none();
         };
         let sizes = doc.layout.sizes().to_vec();
-        doc.layout = PageLayout::new(&sizes, self.settings.spread);
+        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
         self.go_to_page(page)
     }
 
@@ -3730,7 +5447,7 @@ impl App {
         };
         self.rotation = (self.rotation + turns) % 4;
         let sizes = rotated_sizes(&doc.info.pages, self.rotation);
-        doc.layout = PageLayout::new(&sizes, self.settings.spread);
+        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
         doc.thumb_layout = ThumbLayout::new(&sizes);
         doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
         doc.thumbs.iter_mut().for_each(|thumb| *thumb = Thumb::default());
@@ -3773,6 +5490,19 @@ impl App {
         self.go_to_page(target)
     }
 
+    /// Shows the page at the zoom a file asks to open at. The page comes first so zooming
+    /// keeps it in place.
+    fn open_at(&mut self, view: panna_core::InitialView) -> Task<Message> {
+        let page = self.go_to_page(view.page);
+        let zoomed = match view.zoom {
+            panna_core::OpenZoom::Default => Task::none(),
+            panna_core::OpenZoom::FitPage => self.update(Message::FitPage),
+            panna_core::OpenZoom::FitWidth => self.update(Message::FitWidth),
+            panna_core::OpenZoom::Scale(zoom) => self.set_zoom(zoom),
+        };
+        page.chain(zoomed)
+    }
+
     fn go_to_page(&mut self, index: usize) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
         if doc.pages.is_empty() {
@@ -3785,6 +5515,24 @@ impl App {
             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y }),
             self.request_visible(),
         ])
+    }
+
+    /// The page typed in the page box, from 0: a label the pages have, or else a number.
+    fn typed_page(&self) -> Option<usize> {
+        let typed = self.page_input.trim();
+        let doc = self.doc.as_ref()?;
+        let labels = &doc.info.page_labels;
+        if !labels.is_empty() {
+            let count = doc.pages.len().min(100_000);
+            let all: Vec<String> = (0..count).map(|i| panna_core::page_label(labels, i)).collect();
+            if let Some(i) = all.iter().position(|l| l == typed) {
+                return Some(i);
+            }
+            if let Some(i) = all.iter().position(|l| l.eq_ignore_ascii_case(typed)) {
+                return Some(i);
+            }
+        }
+        typed.parse::<usize>().ok().and_then(|n| n.checked_sub(1))
     }
 
     fn current_page(&self) -> usize {
@@ -3919,155 +5667,729 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// A toolbar's buttons, laid out for a column when `vertical`, or `None` when the bar has
+    /// nothing to show.
+    fn bar_items(&self, bar: Bar, vertical: bool) -> Option<Vec<Element<'_, Message>>> {
+        let page_count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+        let has_doc = page_count > 0;
+        let on = |m: Message| has_doc.then_some(m);
+        let m = icons::MOD;
+        let items = match bar {
+            Bar::File => vec![
+                icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
+                icons::button(
+                    Icon::Save,
+                    format!("Save ({m}S)"),
+                    (self.dirty() && !self.saving).then_some(Message::Save),
+                ),
+                icons::button(
+                    Icon::Print,
+                    format!("Print… ({m}P)"),
+                    (has_doc && !self.printing).then_some(Message::Print),
+                ),
+                icons::button(
+                    Icon::Properties,
+                    format!("Document properties ({m}D)"),
+                    on(Message::ToggleProperties),
+                ),
+            ],
+            Bar::Page => {
+                let current = self.current_page() + 1;
+                let labels = self
+                    .doc
+                    .as_ref()
+                    .map_or(&[][..], |d| d.info.page_labels.as_slice());
+                let current_label = panna_core::page_label(labels, current - 1);
+                let page_box = text_input(&current_label, &self.page_input)
+                    .id(page_box_id())
+                    .on_input(Message::PageInput)
+                    .on_submit(Message::PageSubmit)
+                    .width(if vertical { 40 } else { 56 });
+                let of = if current_label == current.to_string() {
+                    format!("of {page_count}")
+                } else {
+                    format!("({current} of {page_count})")
+                };
+                vec![
+                    icons::button(
+                        if vertical { Icon::FindPrev } else { Icon::PrevPage },
+                        "Previous page (Page Up)",
+                        on(Message::PrevPage),
+                    ),
+                    icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
+                    text(of).size(13).into(),
+                    icons::button(
+                        if vertical { Icon::FindNext } else { Icon::NextPage },
+                        "Next page (Page Down)",
+                        on(Message::NextPage),
+                    ),
+                ]
+            }
+            Bar::Zoom => vec![
+                icons::button(
+                    Icon::ZoomOut,
+                    format!("Zoom out ({m}Minus)"),
+                    on(Message::ZoomOut),
+                ),
+                icons::with_tip(
+                    button(text(format!("{:.0}%", self.zoom * 100.0)).size(13))
+                        .style(button::text)
+                        .padding([4, 2])
+                        .on_press_maybe(on(Message::ZoomReset)),
+                    format!("Actual size ({m}1)"),
+                ),
+                icons::button(Icon::ZoomIn, format!("Zoom in ({m}Plus)"), on(Message::ZoomIn)),
+                icons::button(Icon::FitWidth, format!("Fit width ({m}2)"), on(Message::FitWidth)),
+                icons::button(Icon::FitPage, format!("Fit page ({m}0)"), on(Message::FitPage)),
+            ],
+            Bar::View => {
+                let spread = self.spread();
+                vec![
+                    icons::toggle(
+                        Icon::Sidebar,
+                        if self.sidebar.open {
+                            "Hide sidebar (F4)"
+                        } else {
+                            "Show sidebar (F4)"
+                        },
+                        self.sidebar.open,
+                        Message::Sidebar(sidebar::Event::Toggle),
+                    ),
+                    icons::button(
+                        match spread {
+                            Spread::Single => Icon::SinglePage,
+                            Spread::Two => Icon::TwoPages,
+                            Spread::TwoCover => Icon::CoverPage,
+                        },
+                        match spread {
+                            Spread::Single => {
+                                format!("Single page: click for two pages side by side ({m}Shift+T)")
+                            }
+                            Spread::Two => {
+                                format!("Two pages: click to show the cover page alone ({m}Shift+T)")
+                            }
+                            Spread::TwoCover => {
+                                format!("Two pages with cover: click for single page ({m}Shift+T)")
+                            }
+                        },
+                        on(Message::NextSpread),
+                    ),
+                    icons::button(Icon::RotateCcw, "Rotate the view left", on(Message::RotateCcw)),
+                    icons::button(Icon::RotateCw, "Rotate the view right", on(Message::RotateCw)),
+                    icons::toggle(
+                        Icon::Moon,
+                        format!(
+                            "Page colours: {} (click for {}, {m}Shift+D)",
+                            self.settings.colors.label(),
+                            self.settings.colors.next().label()
+                        ),
+                        self.settings.colors != colors::PageColors::Normal,
+                        Message::NextColors,
+                    ),
+                    icons::button(
+                        Icon::Present,
+                        format!("Present, one page at a time ({m}L)"),
+                        on(Message::Present),
+                    ),
+                    icons::toggle(
+                        Icon::FullScreen,
+                        if self.screen == Screen::Full {
+                            "Leave full screen (F11)"
+                        } else {
+                            "Full screen (F11)"
+                        },
+                        self.screen == Screen::Full,
+                        Message::ToggleFullScreen,
+                    ),
+                ]
+            }
+            Bar::Tools => vec![
+                icons::toggle(
+                    Icon::Hand,
+                    if self.hand {
+                        "Stop the hand tool (Esc)"
+                    } else {
+                        "Hand: drag the pages to scroll"
+                    },
+                    self.hand,
+                    Message::ToggleHand,
+                ),
+                icons::toggle(
+                    Icon::ZoomBox,
+                    if self.zoom_box {
+                        "Stop the zoom tool (Esc)"
+                    } else {
+                        "Zoom: drag a box over a page to zoom in to it"
+                    },
+                    self.zoom_box,
+                    Message::ToggleZoomBox,
+                ),
+                icons::button(
+                    Icon::Search,
+                    format!("Find ({m}F)"),
+                    on(Message::Find(find::Event::Open)),
+                ),
+                icons::toggle(
+                    Icon::Camera,
+                    if self.snapping {
+                        "Stop taking snapshots (Esc)"
+                    } else {
+                        "Snapshot: drag over a page to copy a picture of it"
+                    },
+                    self.snapping,
+                    Message::ToggleSnapshot,
+                ),
+                icons::toggle(
+                    Icon::Ruler,
+                    if self.measure.on {
+                        "Stop measuring (Esc)"
+                    } else {
+                        "Measure distance, perimeter and area"
+                    },
+                    self.measure.on,
+                    Message::Measure(measure::Event::Toggle),
+                ),
+            ],
+            Bar::Review => vec![
+                icons::toggle(
+                    Icon::Annotate,
+                    if self.annotate.open {
+                        format!("Hide comment tools ({m}Shift+C)")
+                    } else {
+                        format!("Comment and draw ({m}Shift+C)")
+                    },
+                    self.annotate.open,
+                    Message::Annotate(annotate::Event::Toggle),
+                ),
+                icons::toggle(
+                    Icon::EditPage,
+                    "Add or change text, pictures and links",
+                    self.adder.on,
+                    Message::Add(add::Event::Toggle),
+                ),
+                icons::toggle(
+                    Icon::PrepareForm,
+                    "Prepare a form (add or delete fields)",
+                    self.preparer.on,
+                    Message::Prepare(prepare::Event::Toggle),
+                ),
+                icons::button(
+                    Icon::Signature,
+                    annotate::Tool::Sign.tip(),
+                    on(Message::CommentTool(annotate::Tool::Sign)),
+                ),
+                icons::button(Icon::AllTools, "All tools…", Some(Message::AllTools(true))),
+            ],
+            Bar::Comment => {
+                if !(self.annotate.open && has_doc) {
+                    return None;
+                }
+                self.annotate.bar_items(vertical)
+            }
+        };
+        Some(items)
+    }
+
+    /// The page layout in use: the document's own, or the one picked last.
+    fn spread(&self) -> Spread {
+        self.doc
+            .as_ref()
+            .and_then(|d| d.spread)
+            .unwrap_or(self.settings.spread)
+    }
+
+    /// The rows of a menu, enabled and ticked to match the app's state.
+    fn menu_entries(&self, which: menu::Menu) -> Vec<menu::Entry<Message>> {
+        use menu::{Entry::Separator, check, item, plain, sub};
+        use toolbar::Event as T;
+        let has_doc = self.doc.as_ref().is_some_and(|d| !d.pages.is_empty());
+        let on = |m: Message| has_doc.then_some(m);
+        let m = icons::MOD;
+        let k = |keys: &str| format!("{m}{keys}");
+        match which {
+            menu::Menu::File => vec![
+                item(
+                    Icon::NewBlank,
+                    "New blank PDF…",
+                    "",
+                    Some(Message::Blank(create::Event::Open)),
+                ),
+                item(
+                    Icon::FromPictures,
+                    "New PDF from pictures…",
+                    "",
+                    Some(Message::FromPictures),
+                ),
+                item(
+                    Icon::FromClipboard,
+                    "New PDF from the clipboard picture",
+                    "",
+                    Some(Message::FromClipboard),
+                ),
+                item(
+                    Icon::Scanner,
+                    "Scan pages…",
+                    "",
+                    Some(Message::Scan(scan::Event::Open)),
+                ),
+                Separator,
+                item(Icon::Open, "Open…", k("O"), Some(Message::OpenDialog)),
+                sub(
+                    None,
+                    "Open recent",
+                    if self.settings.recent.is_empty() {
+                        vec![plain("No recent files", "", None)]
+                    } else {
+                        self.settings
+                            .recent
+                            .iter()
+                            .map(|path| {
+                                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                                plain(name, "", Some(Message::FileChosen(Some(path.clone()))))
+                            })
+                            .collect()
+                    },
+                ),
+                Separator,
+                item(
+                    Icon::Save,
+                    "Save",
+                    k("S"),
+                    (self.dirty() && !self.saving).then_some(Message::Save),
+                ),
+                plain("Save as…", k("Shift+S"), on(Message::SaveAs)),
+                item(
+                    Icon::Shrink,
+                    "Save a smaller copy…",
+                    "",
+                    on(Message::Shrink(shrink::Event::Open)),
+                ),
+                item(
+                    Icon::Export,
+                    "Export as text, Office or pictures…",
+                    "",
+                    on(Message::Export(export::Event::Open)),
+                ),
+                Separator,
+                item(
+                    Icon::Print,
+                    "Print…",
+                    k("P"),
+                    (has_doc && !self.printing).then_some(Message::Print),
+                ),
+                item(
+                    Icon::PrintComments,
+                    "Print with comments…",
+                    "",
+                    on(Message::PrintWithComments),
+                ),
+                Separator,
+                item(
+                    Icon::Properties,
+                    "Document properties…",
+                    k("D"),
+                    on(Message::ToggleProperties),
+                ),
+                item(
+                    Icon::Batch,
+                    "Batch actions on a folder…",
+                    "",
+                    Some(Message::Batch(batch::Event::Open)),
+                ),
+                Separator,
+                plain("Close", k("W"), self.doc.is_some().then_some(Message::CloseTab)),
+                plain(
+                    if cfg!(target_os = "macos") {
+                        "Quit Panna"
+                    } else {
+                        "Exit"
+                    },
+                    "",
+                    Some(Message::Quit),
+                ),
+            ],
+            menu::Menu::Edit => vec![
+                item(
+                    Icon::Undo,
+                    "Undo",
+                    k("Z"),
+                    self.annotate
+                        .can_undo()
+                        .then_some(Message::Annotate(annotate::Event::Undo)),
+                ),
+                item(
+                    Icon::Redo,
+                    "Redo",
+                    k("Y"),
+                    self.annotate
+                        .can_redo()
+                        .then_some(Message::Annotate(annotate::Event::Redo)),
+                ),
+                Separator,
+                plain("Copy", k("C"), on(Message::Copy)),
+                check("Snapshot", "", self.snapping, on(Message::ToggleSnapshot)),
+                Separator,
+                item(
+                    Icon::Search,
+                    "Find…",
+                    k("F"),
+                    on(Message::Find(find::Event::Open)),
+                ),
+                Separator,
+                item(
+                    Icon::EditPage,
+                    "Add or change text, pictures and links",
+                    "",
+                    on(Message::Add(add::Event::Toggle)),
+                ),
+                item(
+                    Icon::EditPictures,
+                    "Move, replace or delete pictures",
+                    "",
+                    on(Message::EditPictures(pictures::Event::Toggle)),
+                ),
+                Separator,
+                item(
+                    Icon::Preferences,
+                    "Preferences…",
+                    k(","),
+                    Some(Message::Preferences(preferences::Event::Open)),
+                ),
+            ],
+            menu::Menu::View => {
+                let bars = &self.bars.layout;
+                let mut toolbars: Vec<menu::Entry<Message>> = Bar::ALL
+                    .into_iter()
+                    .map(|bar| {
+                        let shown = if bar == Bar::Comment {
+                            self.annotate.open
+                        } else {
+                            bars.place(bar).shown
+                        };
+                        check(
+                            bar.name(),
+                            "",
+                            shown,
+                            Some(Message::Toolbar(T::Show(bar, !shown))),
+                        )
+                    })
+                    .collect();
+                toolbars.push(Separator);
+                for align in toolbar::Align::ALL {
+                    toolbars.push(check(
+                        format!("Bottom bars: {}", align.label()),
+                        "",
+                        bars.bottom == align,
+                        Some(Message::Toolbar(T::BottomAlign(align))),
+                    ));
+                }
+                toolbars.extend([
+                    Separator,
+                    check(
+                        "Lock toolbars",
+                        "",
+                        bars.locked,
+                        Some(Message::Toolbar(T::ToggleLock)),
+                    ),
+                    plain("Reset toolbar layout", "", Some(Message::Toolbar(T::Reset))),
+                ]);
+                let spread = self.spread();
+                let colors = self.settings.colors;
+                vec![
+                    check(
+                        "Sidebar",
+                        "F4",
+                        self.sidebar.open,
+                        Some(Message::Sidebar(sidebar::Event::Toggle)),
+                    ),
+                    sub(None, "Toolbars", toolbars),
+                    Separator,
+                    item(Icon::ZoomIn, "Zoom in", k("+"), on(Message::ZoomIn)),
+                    item(Icon::ZoomOut, "Zoom out", k("−"), on(Message::ZoomOut)),
+                    plain("Actual size", k("1"), on(Message::ZoomReset)),
+                    item(Icon::FitWidth, "Fit width", k("2"), on(Message::FitWidth)),
+                    item(Icon::FitPage, "Fit page", k("0"), on(Message::FitPage)),
+                    Separator,
+                    sub(
+                        Some(Icon::SinglePage),
+                        "Page layout",
+                        [
+                            (Spread::Single, "Single page"),
+                            (Spread::Two, "Two pages"),
+                            (Spread::TwoCover, "Two pages with cover"),
+                        ]
+                        .into_iter()
+                        .map(|(s, label)| check(label, "", spread == s, on(Message::SetSpread(s))))
+                        .collect(),
+                    ),
+                    sub(
+                        Some(Icon::Moon),
+                        "Page colours",
+                        [
+                            (colors::PageColors::Normal, "Original"),
+                            (colors::PageColors::Dark, "Dark"),
+                            (colors::PageColors::Sepia, "Sepia"),
+                        ]
+                        .into_iter()
+                        .map(|(c, label)| check(label, "", colors == c, Some(Message::SetColors(c))))
+                        .collect(),
+                    ),
+                    item(
+                        Icon::RotateCcw,
+                        "Rotate the view left",
+                        "",
+                        on(Message::RotateCcw),
+                    ),
+                    item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
+                    Separator,
+                    item(Icon::Present, "Present", k("L"), on(Message::Present)),
+                    check(
+                        "Full screen",
+                        "F11",
+                        self.screen == Screen::Full,
+                        Some(Message::ToggleFullScreen),
+                    ),
+                    Separator,
+                    item(Icon::PrevPage, "Previous page", "Page Up", on(Message::PrevPage)),
+                    item(Icon::NextPage, "Next page", "Page Down", on(Message::NextPage)),
+                    plain("Go to page…", k("Shift+N"), on(Message::FocusPageBox)),
+                ]
+            }
+            menu::Menu::Comment => {
+                let tool = |t: annotate::Tool| {
+                    item(
+                        t.icon(),
+                        t.label(),
+                        t.key().to_ascii_uppercase().to_string(),
+                        on(Message::CommentTool(t)),
+                    )
+                };
+                use annotate::Tool;
+                vec![
+                    check(
+                        "Comment tools",
+                        k("Shift+C"),
+                        self.annotate.open,
+                        on(Message::Annotate(annotate::Event::Toggle)),
+                    ),
+                    Separator,
+                    tool(Tool::Select),
+                    tool(Tool::Highlight),
+                    tool(Tool::Underline),
+                    tool(Tool::StrikeOut),
+                    tool(Tool::Note),
+                    tool(Tool::TextBox),
+                    tool(Tool::Pen),
+                    sub(
+                        Some(Icon::Square),
+                        "Shapes",
+                        [
+                            Tool::Rect,
+                            Tool::Ellipse,
+                            Tool::Arrow,
+                            Tool::Line,
+                            Tool::Polygon,
+                            Tool::Cloud,
+                        ]
+                        .into_iter()
+                        .map(tool)
+                        .collect(),
+                    ),
+                    tool(Tool::Stamp),
+                    tool(Tool::Sign),
+                    Separator,
+                    item(
+                        Icon::CommentsImport,
+                        "Add comments from a file…",
+                        "",
+                        on(Message::ImportComments),
+                    ),
+                    item(
+                        Icon::CommentsExport,
+                        "Save comments to a file…",
+                        "",
+                        on(Message::ExportComments),
+                    ),
+                    item(
+                        Icon::CommentSummary,
+                        "Summarize comments as a PDF…",
+                        "",
+                        on(Message::SummarizeComments),
+                    ),
+                ]
+            }
+            menu::Menu::Pages => {
+                let op =
+                    |icon: Icon, label: &str, op: pages::Op| item(icon, label, "", on(Message::Pages(op)));
+                vec![
+                    op(Icon::RotateCcw, "Rotate this page left", pages::Op::RotateCcw),
+                    op(Icon::RotateCw, "Rotate this page right", pages::Op::RotateCw),
+                    op(Icon::MoveUp, "Move this page up", pages::Op::MoveUp),
+                    op(Icon::MoveDown, "Move this page down", pages::Op::MoveDown),
+                    Separator,
+                    op(
+                        Icon::PageAdd,
+                        "Add a blank page after this one",
+                        pages::Op::InsertBlank,
+                    ),
+                    op(
+                        Icon::PageInsertFile,
+                        "Insert pages from a PDF…",
+                        pages::Op::InsertFile,
+                    ),
+                    op(Icon::PageReplace, "Replace pages…", pages::Op::Replace),
+                    op(Icon::PageExtract, "Extract or split pages…", pages::Op::Extract),
+                    op(Icon::Delete, "Delete this page", pages::Op::Delete),
+                    Separator,
+                    op(Icon::Crop, "Crop pages…", pages::Op::Crop),
+                    op(
+                        Icon::PageNumbers,
+                        "Page numbers, headers and footers…",
+                        pages::Op::HeaderFooter,
+                    ),
+                    op(Icon::Watermark, "Watermark or page colour…", pages::Op::Watermark),
+                    op(Icon::PageLabels, "Page labels…", pages::Op::Labels),
+                    op(Icon::Flatten, "Flatten into the pages…", pages::Op::Flatten),
+                ]
+            }
+            menu::Menu::Forms => {
+                let has_form = self.form.exists();
+                vec![
+                    check(
+                        "Prepare a form",
+                        "",
+                        self.preparer.on,
+                        on(Message::Prepare(prepare::Event::Toggle)),
+                    ),
+                    Separator,
+                    item(
+                        Icon::Eraser,
+                        "Reset form",
+                        "",
+                        self.form.can_reset().then_some(Message::ResetForm),
+                    ),
+                    item(
+                        Icon::DataImport,
+                        "Fill in from a data file…",
+                        "",
+                        (has_doc && has_form).then_some(Message::ImportFormData),
+                    ),
+                    item(
+                        Icon::DataExport,
+                        "Save form data (FDF, XFDF)…",
+                        "",
+                        (has_doc && has_form).then_some(Message::ExportFormData),
+                    ),
+                ]
+            }
+            menu::Menu::Protect => vec![
+                item(
+                    Icon::Protect,
+                    "Password protection…",
+                    "",
+                    on(Message::Protect(protect::Event::Open)),
+                ),
+                check(
+                    "Redact (remove content for good)",
+                    "",
+                    self.redactor.on,
+                    on(Message::Redact(redact::Event::Toggle)),
+                ),
+                item(
+                    Icon::Clean,
+                    "Remove hidden information…",
+                    "",
+                    on(Message::Clean(protect::CleanEvent::Open)),
+                ),
+                Separator,
+                item(
+                    Icon::Signed,
+                    "Sign with a certificate…",
+                    "",
+                    on(Message::Signing(signing::Event::Open)),
+                ),
+            ],
+            menu::Menu::Tools => vec![
+                item(Icon::AllTools, "All tools…", "", Some(Message::AllTools(true))),
+                Separator,
+                item(
+                    Icon::ScanText,
+                    "Recognise text in scanned pages (OCR)",
+                    "",
+                    (has_doc && !self.recognising).then_some(Message::Recognise),
+                ),
+                sub(
+                    Some(Icon::ReadAloud),
+                    "Read aloud",
+                    vec![
+                        plain(
+                            "This page",
+                            k("Shift+V"),
+                            on(Message::ReadAloud(speech::Event::Page)),
+                        ),
+                        plain(
+                            "To the end",
+                            k("Shift+B"),
+                            on(Message::ReadAloud(speech::Event::ToEnd)),
+                        ),
+                        plain(
+                            "Stop",
+                            k("Shift+E"),
+                            self.reader
+                                .bar()
+                                .is_some()
+                                .then_some(Message::ReadAloud(speech::Event::Stop)),
+                        ),
+                    ],
+                ),
+                check(
+                    "Measure",
+                    "",
+                    self.measure.on,
+                    on(Message::Measure(measure::Event::Toggle)),
+                ),
+                check("Hand", "", self.hand, Some(Message::ToggleHand)),
+                check("Zoom box", "", self.zoom_box, Some(Message::ToggleZoomBox)),
+                Separator,
+                item(
+                    Icon::Compare,
+                    "Compare with another file…",
+                    "",
+                    on(Message::Compare(compare::Event::Open)),
+                ),
+                item(
+                    Icon::Preflight,
+                    "Check for PDF/A (archiving)",
+                    "",
+                    on(Message::Preflight(preflight::Event::Run)),
+                ),
+                item(
+                    Icon::Preflight,
+                    "Check for PDF/X (printing)",
+                    "",
+                    on(Message::Preflight(preflight::Event::RunPrint)),
+                ),
+                item(
+                    Icon::Accessibility,
+                    "Check accessibility",
+                    "",
+                    on(Message::Preflight(preflight::Event::RunAccessibility)),
+                ),
+            ],
+            menu::Menu::Help => vec![
+                plain("Keyboard shortcuts", "", Some(Message::Shortcuts(true))),
+                Separator,
+                item(Icon::Properties, "About Panna", "", Some(Message::About)),
+            ],
+        }
+    }
+
     fn view(&self) -> Element<'_, Message> {
         if let Screen::Present { page, .. } = self.screen {
             return self.present_view(page);
         }
         let page_count = self.doc.as_ref().map_or(0, |d| d.pages.len());
         let has_doc = page_count > 0;
-        let current = self.current_page() + 1;
-
-        let page_box = text_input(&current.to_string(), &self.page_input)
-            .id(page_box_id())
-            .on_input(Message::PageInput)
-            .on_submit(Message::PageSubmit)
-            .width(56);
-
-        let gap = || space().width(10).height(10).into();
-        let on = |m: Message| has_doc.then_some(m);
-        let m = icons::MOD;
-        let items: Vec<Element<'_, Message>> = vec![
-            icons::button(
-                Icon::Sidebar,
-                if self.sidebar.open {
-                    "Hide sidebar (F4)"
-                } else {
-                    "Show sidebar (F4)"
-                },
-                on(Message::Sidebar(sidebar::Event::Toggle)),
-            ),
-            icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
-            icons::button(
-                Icon::Save,
-                format!("Save ({m}S)"),
-                (self.dirty() && !self.saving).then_some(Message::Save),
-            ),
-            icons::button(
-                Icon::Print,
-                format!("Print… ({m}P)"),
-                (has_doc && !self.printing).then_some(Message::Print),
-            ),
-            icons::button(Icon::AllTools, "All tools…", Some(Message::AllTools(true))),
-            gap(),
-            icons::button(Icon::PrevPage, "Previous page (Page Up)", on(Message::PrevPage)),
-            icons::with_tip(page_box, format!("Go to page ({m}Shift+N)")),
-            text(format!("of {page_count}")).into(),
-            icons::button(Icon::NextPage, "Next page (Page Down)", on(Message::NextPage)),
-            gap(),
-            icons::button(
-                Icon::ZoomOut,
-                format!("Zoom out ({m}Minus)"),
-                on(Message::ZoomOut),
-            ),
-            icons::with_tip(
-                button(text(format!("{:.0}%", self.zoom * 100.0)).size(13))
-                    .style(button::text)
-                    .on_press_maybe(on(Message::ZoomReset)),
-                format!("Actual size ({m}1)"),
-            ),
-            icons::button(Icon::ZoomIn, format!("Zoom in ({m}Plus)"), on(Message::ZoomIn)),
-            icons::button(Icon::FitWidth, format!("Fit width ({m}2)"), on(Message::FitWidth)),
-            icons::button(Icon::FitPage, format!("Fit page ({m}0)"), on(Message::FitPage)),
-            gap(),
-            icons::button(Icon::RotateCcw, "Rotate left", on(Message::RotateCcw)),
-            icons::button(Icon::RotateCw, "Rotate right", on(Message::RotateCw)),
-            icons::button(
-                match self.settings.spread {
-                    Spread::Single => Icon::SinglePage,
-                    Spread::Two => Icon::TwoPages,
-                    Spread::TwoCover => Icon::CoverPage,
-                },
-                match self.settings.spread {
-                    Spread::Single => format!("Single page: click for two pages side by side ({m}Shift+T)"),
-                    Spread::Two => format!("Two pages: click to show the cover page alone ({m}Shift+T)"),
-                    Spread::TwoCover => format!("Two pages with cover: click for single page ({m}Shift+T)"),
-                },
-                on(Message::NextSpread),
-            ),
-            icons::button(
-                Icon::Present,
-                format!("Present, one page at a time ({m}L)"),
-                on(Message::Present),
-            ),
-            icons::toggle(
-                Icon::FullScreen,
-                if self.screen == Screen::Full {
-                    "Leave full screen (F11)"
-                } else {
-                    "Full screen (F11)"
-                },
-                self.screen == Screen::Full,
-                Message::ToggleFullScreen,
-            ),
-            icons::toggle(
-                Icon::Moon,
-                format!(
-                    "Page colours: {} (click for {}, {m}Shift+D)",
-                    self.settings.colors.label(),
-                    self.settings.colors.next().label()
-                ),
-                self.settings.colors != colors::PageColors::Normal,
-                Message::NextColors,
-            ),
-            gap(),
-            icons::button(
-                Icon::Search,
-                format!("Find ({m}F)"),
-                on(Message::Find(find::Event::Open)),
-            ),
-            icons::toggle(
-                Icon::Annotate,
-                if self.annotate.open {
-                    format!("Hide comment tools ({m}Shift+C)")
-                } else {
-                    format!("Comment and draw ({m}Shift+C)")
-                },
-                self.annotate.open,
-                Message::Annotate(annotate::Event::Toggle),
-            ),
-            icons::toggle(
-                Icon::Ruler,
-                if self.measure.on {
-                    "Stop measuring (Esc)"
-                } else {
-                    "Measure distance, perimeter and area"
-                },
-                self.measure.on,
-                Message::Measure(measure::Event::Toggle),
-            ),
-            icons::toggle(
-                Icon::Camera,
-                if self.snapping {
-                    "Stop taking snapshots (Esc)"
-                } else {
-                    "Snapshot: drag over a page to copy a picture of it"
-                },
-                self.snapping,
-                Message::ToggleSnapshot,
-            ),
-            icons::button(
-                Icon::Eraser,
-                "Reset form",
-                self.form.can_reset().then_some(Message::ResetForm),
-            ),
-            gap(),
-            icons::button(
-                Icon::Properties,
-                format!("Document properties ({m}D)"),
-                on(Message::ToggleProperties),
-            ),
-        ];
-        let toolbar = self.toolbar.view(items, Message::Toolbar);
 
         let body: Element<'_, Message> = match (&self.status, &self.doc) {
             (Status::Error(e), _) => center(
@@ -4109,14 +6431,6 @@ impl App {
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.pages_view(doc);
-                // The row is there either way, so opening the rail doesn't move the pages in
-                // the widget tree and reset their scroll position.
-                let rail: Element<'_, Message> = if self.annotate.open {
-                    container(self.annotate.rail()).padding(6).into()
-                } else {
-                    space().into()
-                };
-                let pages = row![rail, pages].into();
                 self.with_sidebar(doc, pages)
             }
             _ => self.welcome_view(),
@@ -4186,6 +6500,9 @@ impl App {
                     .into(),
             );
         }
+        if let Some(report) = &self.preflight {
+            layers.push(modal(report.card(), Message::Preflight(preflight::Event::Close)));
+        }
         if let Some(card) = self.preparer.card() {
             layers.push(modal(card, Message::Prepare(prepare::Event::Cancel)));
         }
@@ -4201,14 +6518,18 @@ impl App {
             );
         }
         if let (Some(doc), true) = (&self.doc, self.show_properties) {
-            layers.push(properties_view(&doc.info));
+            layers.push(properties_view(&doc.info, &self.initial, self.pages_busy));
         }
         if let Some(card) = self.annotate.editor() {
             layers.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
         }
         if let (Some(state), Some(doc)) = (&self.extracting, &self.doc) {
             layers.push(modal(
-                pages::extract_card(state, doc.pages.len()),
+                pages::extract_card(
+                    state,
+                    doc.pages.len(),
+                    pages::bookmark_parts(&doc.info.outline, doc.pages.len()).len(),
+                ),
                 Message::Extract(pages::ExtractEvent::Cancel),
             ));
         }
@@ -4236,10 +6557,50 @@ impl App {
                 Message::Protect(protect::Event::Cancel),
             ));
         }
+        if let Some(state) = &self.scanning {
+            layers.push(modal(scan::card(state), Message::Scan(scan::Event::Cancel)));
+        }
+        if let Some(state) = self.shrinking {
+            layers.push(modal(shrink::card(state), Message::Shrink(shrink::Event::Cancel)));
+        }
+        if let Some(state) = &self.signing {
+            layers.push(modal(
+                signing::card(state),
+                Message::Signing(signing::Event::Cancel),
+            ));
+        }
         if let Some(state) = self.flattening {
             layers.push(modal(
                 pages::flatten_card(state),
                 Message::Flatten(pages::FlattenEvent::Cancel),
+            ));
+        }
+        if let Some(state) = &self.blank {
+            layers.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
+        }
+        if let Some(state) = &self.batch {
+            layers.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
+        }
+        if self.preferences {
+            layers.push(modal(
+                preferences::card(preferences::View {
+                    author: &self.settings.author,
+                    account: &self.account,
+                    appearance: self.settings.appearance,
+                    zoom: self.settings.open_zoom,
+                    unit: self.settings.unit,
+                    note: self.default_app_note.as_deref(),
+                }),
+                Message::Preferences(preferences::Event::Close),
+            ));
+        }
+        if let Some(state) = &self.labelling {
+            layers.push(modal(labels::card(state), Message::Labels(labels::Event::Cancel)));
+        }
+        if let Some(state) = &self.replacing {
+            layers.push(modal(
+                pages::replace_card(state),
+                Message::Replace(pages::ReplaceEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.exporting, &self.doc) {
@@ -4269,6 +6630,9 @@ impl App {
         if self.confirm.is_some() {
             layers.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
         }
+        if self.strengthen.is_some() {
+            layers.push(modal(self.strengthen_view(), Message::Strengthen(None)));
+        }
         if let Some(notice) = &self.notice {
             layers.push(modal(
                 container(
@@ -4285,19 +6649,35 @@ impl App {
                 Message::DismissNotice,
             ));
         }
+        if self.shortcuts {
+            layers.push(modal(shortcuts_card(), Message::Shortcuts(false)));
+        }
         let body: Element<'_, Message> = Stack::with_children(layers).into();
 
-        match self.toolbar.dock {
-            Dock::Top => column![toolbar, body].into(),
-            Dock::Bottom => column![body, toolbar].into(),
-            Dock::Left => row![toolbar, body].into(),
-            Dock::Right => row![body, toolbar].into(),
-            Dock::Floating => stack![
-                body,
-                pin(opaque(toolbar)).x(self.toolbar.pos.x).y(self.toolbar.pos.y)
-            ]
-            .into(),
+        // The same shape whichever edges have bars, so moving a bar doesn't move the body in
+        // the widget tree and reset its scroll position.
+        let bars = self.bars.arrange(
+            |bar, vertical| self.bar_items(bar, vertical),
+            Message::Toolbar,
+            self.window_size,
+        );
+        let window = column![
+            self.menus.bar(Message::Menu),
+            bars.top,
+            row![bars.left, container(body).width(Fill).height(Fill), bars.right].height(Fill),
+            bars.bottom,
+        ];
+        let mut layers = vec![window.into()];
+        layers.extend(bars.floating);
+        if let Some(menu) = self.menus.open() {
+            layers.extend(self.menus.panels(
+                self.menu_entries(menu),
+                Message::Menu,
+                |m| Message::MenuPick(Box::new(m)),
+                self.window_size,
+            ));
         }
+        Stack::with_children(layers).into()
     }
 
     /// One page on black, nothing else. A click goes forward, a right-click back.
@@ -4353,6 +6733,50 @@ impl App {
         .into()
     }
 
+    /// Before saving a file with RC4 or AES-128 protection.
+    fn strengthen_view(&self) -> Element<'_, Message> {
+        // The method, as the document's properties name it: "Yes (RC4)".
+        let method = self
+            .doc
+            .as_ref()
+            .and_then(|d| {
+                d.info
+                    .properties
+                    .iter()
+                    .find(|(k, _)| *k == "Password protection")
+            })
+            .and_then(|(_, v)| v.strip_prefix("Yes (")?.strip_suffix(')'))
+            .unwrap_or("an older method")
+            .to_owned();
+        container(
+            column![
+                text("Use stronger password protection?").size(16),
+                text(format!(
+                    "This file is protected with {method}, an older method that can be broken. \
+                     Panna can save it with AES-256 instead, keeping the same passwords and \
+                     permissions."
+                )),
+                text("Some very old PDF readers can't open AES-256 files.").style(text::secondary),
+                row![
+                    button("Cancel")
+                        .style(button::secondary)
+                        .on_press(Message::Strengthen(None)),
+                    space::horizontal(),
+                    button(text(format!("Keep {method}")))
+                        .style(button::secondary)
+                        .on_press(Message::Strengthen(Some(false))),
+                    button("Use AES-256").on_press(Message::Strengthen(Some(true))),
+                ]
+                .spacing(8),
+            ]
+            .spacing(12)
+            .width(420),
+        )
+        .padding(18)
+        .style(container::rounded_box)
+        .into()
+    }
+
     fn welcome_view(&self) -> Element<'_, Message> {
         let mut content = column![
             text("Open a PDF to get started").size(20),
@@ -4389,6 +6813,8 @@ impl App {
                 layout: &doc.thumb_layout,
                 thumbs_images: &doc.thumbs,
                 outline: &doc.info.outline,
+                page_labels: &doc.info.page_labels,
+                bookmarks: &self.bookmarks,
                 current: self.current_page(),
                 find: &self.find,
                 texts: &doc.texts,
@@ -4396,6 +6822,8 @@ impl App {
                 unsaved: &self.annotate.items,
                 removed: &self.annotate.removed,
                 attachments: &doc.info.attachments,
+                signatures: &doc.info.signatures,
+                trusted: &self.trusted.certs,
                 layers: &doc.info.layers,
                 layers_shown: &doc.layers_shown,
                 can_undo_pages: self.page_edits > 0,
@@ -4668,7 +7096,14 @@ impl App {
                         } else {
                             mouse::Interaction::ResizingDiagonallyUp
                         }
+                    } else if self.hand {
+                        if self.panning.is_some() {
+                            mouse::Interaction::Grabbing
+                        } else {
+                            mouse::Interaction::Grab
+                        }
                     } else if self.snapping
+                        || self.zoom_box
                         || self.measure.on
                         || self.adder.on
                         || self.redactor.on
@@ -4756,4 +7191,15 @@ fn rotated_sizes(pages: &[PageSize], rotation: u8) -> Vec<PageSize> {
             }
         })
         .collect()
+}
+
+/// Comment tools for a document, putting the name from Preferences (or the account's) on
+/// comments.
+fn annotator(settings: &Settings) -> annotate::Annotate {
+    let mut annotate = annotate::Annotate::new();
+    let name = settings.author.trim();
+    if !name.is_empty() {
+        annotate.set_author(name.to_owned());
+    }
+    annotate
 }

@@ -139,6 +139,70 @@ fn files_are_combined() {
 }
 
 #[test]
+fn pages_are_replaced_and_bookmarks_follow_their_replacement() {
+    let doc = open(three_pages(), None);
+    // The other file's pages read "Page 3", "Page 2", "Page 1".
+    let other = open(
+        doc.rearranged(&[page(2, 0), page(1, 0), page(0, 0)], &[])
+            .unwrap(),
+        None,
+    );
+    // The second page, which the bookmark goes to, replaced by "Page 3".
+    let replaced = open(doc.with_pages_replaced(&other, 1, 1, 0).unwrap(), None);
+    assert_eq!(replaced.page_count(), 3);
+    assert!(text(&replaced, 0).contains("Page 1"));
+    assert!(text(&replaced, 1).contains("Page 3"));
+    assert!(text(&replaced, 2).contains("Page 3"));
+    let info = replaced.info().unwrap();
+    assert_eq!(info.outline[0].title, "Second");
+    assert_eq!(info.outline[0].page, Some(1));
+    // Two pages at the end, from the other file's second page.
+    let replaced = open(doc.with_pages_replaced(&other, 1, 2, 1).unwrap(), None);
+    let texts: Vec<String> = (0..3).map(|i| text(&replaced, i)).collect();
+    assert!(texts[0].contains("Page 1") && texts[1].contains("Page 2") && texts[2].contains("Page 1"));
+}
+
+#[test]
+fn page_labels_are_read_changed_and_removed() {
+    use panna_core::{LabelRange, LabelStyle, page_label};
+    let doc = open(three_pages(), None);
+    let labels = doc.info().unwrap().page_labels;
+    assert_eq!(
+        labels,
+        [LabelRange {
+            start: 0,
+            style: LabelStyle::LowerRoman,
+            prefix: String::new(),
+            first: 1
+        }]
+    );
+    assert_eq!(page_label(&labels, 2), "iii");
+    let ranges = vec![
+        LabelRange {
+            start: 0,
+            style: LabelStyle::UpperRoman,
+            prefix: String::new(),
+            first: 1,
+        },
+        LabelRange {
+            start: 1,
+            style: LabelStyle::Decimal,
+            prefix: "p. ".into(),
+            first: 1,
+        },
+    ];
+    let changed = open(doc.with_page_labels(&ranges).unwrap(), None);
+    let labels = changed.info().unwrap().page_labels;
+    assert_eq!(labels, ranges);
+    let shown: Vec<String> = (0..3).map(|i| page_label(&labels, i)).collect();
+    assert_eq!(shown, ["I", "p. 1", "p. 2"]);
+    // Plain numbers take the labels out.
+    let plain = open(changed.with_page_labels(&[]).unwrap(), None);
+    assert!(plain.info().unwrap().page_labels.is_empty());
+    assert_eq!(plain.page_count(), 3);
+}
+
+#[test]
 fn password_protection_is_kept() {
     for (name, bytes) in [
         ("RC4", &include_bytes!("fixtures/encrypted-rc4.pdf")[..]),
@@ -216,7 +280,7 @@ fn the_worker_changes_pages_with_undo_and_saves() {
     assert_eq!(rx.recv_timeout(wait).unwrap(), Ok(()));
     // The copy to print has the unsaved comment.
     let (tx, rx) = mpsc::channel();
-    worker.print_copy(move |r| {
+    worker.print_copy(false, move |r| {
         let _ = tx.send(r);
     });
     let printed = open(rx.recv_timeout(wait).unwrap().unwrap(), None);
@@ -386,6 +450,40 @@ fn watermarks_and_backgrounds_are_drawn() {
 }
 
 #[test]
+fn picture_watermarks_are_drawn_and_shared() {
+    use panna_core::{StampImage, Watermark};
+    let doc = open(three_pages(), None);
+    // A solid blue square.
+    let image = StampImage::from_rgba(4, 4, &[0, 0, 255, 255].repeat(16)).unwrap();
+    let mark = Watermark {
+        picture: Some(image),
+        picture_scale: 0.5,
+        angle: 0.0,
+        opacity: 1.0,
+        ..Watermark::default()
+    };
+    let bytes = doc.with_watermark(&[0, 1, 2], &mark).unwrap();
+    // One picture, drawn on every page.
+    let pictures = bytes
+        .windows(b"/Subtype /Image".len())
+        .filter(|w| *w == b"/Subtype /Image")
+        .count();
+    assert_eq!(pictures, 1);
+    let out = open(bytes, None);
+    let cache = out.new_cache();
+    for p in 0..3 {
+        let page = out.render_page(&cache, p, 1.0).unwrap();
+        let pixel = |x: u32, y: u32| {
+            let i = ((y * page.width + x) * 4) as usize;
+            page.rgba[i..i + 3].to_vec()
+        };
+        // Centred, half the page wide.
+        assert_eq!(pixel(page.width / 2, page.height / 2), [0, 0, 255]);
+        assert_eq!(pixel(page.width / 8, page.height / 2), [255, 255, 255]);
+    }
+}
+
+#[test]
 fn pages_are_exported_as_text_and_pictures() {
     use panna_core::{Export, ExportFormat, RenderWorker};
     let dir = std::env::temp_dir().join(format!("panna-export-{}", std::process::id()));
@@ -415,6 +513,30 @@ fn pages_are_exported_as_text_and_pictures() {
         text.find("Page 3").unwrap() < text.find("Page 1").unwrap(),
         "{text}"
     );
+    let docx = dir.join("out.docx");
+    run(Export {
+        format: ExportFormat::Word,
+        dpi: 0.0,
+        pages: vec![(0, docx.clone()), (2, docx.clone())],
+    })
+    .unwrap();
+    assert!(std::fs::read(&docx).unwrap().starts_with(b"PK\x03\x04"));
+    let pptx = dir.join("out.pptx");
+    run(Export {
+        format: ExportFormat::PowerPoint,
+        dpi: 72.0,
+        pages: vec![(1, pptx.clone()), (2, pptx.clone())],
+    })
+    .unwrap();
+    assert!(std::fs::read(&pptx).unwrap().starts_with(b"PK\x03\x04"));
+    let xlsx = dir.join("out.xlsx");
+    run(Export {
+        format: ExportFormat::Excel,
+        dpi: 0.0,
+        pages: vec![(0, xlsx.clone())],
+    })
+    .unwrap();
+    assert!(std::fs::read(&xlsx).unwrap().starts_with(b"PK\x03\x04"));
     let (png, jpg) = (dir.join("p.png"), dir.join("p.jpg"));
     run(Export {
         format: ExportFormat::Png,
@@ -441,13 +563,13 @@ fn password_protection_is_added_changed_and_removed() {
     use panna_core::{Protection, SaveError};
     let doc = open(three_pages(), None);
     let protection = Protection {
-        open_password: "open sesame".into(),
-        owner_password: "boss".into(),
+        open_password: "open sesame".to_owned().into(),
+        owner_password: "boss".to_owned().into(),
         allow_printing: true,
         ..Protection::default()
     };
     let (bytes, password) = doc.protected(Some(&protection)).unwrap();
-    assert_eq!(password, "boss");
+    assert_eq!(*password, "boss");
     assert!(Document::from_bytes(bytes.clone(), None, Limits::default()).is_err());
     assert!(Document::from_bytes(bytes.clone(), Some("wrong"), Limits::default()).is_err());
 
@@ -466,11 +588,11 @@ fn password_protection_is_added_changed_and_removed() {
 
     // No printing, and no owner password: nobody can print it or lift that.
     let locked = Protection {
-        open_password: "x".into(),
+        open_password: "x".to_owned().into(),
         ..Protection::default()
     };
     let (bytes, password) = doc.protected(Some(&locked)).unwrap();
-    assert_eq!(password, "x");
+    assert_eq!(*password, "x");
     let user = open(bytes, Some("x"));
     assert_eq!(user.print_copy().unwrap_err(), SaveError::PrintingNotAllowed);
 

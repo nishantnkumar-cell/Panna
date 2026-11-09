@@ -1,4 +1,4 @@
-//! Pictures for image stamps: a PNG or JPEG, decoded and kept ready to write into a PDF.
+//! Pictures for image stamps: a PNG, JPEG or TIFF, decoded and kept ready to write into a PDF.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -12,14 +12,14 @@ const MAX_SIDE: u32 = 8000;
 const MAX_BYTES: usize = 50 * 1024 * 1024;
 
 /// A picture for an image stamp, decoded and compressed for the PDF.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StampImage {
     pub width: u32,
     pub height: u32,
     data: Arc<Encoded>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Encoded {
     /// RGB samples, zlib-compressed.
     rgb: Vec<u8>,
@@ -34,7 +34,7 @@ impl PartialEq for StampImage {
 }
 
 impl StampImage {
-    /// Decodes a PNG or JPEG file's bytes.
+    /// Decodes a PNG, JPEG or TIFF file's bytes (a TIFF's first page).
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > MAX_BYTES {
             return Err("That picture is too large.".into());
@@ -42,9 +42,11 @@ impl StampImage {
         let (width, height, rgba) = if bytes.starts_with(&[0xFF, 0xD8]) {
             jpeg(bytes)?
         } else if bytes.starts_with(b"\x89PNG") {
-            png(bytes)?
+            decoded(bytes, image::ImageFormat::Png, "PNG")?
+        } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+            decoded(bytes, image::ImageFormat::Tiff, "TIFF")?
         } else {
-            return Err("Choose a PNG or JPEG picture.".into());
+            return Err("Choose a PNG, JPEG or TIFF picture.".into());
         };
         Self::from_rgba(width, height, &rgba)
     }
@@ -99,6 +101,11 @@ impl StampImage {
     }
 
     /// Whether it has transparent parts, which need a mask object.
+    /// Identifies the decoded picture, so one used on many pages is written once.
+    pub(crate) fn key(&self) -> usize {
+        Arc::as_ptr(&self.data) as usize
+    }
+
     pub(crate) fn has_mask(&self) -> bool {
         self.data.alpha.is_some()
     }
@@ -115,9 +122,9 @@ fn too_big(width: u32, height: u32) -> bool {
     width > MAX_SIDE || height > MAX_SIDE
 }
 
-fn png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
-    let bad = |_| "That PNG picture couldn't be read.".to_owned();
-    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+fn decoded(bytes: &[u8], format: image::ImageFormat, kind: &str) -> Result<(u32, u32, Vec<u8>), String> {
+    let bad = |_| format!("That {kind} picture couldn't be read.");
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);

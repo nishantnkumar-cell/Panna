@@ -20,6 +20,10 @@ pub enum Op {
     InsertBlank,
     /// Asks for a PDF and puts its pages after the current one.
     InsertFile,
+    /// Asks for a PDF and which pages of it replace which pages here.
+    Replace,
+    /// Asks how the pages are numbered (i, ii, iii then 1, 2, 3).
+    Labels,
     /// Asks which pages to save as new files.
     Extract,
     /// Asks how much to trim from the page edges.
@@ -106,11 +110,21 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             ev(Op::InsertFile, true)
         ),
         icons::button(
+            Icon::PageReplace,
+            "Replace pages with pages from another PDF",
+            ev(Op::Replace, true)
+        ),
+        icons::button(
             Icon::PageExtract,
             "Save pages as a new PDF, or split into files",
             ev(Op::Extract, true)
         ),
         icons::button(Icon::Crop, "Crop pages", ev(Op::Crop, true)),
+        icons::button(
+            Icon::PageLabels,
+            "Page labels (i, ii, iii then 1, 2, 3)",
+            ev(Op::Labels, true)
+        ),
         icons::button(
             Icon::PageNumbers,
             "Add page numbers, headers and footers",
@@ -144,15 +158,89 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
 #[derive(Debug, Clone, Default)]
 pub struct Extracting {
     pub range: String,
-    pub split: bool,
+    pub split: Split,
+    /// The most each file may take when splitting by size, in megabytes, as typed.
+    pub size_mb: String,
+}
+
+/// How extracted pages are saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Split {
+    /// As one PDF.
+    #[default]
+    One,
+    EachPage,
+    /// A PDF for each top-level bookmark, from its page to the next one's; every page.
+    Bookmarks,
+    /// As few PDFs as fit in a size each.
+    Size,
 }
 
 #[derive(Debug, Clone)]
 pub enum ExtractEvent {
     Range(String),
-    Split(bool),
+    Split(Split),
+    Size(String),
     Go,
     Cancel,
+}
+
+impl Extracting {
+    pub fn new(range: String) -> Self {
+        Self {
+            range,
+            split: Split::One,
+            size_mb: "10".into(),
+        }
+    }
+
+    /// The size limit typed, in bytes: from 0.1 MB.
+    pub fn size_limit(&self) -> Option<u64> {
+        let mb: f64 = self.size_mb.trim().replace(',', ".").parse().ok()?;
+        (0.1..=100_000.0)
+            .contains(&mb)
+            .then_some((mb * 1024.0 * 1024.0) as u64)
+    }
+}
+
+/// Where each top-level bookmark's part starts, by page, from `outline`: the first part always
+/// starts on the first page, taking any pages before the first bookmark. Each part is named by
+/// its bookmark.
+pub fn bookmark_parts(outline: &[panna_core::OutlineItem], count: usize) -> Vec<(usize, String)> {
+    let mut parts: Vec<(usize, String)> = Vec::new();
+    for item in outline.iter().filter(|i| i.depth == 0) {
+        let Some(page) = item.page.filter(|p| *p < count) else {
+            continue;
+        };
+        if parts.last().is_some_and(|(last, _)| page <= *last) {
+            continue;
+        }
+        parts.push((page, item.title.clone()));
+    }
+    if let Some(first) = parts.first_mut() {
+        first.0 = 0;
+    }
+    parts
+}
+
+/// `title` made safe as part of a file name on every system.
+pub fn file_name_part(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+    let mut out = words.join(" ");
+    if let Some((cut, _)) = out.char_indices().nth(60) {
+        out.truncate(cut);
+    }
+    out.trim_end_matches(['.', ' ']).to_owned()
 }
 
 pub fn extract_input_id() -> iced::widget::Id {
@@ -194,10 +282,12 @@ pub fn parse_range(spec: &str, count: usize) -> Result<Vec<usize>, String> {
 }
 
 /// The Extract pages card for a document of `count` pages.
-pub fn extract_card<'a>(state: &Extracting, count: usize) -> Element<'a, Message> {
+pub fn extract_card<'a>(state: &Extracting, count: usize, bookmarks: usize) -> Element<'a, Message> {
     let ev = Message::Extract;
     let parsed = parse_range(&state.range, count);
+    let by_bookmarks = state.split == Split::Bookmarks;
     let hint = match &parsed {
+        _ if by_bookmarks => text(format!("Every page, in {bookmarks} files")).size(13),
         Ok(pages) if pages.len() == 1 => text("1 page").size(13),
         Ok(pages) => text(format!("{} pages", pages.len())).size(13),
         Err(e) => text(e.clone()).size(13).style(|theme: &Theme| text::Style {
@@ -205,31 +295,58 @@ pub fn extract_card<'a>(state: &Extracting, count: usize) -> Element<'a, Message
         }),
     };
     let split = Some(state.split);
+    let pick =
+        |label: &'static str, value: Split| radio(label, value, split, move |v| ev(ExtractEvent::Split(v)));
+    let range = text_input(&format!("Pages, such as 1-3, 5 (1 to {count})"), &state.range)
+        .id(extract_input_id())
+        .on_submit(ev(ExtractEvent::Go));
+    let range = if by_bookmarks {
+        range
+    } else {
+        range.on_input(move |v| ev(ExtractEvent::Range(v)))
+    };
+    let mut choices = column![
+        pick("Save them as one PDF", Split::One),
+        pick("Save each page as its own PDF", Split::EachPage),
+    ]
+    .spacing(10);
+    if bookmarks > 0 {
+        choices = choices.push(pick("Save a PDF for each top-level bookmark", Split::Bookmarks));
+    }
+    choices = choices.push(
+        row![
+            pick("Save as PDFs of at most", Split::Size),
+            text_input("10", &state.size_mb)
+                .on_input(move |v| ev(ExtractEvent::Size(v)))
+                .on_submit(ev(ExtractEvent::Go))
+                .width(60),
+            text("MB each"),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
+    );
+    let ok = match state.split {
+        Split::Bookmarks => bookmarks > 0,
+        Split::Size => parsed.is_ok() && state.size_limit().is_some(),
+        Split::One | Split::EachPage => parsed.is_ok(),
+    };
     container(
         column![
-            text("Extract pages").size(16),
-            text_input(&format!("Pages, such as 1-3, 5 (1 to {count})"), &state.range)
-                .id(extract_input_id())
-                .on_input(move |v| ev(ExtractEvent::Range(v)))
-                .on_submit(ev(ExtractEvent::Go)),
+            text("Extract or split pages").size(16),
+            range,
             hint,
-            radio("Save them as one PDF", false, split, |v| ev(ExtractEvent::Split(
-                v
-            ))),
-            radio("Save each page as its own PDF", true, split, |v| {
-                ev(ExtractEvent::Split(v))
-            }),
+            choices,
             row![
                 space::horizontal(),
                 button("Cancel")
                     .style(button::secondary)
                     .on_press(ev(ExtractEvent::Cancel)),
-                button("Extract…").on_press_maybe(parsed.is_ok().then_some(ev(ExtractEvent::Go))),
+                button("Extract…").on_press_maybe(ok.then_some(ev(ExtractEvent::Go))),
             ]
             .spacing(8),
         ]
         .spacing(10)
-        .width(340),
+        .width(380),
     )
     .padding(16)
     .style(container::rounded_box)
@@ -565,6 +682,109 @@ pub fn flatten_card<'a>(state: Flattening) -> Element<'a, Message> {
     .into()
 }
 
+/// Replacing pages with another file's: the pages here, from 1, and the other file's page
+/// they start from, as typed.
+#[derive(Debug, Clone)]
+pub struct Replacing {
+    pub path: std::path::PathBuf,
+    pub first: String,
+    pub last: String,
+    pub from: String,
+    /// Pages in this document.
+    pub count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum ReplaceEvent {
+    First(String),
+    Last(String),
+    From(String),
+    Go,
+    Cancel,
+}
+
+impl Replacing {
+    pub fn new(path: std::path::PathBuf, current: usize, count: usize) -> Self {
+        let page = (current + 1).to_string();
+        Self {
+            path,
+            first: page.clone(),
+            last: page,
+            from: "1".into(),
+            count,
+        }
+    }
+
+    /// The first page replaced and how many, from 0, and the other file's page they start
+    /// from, from 0; `None` while what's typed isn't a range of this document's pages.
+    pub fn range(&self) -> Option<(usize, usize, usize)> {
+        let number = |s: &str| s.trim().parse::<usize>().ok().filter(|n| *n >= 1);
+        let (first, last, from) = (number(&self.first)?, number(&self.last)?, number(&self.from)?);
+        (first <= last && last <= self.count).then(|| (first - 1, last - first + 1, from - 1))
+    }
+}
+
+pub fn replace_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("replace-first")
+}
+
+/// The Replace pages card.
+pub fn replace_card(state: &Replacing) -> Element<'_, Message> {
+    let ev = Message::Replace;
+    let name = state
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let field = |value: &str, on: fn(String) -> ReplaceEvent| {
+        text_input("", value)
+            .on_input(move |s| ev(on(s)))
+            .on_submit(ev(ReplaceEvent::Go))
+            .width(60)
+    };
+    let ok = state.range().is_some();
+    container(
+        column![
+            text("Replace pages").size(16),
+            row![
+                text("Pages"),
+                field(&state.first, ReplaceEvent::First).id(replace_input_id()),
+                text("to"),
+                field(&state.last, ReplaceEvent::Last),
+                text(format!("of {}", state.count)),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+            row![
+                text(format!("with pages from “{name}” starting at page")),
+                field(&state.from, ReplaceEvent::From),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+            text(
+                "Bookmarks and links to the replaced pages go to the new ones. Undo brings \
+                 the old pages back until you save."
+            )
+            .size(13)
+            .style(text::secondary),
+            row![
+                space::horizontal(),
+                button("Cancel")
+                    .style(button::secondary)
+                    .on_press(ev(ReplaceEvent::Cancel)),
+                button("Replace").on_press_maybe(ok.then_some(ev(ReplaceEvent::Go))),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(420),
+    )
+    .padding(16)
+    .style(container::rounded_box)
+    .into()
+}
+
 /// Watermark text colours: grey, red, blue, green, black.
 pub const INKS: [panna_core::Color; 5] = [
     panna_core::Color([0.5, 0.5, 0.5]),
@@ -600,6 +820,10 @@ pub struct Watermarking {
     /// Which of [`PAPERS`], if any.
     pub paper: Option<usize>,
     pub range: String,
+    /// A picture to use instead of text, with its file's name.
+    pub picture: Option<(String, panna_core::StampImage)>,
+    /// The picture's width, as a share of the page's.
+    pub scale: f32,
 }
 
 impl Watermarking {
@@ -613,6 +837,8 @@ impl Watermarking {
             behind: false,
             paper: None,
             range: format!("1-{count}"),
+            picture: None,
+            scale: 0.5,
         }
     }
 }
@@ -629,6 +855,11 @@ pub enum WatermarkEvent {
     UsePaper(bool),
     Paper(usize),
     Range(String),
+    ChoosePicture,
+    PictureChosen(Option<std::path::PathBuf>),
+    PictureLoaded(Result<(String, panna_core::StampImage), String>),
+    RemovePicture,
+    Scale(f32),
     Go,
     Cancel,
 }
@@ -671,9 +902,11 @@ pub fn watermark_settings(
         color: INKS.get(state.ink).copied().unwrap_or(INKS[0]),
         behind: state.behind,
         background: state.paper.and_then(|i| PAPERS.get(i).copied()),
+        picture: state.picture.as_ref().map(|(_, image)| image.clone()),
+        picture_scale: state.scale,
     };
     if mark.is_empty() {
-        return Err("Enter the watermark's text, or choose a page colour.".into());
+        return Err("Enter the watermark's text, choose a picture, or choose a page colour.".into());
     }
     Ok((pages, mark))
 }
@@ -714,7 +947,7 @@ fn swatches<'a>(
 pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Message> {
     let ev = Message::Watermark;
     let parsed = watermark_settings(state, count);
-    let untouched = state.text.trim().is_empty() && state.paper.is_none();
+    let untouched = state.text.trim().is_empty() && state.paper.is_none() && state.picture.is_none();
     let hint: Element<'a, Message> = match &parsed {
         Err(e) if !untouched => text(e.clone())
             .size(13)
@@ -741,13 +974,40 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
         .spacing(6)
         .align_y(iced::Center)
     };
-    container(
-        column![
-            text("Watermark and page colour").size(16),
-            text_input("Text, such as DRAFT or CONFIDENTIAL", &state.text)
-                .id(watermark_input_id())
-                .on_input(move |v| ev(WatermarkEvent::Text(v)))
-                .on_submit(ev(WatermarkEvent::Go)),
+    // A picture takes the place of the text, its colour and size.
+    let what: Element<'a, Message> = match &state.picture {
+        Some((name, _)) => column![
+            row![
+                text(format!("Picture: {name}")).size(13).width(iced::Fill),
+                button("Remove")
+                    .style(button::secondary)
+                    .on_press(ev(WatermarkEvent::RemovePicture)),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+            row![
+                text("Width").width(60),
+                slider(0.05..=1.0, state.scale, move |v| ev(WatermarkEvent::Scale(v))).step(0.05_f32),
+                text(format!("{}%", (state.scale * 100.0).round())).width(44),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            small("Angle", "0", &state.angle, "°", WatermarkEvent::Angle),
+        ]
+        .spacing(10)
+        .into(),
+        None => column![
+            row![
+                text_input("Text, such as DRAFT or CONFIDENTIAL", &state.text)
+                    .id(watermark_input_id())
+                    .on_input(move |v| ev(WatermarkEvent::Text(v)))
+                    .on_submit(ev(WatermarkEvent::Go)),
+                button("Picture…")
+                    .style(button::secondary)
+                    .on_press(ev(WatermarkEvent::ChoosePicture)),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
             row![
                 text("Colour").width(60),
                 swatches(&INKS, &INK_NAMES, Some(state.ink), move |i| ev(
@@ -761,6 +1021,14 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
                 small("Angle", "0", &state.angle, "°", WatermarkEvent::Angle),
             ]
             .spacing(16),
+        ]
+        .spacing(10)
+        .into(),
+    };
+    container(
+        column![
+            text("Watermark and page colour").size(16),
+            what,
             row![
                 text("Opacity").width(60),
                 slider(0.05..=1.0, state.opacity, move |v| ev(WatermarkEvent::Opacity(v))).step(0.05_f32),

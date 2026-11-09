@@ -8,6 +8,12 @@ all-features = false
 version = 2
 yanked = "deny"
 unmaintained = "workspace"
+ignore = [
+    # The Marvin timing attack needs someone timing many private-key operations from outside.
+    # Panna only signs, on the user's own machine, with the rsa crate's blinding on, and no
+    # fixed version of the crate exists yet.
+    { id = "RUSTSEC-2023-0071", reason = "local signing only, blinded; no fixed release" },
+]
 
 [licenses]
 version = 2

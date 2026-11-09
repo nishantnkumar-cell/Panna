@@ -63,3 +63,44 @@ fn attachments_are_listed_and_read() {
     assert_eq!(doc.attachment(1).unwrap(), b"both");
     assert!(doc.attachment(3).is_none());
 }
+
+/// A name can't hide what kind of file it is: direction overrides are dropped, and programs
+/// are flagged however the name ends.
+#[test]
+fn attachment_names_cant_disguise_programs() {
+    // "invoice", RIGHT-TO-LEFT OVERRIDE, "fdp.exe": shown by some apps as "invoiceexe.pdf".
+    let utf16: String = "\u{feff}invoice\u{202e}fdp.exe"
+        .encode_utf16()
+        .flat_map(u16::to_be_bytes)
+        .map(|b| format!("{b:02X}"))
+        .collect();
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(a) 4 0 R (b) 6 0 R] >> >> >>"
+            .to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_owned(),
+        format!("<< /Type /Filespec /UF <{utf16}> /EF << /F 5 0 R >> >>"),
+        "<< /Type /EmbeddedFile /Length 2 >>\nstream\nMZ\nendstream".to_owned(),
+        "<< /Type /Filespec /F (report.pdf) /EF << /F 5 0 R >> >>".to_owned(),
+    ];
+    let refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = Document::from_bytes(build(&refs, ""), None, Limits::default()).unwrap();
+    let files = doc.info().unwrap().attachments;
+    assert_eq!(files[0].name, "invoicefdp.exe");
+    assert!(files[0].is_program());
+    assert!(!files[1].is_program());
+    for (name, program) in [
+        ("RUN.EXE. ", true),
+        ("notes.txt", false),
+        ("setup", false),
+        ("a.lnk", true),
+    ] {
+        let file = panna_core::Attachment {
+            name: name.into(),
+            description: String::new(),
+            size: None,
+            page: None,
+        };
+        assert_eq!(file.is_program(), program, "{name}");
+    }
+}

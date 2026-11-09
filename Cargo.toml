@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/panna-core", "crates/panna-print", "crates/panna"]
+members = ["crates/panna-core", "crates/panna-print", "crates/panna-sandbox", "crates/panna"]
 exclude = ["fuzz"]
 
 [workspace.package]
@@ -17,6 +17,20 @@ unwrap_used = "deny"
 expect_used = "warn"
 indexing_slicing = "warn"
 
+# Text recognition is far too slow unoptimised, even while developing.
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.ocrs]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
@@ -24,3 +38,7 @@ strip = true
 # Keep unwinding so engine panics on malformed PDFs can be caught instead of aborting.
 panic = "unwind"
 overflow-checks = true
+
+[patch.crates-io]
+# See vendor/README.md.
+hayro-syntax = { path = "vendor/hayro-syntax" }

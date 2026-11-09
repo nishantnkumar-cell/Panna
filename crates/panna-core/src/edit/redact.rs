@@ -89,7 +89,7 @@ pub(crate) struct Font {
 }
 
 impl Font {
-    fn width(&self, code: u32) -> Option<f64> {
+    pub(crate) fn width(&self, code: u32) -> Option<f64> {
         self.widths.get(&code).copied().or(self.default)
     }
 
@@ -129,9 +129,22 @@ pub(crate) struct FormUse {
     pub ctm: Matrix,
 }
 
+/// Text taken out: the font it was in (by its name in the resources), how many glyphs went,
+/// and where the first one sat: its glyph space to page space.
+#[derive(Debug, Clone)]
+pub(crate) struct Taken {
+    pub font: Vec<u8>,
+    pub glyphs: usize,
+    pub at: Matrix,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Redacted {
     pub content: Vec<u8>,
+    /// Text taken out, run by run (only the content's own, not inside forms).
+    pub taken: Vec<Taken>,
+    /// The character codes shown in each font, by its name in the resources.
+    pub used: HashMap<Vec<u8>, HashSet<u32>>,
     /// Pictures taken out, which the resources must no longer name.
     pub images: HashSet<Vec<u8>>,
     /// Forms touching a marked area: each use, to be replaced with a redacted copy, and the
@@ -345,6 +358,7 @@ struct State {
     scale: f64,
     leading: f64,
     font: Option<Font>,
+    font_name: Vec<u8>,
     size: f64,
     rise: f64,
 }
@@ -358,6 +372,7 @@ impl Default for State {
             scale: 1.0,
             leading: 0.0,
             font: None,
+            font_name: Vec::new(),
             size: 0.0,
             rise: 0.0,
         }
@@ -371,15 +386,16 @@ pub(crate) fn redact(
     lookup: &mut dyn Lookup,
     areas: &[[f64; 4]],
     ctm: Matrix,
+    text_only: bool,
     names: &mut dyn FnMut() -> String,
 ) -> Option<Redacted> {
     // First, which pictures and forms are hit anywhere, so that every use of them goes.
-    let first = run(content, lookup, areas, ctm, None, names)?;
+    let first = run(content, lookup, areas, ctm, None, text_only, names)?;
     let plan = (
         first.images,
         first.forms.into_iter().map(|f| f.name).collect::<HashSet<_>>(),
     );
-    run(content, lookup, areas, ctm, Some(&plan), names)
+    run(content, lookup, areas, ctm, Some(&plan), text_only, names)
 }
 
 type Plan = (HashSet<Vec<u8>>, HashSet<Vec<u8>>);
@@ -404,6 +420,7 @@ fn run(
     areas: &[[f64; 4]],
     ctm: Matrix,
     plan: Option<&Plan>,
+    text_only: bool,
     names: &mut dyn FnMut() -> String,
 ) -> Option<Redacted> {
     let mut out = Redacted::default();
@@ -477,6 +494,7 @@ fn run(
                         .or_insert_with(|| lookup.font(name))
                         .clone();
                     state.font = font;
+                    state.font_name = name.clone();
                 }
                 state.size = n(0);
             }
@@ -512,7 +530,19 @@ fn run(
                     (_, Some(s @ Operand::String(_))) => vec![s.clone()],
                     _ => Vec::new(),
                 };
-                let (shown, removed) = show(&items, &state, &mut tm, &hit);
+                let mut seen = Seen::default();
+                let (shown, removed) = show(&items, &state, &mut tm, &hit, &mut seen);
+                out.used
+                    .entry(state.font_name.clone())
+                    .or_default()
+                    .extend(seen.codes);
+                if let Some(at) = seen.first {
+                    out.taken.push(Taken {
+                        font: state.font_name.clone(),
+                        glyphs: seen.gone,
+                        at,
+                    });
+                }
                 if removed {
                     out.changed = true;
                     let mut text = prefix.into_bytes();
@@ -539,7 +569,10 @@ fn run(
             }
             b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => {
                 let painted = op != b"n";
-                if painted && let Some(b) = path.take() {
+                if painted
+                    && !text_only
+                    && let Some(b) = path.take()
+                {
                     // Strokes reach a little past their path; enough to count for thin lines.
                     if areas.iter().any(|a| inside(b, *a)) {
                         out.changed = true;
@@ -551,7 +584,7 @@ fn run(
             b"Do" => {
                 if let Some(Operand::Name(name)) = operands.first() {
                     match lookup.xobject(name) {
-                        Some(XObject::Image) => {
+                        Some(XObject::Image) if !text_only => {
                             let b = bounds(state.ctm, [0.0, 0.0, 1.0, 1.0]);
                             let gone = match plan {
                                 Some((images, _)) => images.contains(name),
@@ -582,7 +615,7 @@ fn run(
                                 });
                             }
                         }
-                        Some(XObject::Other) | None => {}
+                        Some(XObject::Image | XObject::Other) | None => {}
                     }
                 }
             }
@@ -596,7 +629,7 @@ fn run(
                     }
                 }
                 lex.inline_image()?;
-                if hit(bounds(state.ctm, [0.0, 0.0, 1.0, 1.0])) {
+                if !text_only && hit(bounds(state.ctm, [0.0, 0.0, 1.0, 1.0])) {
                     out.changed = true;
                     replace = Some(Vec::new());
                 }
@@ -653,6 +686,15 @@ fn grow(b: Option<[f64; 4]>, x: f64, y: f64) -> [f64; 4] {
     }
 }
 
+/// What showing a string came across: the codes shown, how many glyphs went and where the
+/// first of them sat (glyph space to page space).
+#[derive(Default)]
+struct Seen {
+    codes: HashSet<u32>,
+    gone: usize,
+    first: Option<Matrix>,
+}
+
 /// Shows `items` (strings and adjustments) as a TJ array with the glyphs that touch a marked
 /// area replaced by the space they took; moves `tm` along. Also says whether any went.
 fn show(
@@ -660,6 +702,7 @@ fn show(
     state: &State,
     tm: &mut Matrix,
     hit: &dyn Fn([f64; 4]) -> bool,
+    seen: &mut Seen,
 ) -> (Vec<u8>, bool) {
     let size = state.size;
     let th = state.scale;
@@ -705,8 +748,11 @@ fn show(
                             };
                             let advance = (w0 * size + state.char_space + space) * th;
                             let gone = hit(b) || size == 0.0 && areas_point(hit, render(*tm));
+                            seen.codes.insert(*code);
                             if gone {
                                 removed = true;
+                                seen.gone += 1;
+                                seen.first.get_or_insert(render(*tm));
                                 if !kept.is_empty() {
                                     flush(&mut out, &mut pending);
                                     out.extend_from_slice(hex(&kept).as_bytes());
@@ -738,8 +784,13 @@ fn show(
                         let count = bytes.len() as f64;
                         let b = bounds(render(*tm), [0.0, DESCENT, count * GUESS_BOX, ASCENT]);
                         let advance = (GUESS_ADVANCE * size + state.char_space) * th * count;
+                        if let Some(codes) = font.and_then(|f| f.split(bytes)) {
+                            seen.codes.extend(codes);
+                        }
                         if hit(b) {
                             removed = true;
+                            seen.gone += bytes.len();
+                            seen.first.get_or_insert(render(*tm));
                             if size != 0.0 && th != 0.0 {
                                 pending -= advance / (size * th) * 1000.0;
                             }
@@ -786,6 +837,15 @@ impl Placed {
 
 /// Every picture `content` draws itself (not those inside forms), in order.
 pub(crate) fn placed_images(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Placed> {
+    placed(content, lookup, |x| matches!(x, XObject::Image))
+}
+
+/// Every form `content` draws itself, in order.
+pub(crate) fn placed_forms(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Placed> {
+    placed(content, lookup, |x| matches!(x, XObject::Form { .. }))
+}
+
+fn placed(content: &[u8], lookup: &mut dyn Lookup, wanted: fn(XObject) -> bool) -> Vec<Placed> {
     let mut lex = Lexer {
         data: content,
         pos: 0,
@@ -823,7 +883,7 @@ pub(crate) fn placed_images(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Plac
             }
             b"Do" => {
                 if let Some(Operand::Name(name)) = operands.first()
-                    && matches!(lookup.xobject(name), Some(XObject::Image))
+                    && lookup.xobject(name).is_some_and(wanted)
                 {
                     out.push(Placed {
                         name: name.clone(),
@@ -837,6 +897,241 @@ pub(crate) fn placed_images(content: &[u8], lookup: &mut dyn Lookup) -> Vec<Plac
         operands.clear();
     }
     out
+}
+
+/// Rectangles and straight lines `content` paints itself (not inside forms), in page space:
+/// the boxes of `re` rectangles, and each straight segment as `[x0, y0, x1, y1]`.
+pub(crate) fn drawn_shapes(content: &[u8]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
+    /// Shapes kept at most, so a page of hatching stays cheap.
+    const MAX_SHAPES: usize = 20_000;
+    let mut lex = Lexer {
+        data: content,
+        pos: 0,
+    };
+    let mut stack: Vec<Matrix> = Vec::new();
+    let mut ctm = IDENTITY;
+    let mut operands: Vec<Operand> = Vec::new();
+    let (mut rects, mut lines) = (Vec::new(), Vec::new());
+    let (mut path_rects, mut path_lines) = (Vec::new(), Vec::new());
+    let mut at: Option<(f64, f64)> = None;
+    let mut start: Option<(f64, f64)> = None;
+    loop {
+        lex.skip();
+        let Some(token) = lex.token(0) else { break };
+        let range = match token {
+            Token::Operand(o) => {
+                operands.push(o);
+                continue;
+            }
+            Token::ArrayEnd | Token::DictEnd => {
+                operands.push(Operand::Other);
+                continue;
+            }
+            Token::Operator(range) => range,
+        };
+        let nums: Vec<f64> = operands.iter().filter_map(Operand::number).collect();
+        match content.get(range).unwrap_or_default() {
+            b"q" if stack.len() < MAX_STACK => stack.push(ctm),
+            b"Q" => ctm = stack.pop().unwrap_or(ctm),
+            b"cm" => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    ctm = concat([a, b, c, d, e, f], ctm);
+                }
+            }
+            b"m" => {
+                if let [x, y] = nums[..] {
+                    at = Some(apply(ctm, x, y));
+                    start = at;
+                }
+            }
+            b"l" => {
+                if let ([x, y], Some(from)) = (&nums[..], at) {
+                    let to = apply(ctm, *x, *y);
+                    path_lines.push([from.0, from.1, to.0, to.1]);
+                    at = Some(to);
+                }
+            }
+            b"h" => {
+                if let (Some(from), Some(to)) = (at, start) {
+                    path_lines.push([from.0, from.1, to.0, to.1]);
+                    at = start;
+                }
+            }
+            b"c" | b"v" | b"y" => {
+                // Curves aren't fields' edges; carry on from where they end.
+                if let [.., x, y] = nums[..] {
+                    at = Some(apply(ctm, x, y));
+                }
+            }
+            b"re" => {
+                if let [x, y, w, h] = nums[..] {
+                    path_rects.push(bounds(ctm, [x, y, x + w, y + h]));
+                }
+            }
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if rects.len() + lines.len() < MAX_SHAPES {
+                    rects.append(&mut path_rects);
+                    lines.append(&mut path_lines);
+                }
+                path_rects.clear();
+                path_lines.clear();
+                at = None;
+            }
+            b"n" => {
+                path_rects.clear();
+                path_lines.clear();
+                at = None;
+            }
+            _ => {}
+        }
+        operands.clear();
+    }
+    (rects, lines)
+}
+
+/// A run of text in content: the bytes from `BT` to the end of `ET`, the largest size its
+/// text is shown at (in page space, points), and how many bytes of text it shows.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextBlock {
+    pub range: std::ops::Range<usize>,
+    pub size: f64,
+    pub shown: usize,
+    /// For an XObject drawn (`Do`) rather than text: its name in the resources; empty for
+    /// a picture written inline.
+    pub drawn: Option<Vec<u8>>,
+}
+
+/// The text objects `content` shows text in, and the XObjects it draws outside them, in
+/// order; or `None` when it's already marked up (it has marked content of its own) or
+/// can't be read.
+pub(crate) fn text_blocks(content: &[u8]) -> Option<Vec<TextBlock>> {
+    let mut lex = Lexer {
+        data: content,
+        pos: 0,
+    };
+    let mut stack: Vec<(Matrix, f64)> = Vec::new();
+    let (mut ctm, mut font_size) = (IDENTITY, 0.0);
+    let (mut tm, mut tlm) = (IDENTITY, IDENTITY);
+    let mut operands: Vec<Operand> = Vec::new();
+    let mut out = Vec::new();
+    // The current text object's start, the largest size shown in it so far, and the bytes
+    // of text shown.
+    let mut open: Option<(usize, f64, usize)> = None;
+    let mut start = 0;
+    let mut inline_start = 0;
+    let scale = |m: Matrix| (m[0] * m[3] - m[1] * m[2]).abs().sqrt();
+    loop {
+        lex.skip();
+        if operands.is_empty() {
+            start = lex.pos;
+        }
+        let Some(token) = lex.token(0) else { break };
+        let range = match token {
+            Token::Operand(o) => {
+                operands.push(o);
+                continue;
+            }
+            Token::ArrayEnd | Token::DictEnd => {
+                operands.push(Operand::Other);
+                continue;
+            }
+            Token::Operator(range) => range,
+        };
+        let nums: Vec<f64> = operands.iter().filter_map(Operand::number).collect();
+        match content.get(range)? {
+            b"BDC" | b"BMC" => return None,
+            b"q" if stack.len() < MAX_STACK => stack.push((ctm, font_size)),
+            b"Q" => (ctm, font_size) = stack.pop().unwrap_or((ctm, font_size)),
+            b"cm" => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    ctm = concat([a, b, c, d, e, f], ctm);
+                }
+            }
+            b"BT" => {
+                (tm, tlm) = (IDENTITY, IDENTITY);
+                // A text object inside another isn't allowed; the outer one stands.
+                if open.is_none() {
+                    open = Some((start, 0.0, 0));
+                }
+            }
+            b"ET" => {
+                if let Some((from, size, shown)) = open.take()
+                    && size > 0.0
+                {
+                    out.push(TextBlock {
+                        range: from..lex.pos,
+                        size,
+                        shown,
+                        drawn: None,
+                    });
+                }
+            }
+            b"Tf" => {
+                if let Some(v) = nums.first() {
+                    font_size = v.abs();
+                }
+            }
+            b"Tm" => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    tm = [a, b, c, d, e, f];
+                    tlm = tm;
+                }
+            }
+            b"Td" | b"TD" => {
+                if let [x, y] = nums[..] {
+                    tlm = concat([1.0, 0.0, 0.0, 1.0, x, y], tlm);
+                    tm = tlm;
+                }
+            }
+            b"Tj" | b"TJ" | b"'" | b"\"" => {
+                if let Some((_, size, shown)) = open.as_mut() {
+                    let at = font_size * scale(tm) * scale(ctm);
+                    if at.is_finite() {
+                        *size = size.max(at.max(0.01));
+                    }
+                    *shown += operands
+                        .iter()
+                        .map(|o| match o {
+                            Operand::String(s) => s.len(),
+                            Operand::Array(items) => items
+                                .iter()
+                                .map(|i| match i {
+                                    Operand::String(s) => s.len(),
+                                    _ => 0,
+                                })
+                                .sum(),
+                            _ => 0,
+                        })
+                        .sum::<usize>();
+                }
+            }
+            b"BI" => inline_start = start,
+            b"ID" => {
+                lex.inline_image()?;
+                if open.is_none() {
+                    out.push(TextBlock {
+                        range: inline_start..lex.pos,
+                        size: 0.0,
+                        shown: 0,
+                        drawn: Some(Vec::new()),
+                    });
+                }
+            }
+            b"Do" if open.is_none() => {
+                if let [Operand::Name(name)] = operands.as_slice() {
+                    out.push(TextBlock {
+                        range: start..lex.pos,
+                        size: 0.0,
+                        shown: 0,
+                        drawn: Some(name.clone()),
+                    });
+                }
+            }
+            _ => {}
+        }
+        operands.clear();
+    }
+    Some(out)
 }
 
 /// The inverse of `m`, unless it squashes everything flat.
@@ -1080,7 +1375,7 @@ mod tests {
             count += 1;
             format!("R{count}")
         };
-        redact(content.as_bytes(), &mut Fake, areas, IDENTITY, &mut names).unwrap()
+        redact(content.as_bytes(), &mut Fake, areas, IDENTITY, false, &mut names).unwrap()
     }
 
     fn text(r: &Redacted) -> String {

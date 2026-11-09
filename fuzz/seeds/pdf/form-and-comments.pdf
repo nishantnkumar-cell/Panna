@@ -1,0 +1,64 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R] >>
+endobj
+4 0 obj
+<<  /Length 46 >>
+stream
+BT /F1 12 Tf 20 170 Td (Name and choice) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Pat) /Rect [20 130 180 150] /P 3 0 R /DA (/Helv 12 Tf 0 g) >>
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Yes /AS /Yes /Rect [200 130 214 144] /P 3 0 R /AP << /N << /Yes 12 0 R /Off 12 0 R >> >> >>
+endobj
+8 0 obj
+<< /Type /Annot /Subtype /Text /Rect [240 170 260 190] /Contents (A note) /T (Reviewer) /Popup 9 0 R >>
+endobj
+9 0 obj
+<< /Type /Annot /Subtype /Popup /Rect [260 100 300 190] /Parent 8 0 R >>
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Highlight /Rect [20 165 120 185] /QuadPoints [20 185 120 185 20 165 120 165] /C [1 1 0] /Contents (Marked) >>
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Text /Rect [240 140 260 160] /Contents (Agreed) /IRT 8 0 R /State /Accepted /StateModel /Review >>
+endobj
+12 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 14 14] /Length 14 >>
+stream
+0 0 14 14 re S
+endstream
+endobj
+xref
+0 13
+0000000000 65535 f 
+0000000015 00000 n 
+0000000157 00000 n 
+0000000214 00000 n 
+0000000388 00000 n 
+0000000485 00000 n 
+0000000582 00000 n 
+0000000714 00000 n 
+0000000878 00000 n 
+0000000997 00000 n 
+0000001085 00000 n 
+0000001237 00000 n 
+0000001378 00000 n 
+trailer
+<< /Size 13 /Root 1 0 R  >>
+startxref
+1491
+%%EOF
