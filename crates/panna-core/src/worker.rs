@@ -711,9 +711,21 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
     tmp_name.push(name);
     tmp_name.push(".panna-saving");
     let tmp = dir.join(tmp_name);
+    // The saved file keeps the permissions of the one it replaces, so a file only its owner
+    // could read doesn't become readable by others.
+    let permissions = std::fs::metadata(path).ok().map(|m| m.permissions());
     let result = (|| {
-        let mut file = std::fs::File::create(&tmp)?;
+        // A leftover from an earlier failed save is removed first: creating the temporary file
+        // never opens an existing one, nor follows a link planted under its name.
+        let _ = std::fs::remove_file(&tmp);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
         file.write_all(bytes)?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
         file.sync_all()?;
         drop(file);
         std::fs::rename(&tmp, path)
@@ -1123,6 +1135,30 @@ mod tests {
         assert_eq!(sizes, [350, 250, 450, 350]);
         // Writing them again would overwrite, so it's refused.
         assert!(split_by_size(&split, &mut built).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_keeps_permissions_and_ignores_a_planted_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("panna-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_default();
+        let target = dir.join("private.pdf");
+        let elsewhere = dir.join("elsewhere");
+        std::fs::write(&target, b"old").unwrap_or_default();
+        std::fs::write(&elsewhere, b"untouched").unwrap_or_default();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap_or_default();
+        // A link where the temporary file goes must not be written through.
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".private.pdf.panna-saving")).unwrap_or_default();
+        assert!(write_atomically(&target, b"new").is_ok());
+        assert_eq!(std::fs::read(&target).ok().as_deref(), Some(&b"new"[..]));
+        assert_eq!(std::fs::read(&elsewhere).ok().as_deref(), Some(&b"untouched"[..]));
+        let mode = std::fs::metadata(&target)
+            .map(|m| m.permissions().mode() & 0o777)
+            .ok();
+        assert_eq!(mode, Some(0o600));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

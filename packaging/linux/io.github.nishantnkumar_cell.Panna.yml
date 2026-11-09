@@ -7,7 +7,7 @@
 #   flatpak-builder --user --install --force-clean build-dir packaging/linux/io.github.nishantnkumar_cell.Panna.yml
 id: io.github.nishantnkumar_cell.Panna
 runtime: org.freedesktop.Platform
-runtime-version: '25.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable

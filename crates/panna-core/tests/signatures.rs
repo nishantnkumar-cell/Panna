@@ -215,11 +215,16 @@ fn certificates_lead_to_the_ones_trusted() {
 /// and a way to sign a digest, giving raw signatures as Windows does.
 fn held(p12: &str) -> panna_core::DigitalId {
     use p256::pkcs8::DecodePrivateKey;
-    let store = p12_keystore::KeyStore::from_pkcs12(&fixture(p12), "secret").unwrap();
+    let store = p12_keystore::KeyStore::from_pkcs12(
+        &fixture(p12),
+        "secret",
+        p12_keystore::Pkcs12ImportPolicy::Strict,
+    )
+    .unwrap();
     let (_, chain) = store.private_key_chain().unwrap();
-    let certs = chain.chain().iter().map(|c| c.as_der().to_vec()).collect();
-    let key = chain.key().to_vec();
-    let sign: panna_core::SignDigest = if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_der(&key) {
+    let certs = chain.certs().iter().map(|c| c.as_der().to_vec()).collect();
+    let key = chain.key().as_der().to_vec();
+    let sign: panna_core::SignDigest = if let Ok(k) = rsa::PrivateKey::from_pkcs8_der(&key) {
         std::sync::Arc::new(move |digest: &[u8]| {
             k.sign(rsa::Pkcs1v15Sign::new::<sha2::Sha256>(), digest)
                 .map_err(|e| e.to_string())

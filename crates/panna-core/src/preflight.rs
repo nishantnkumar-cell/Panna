@@ -84,7 +84,7 @@ pub struct Finding {
 struct Check<'a> {
     pdf: &'a Pdf,
     out: Vec<Finding>,
-    seen: HashSet<(i32, i32)>,
+    seen: HashSet<(u32, i32)>,
     visits: usize,
     /// Checking for PDF/A, which has rules PDF/X doesn't.
     archive: bool,

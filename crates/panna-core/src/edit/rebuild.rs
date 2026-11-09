@@ -100,12 +100,12 @@ impl Writer {
 }
 
 fn id(r: ObjRef) -> ObjectIdentifier {
-    ObjectIdentifier::new(i32::try_from(r.number).unwrap_or(-1), i32::from(r.generation))
+    ObjectIdentifier::new(r.number, i32::from(r.generation))
 }
 
 fn obj_ref(id: ObjectIdentifier) -> Option<ObjRef> {
     Some(ObjRef {
-        number: u32::try_from(id.obj_number).ok()?,
+        number: id.obj_number,
         generation: u16::try_from(id.gen_number).ok()?,
     })
 }
@@ -1228,7 +1228,7 @@ pub(crate) fn rebuild(
     }
     if clean.archive {
         let meta = first.pdf.metadata();
-        let text = |v: &Option<Vec<u8>>| v.as_deref().map(crate::document::decode_text_string);
+        let text = |v: &Option<Box<[u8]>>| v.as_deref().map(crate::document::decode_text_string);
         let xmp = super::pdfa::xmp(text(&meta.title).as_deref(), text(&meta.author).as_deref());
         let meta_num = w.alloc();
         let mut stream = format!(

@@ -79,9 +79,9 @@ pub(crate) struct Known<'a> {
 
 struct Check {
     out: Vec<AccessFinding>,
-    seen: HashSet<(i32, i32)>,
+    seen: HashSet<(u32, i32)>,
     visits: usize,
-    pages: HashMap<(i32, i32), usize>,
+    pages: HashMap<(u32, i32), usize>,
     roles: HashMap<String, String>,
 }
 
@@ -164,12 +164,9 @@ impl Check {
         };
         if matches!(kind.as_str(), "Figure" | "Formula") && !described(b"Alt") && !described(b"ActualText") {
             let what = if kind == "Figure" { "A figure" } else { "A formula" };
-            let element = elem.obj_id().and_then(|id| {
-                Some((
-                    u32::try_from(id.obj_number).ok()?,
-                    u16::try_from(id.gen_number).ok()?,
-                ))
-            });
+            let element = elem
+                .obj_id()
+                .and_then(|id| Some((id.obj_number, u16::try_from(id.gen_number).ok()?)));
             self.add_for(AccessRule::FigureNoAlt, what, page, element);
         }
         let mut header = kind == "TH";

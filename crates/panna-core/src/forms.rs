@@ -126,7 +126,7 @@ struct Ctx {
 fn obj_ref(dict: &Dict<'_>) -> Option<ObjRef> {
     let id = dict.obj_id()?;
     Some(ObjRef {
-        number: u32::try_from(id.obj_number).ok()?,
+        number: id.obj_number,
         generation: u16::try_from(id.gen_number).ok()?,
     })
 }
