@@ -32,7 +32,9 @@ use hayro::hayro_interpret::TransformExt;
 use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 
-pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
+pub use annot::{
+    Annotation, Color, Kind, LINE_HEIGHT, LineEnd, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap,
+};
 pub use picture::StampImage;
 
 pub use convert::{MAX_BLANK_PAGES, MAX_PICTURES, blank_pdf, pictures_to_pdf, rgba_to_pdf};

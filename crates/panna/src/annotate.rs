@@ -8,8 +8,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
-    Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, ObjRef, ReviewState,
-    STAMPS, StampImage, TextBox, stamp_label, text_width, wrap,
+    Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, LineEnd, NOTE_SIZE, ObjRef,
+    ReviewState, STAMPS, StampImage, TextBox, stamp_label, text_width, wrap,
 };
 
 use crate::Message;
@@ -224,6 +224,16 @@ impl Tool {
         )
     }
 
+    /// Tools whose shapes have an inside that can be filled.
+    pub fn fills(self) -> bool {
+        matches!(self, Tool::Rect | Tool::Ellipse | Tool::Polygon | Tool::Cloud)
+    }
+
+    /// Tools that draw lines with endings: arrows, circles, squares and the like.
+    pub fn ends(self) -> bool {
+        matches!(self, Tool::Line | Tool::Arrow | Tool::PolyLine)
+    }
+
     fn index(self) -> usize {
         Tool::ALL.iter().position(|t| *t == self).unwrap_or(0)
     }
@@ -258,6 +268,49 @@ impl std::fmt::Display for Thickness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} pt", self.0)
     }
+}
+
+/// The inside colours offered for shapes, as in Acrobat's fill colour picker.
+pub const FILLS: [InsideColor; 8] = [
+    InsideColor(None, "No fill"),
+    InsideColor(Some(Color([1.0, 1.0, 1.0])), "White"),
+    InsideColor(Some(Color([0.75, 0.75, 0.75])), "Grey"),
+    InsideColor(Some(Color([1.0, 0.95, 0.6])), "Yellow"),
+    InsideColor(Some(Color([0.7, 0.9, 0.72])), "Green"),
+    InsideColor(Some(Color([0.68, 0.82, 1.0])), "Blue"),
+    InsideColor(Some(Color([1.0, 0.72, 0.72])), "Red"),
+    InsideColor(Some(Color([0.0, 0.0, 0.0])), "Black"),
+];
+
+/// A fill colour and its name.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InsideColor(pub Option<Color>, pub &'static str);
+
+impl std::fmt::Display for InsideColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
+}
+
+/// A line's start (0) or end (1) and how it looks there, as a choice in a list.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ending(pub usize, pub LineEnd);
+
+impl std::fmt::Display for Ending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let side = if self.0 == 0 { "Start" } else { "End" };
+        write!(f, "{side}: {}", self.1.label())
+    }
+}
+
+/// Whether a comment of this kind has an inside that can be filled.
+fn fillable(kind: &Kind) -> bool {
+    matches!(kind, Kind::Rect(_) | Kind::Ellipse(_) | Kind::Polygon { .. })
+}
+
+/// Whether a comment of this kind has line endings.
+fn has_ends(kind: &Kind) -> bool {
+    matches!(kind, Kind::Line { .. } | Kind::PolyLine(_))
 }
 
 /// Whether a comment of this kind is drawn with lines whose thickness and dashing show.
@@ -314,6 +367,10 @@ pub enum Event {
     Width(f32),
     /// Turns dashed lines on or off.
     Dashed,
+    /// The inside colour of shapes, or none.
+    Fill(Option<Color>),
+    /// How lines start (0) or end (1).
+    End(usize, LineEnd),
     /// Deletes the selected comment.
     DeletePicked,
     Undo,
@@ -417,6 +474,8 @@ pub struct Annotate {
     opacities: [Option<f32>; Tool::ALL.len()],
     widths: [Option<f32>; Tool::ALL.len()],
     dashes: [bool; Tool::ALL.len()],
+    fills: [Option<Color>; Tool::ALL.len()],
+    ends: [Option<[LineEnd; 2]>; Tool::ALL.len()],
     /// Unsaved annotations, oldest first.
     pub items: Vec<Annotation>,
     /// Saved comments taken out, not yet saved.
@@ -505,6 +564,38 @@ impl Annotate {
             return a.dashed;
         }
         self.dashes.get(self.tool.index()).copied().unwrap_or(false)
+    }
+
+    /// The inside colour: the selected comment's, or the tool's.
+    pub fn fill(&self) -> Option<Color> {
+        match self.picked_annotation() {
+            Some(a) => a.fill,
+            None => self.tool_fill(self.tool),
+        }
+    }
+
+    fn tool_fill(&self, tool: Tool) -> Option<Color> {
+        self.fills.get(tool.index()).copied().flatten()
+    }
+
+    /// How lines start and end: the selected comment's, or the tool's.
+    pub fn ends(&self) -> [LineEnd; 2] {
+        match self.picked_annotation() {
+            Some(a) => a.line_ends(),
+            None => self.tool_ends(self.tool),
+        }
+    }
+
+    fn tool_ends(&self, tool: Tool) -> [LineEnd; 2] {
+        self.ends
+            .get(tool.index())
+            .copied()
+            .flatten()
+            .unwrap_or(if tool == Tool::Arrow {
+                [LineEnd::None, LineEnd::OpenArrow]
+            } else {
+                [LineEnd::None; 2]
+            })
     }
 
     /// Forgets unsaved annotations once they are saved (or discarded, or a new file opens),
@@ -798,6 +889,49 @@ impl Annotate {
                     }
                 } else if let Some(slot) = self.dashes.get_mut(self.tool.index()) {
                     *slot = !*slot;
+                }
+            }
+            Event::Fill(fill) => {
+                if self.picked.is_some() {
+                    if self
+                        .picked_annotation()
+                        .is_some_and(|a| fillable(&a.kind) && a.fill != fill)
+                        && self.edit(true, |a| a.fill = fill)
+                    {
+                        return Outcome::Changed;
+                    }
+                } else if let Some(slot) = self.fills.get_mut(self.tool.index()) {
+                    *slot = fill;
+                }
+            }
+            Event::End(side, end) => {
+                let side = side.min(1);
+                if self.picked.is_some() {
+                    if self
+                        .picked_annotation()
+                        .is_some_and(|a| has_ends(&a.kind) && a.line_ends().get(side) != Some(&end))
+                        && self.edit(true, |a| {
+                            let mut ends = a.line_ends();
+                            if let Some(slot) = ends.get_mut(side) {
+                                *slot = end;
+                            }
+                            a.ends = ends;
+                            // The endings now say it all, an arrow's head included.
+                            if let Kind::Line { arrow, .. } = &mut a.kind {
+                                *arrow = false;
+                            }
+                        })
+                    {
+                        return Outcome::Changed;
+                    }
+                } else {
+                    let mut ends = self.tool_ends(self.tool);
+                    if let Some(slot) = ends.get_mut(side) {
+                        *slot = end;
+                    }
+                    if let Some(slot) = self.ends.get_mut(self.tool.index()) {
+                        *slot = Some(ends);
+                    }
                 }
             }
             Event::OpacityDone => {
@@ -1152,6 +1286,16 @@ impl Annotate {
             .flatten()
             .unwrap_or(STROKE_WIDTH);
         let dashed = tool != Tool::Cloud && self.dashes.get(tool.index()).copied().unwrap_or(false);
+        let fill = if tool.fills() { self.tool_fill(tool) } else { None };
+        let mut kind = kind;
+        let ends = if tool.ends() {
+            if let Kind::Line { arrow, .. } = &mut kind {
+                *arrow = false;
+            }
+            self.tool_ends(tool)
+        } else {
+            [LineEnd::None; 2]
+        };
         self.items.push(Annotation {
             page,
             kind,
@@ -1161,6 +1305,8 @@ impl Annotate {
             contents,
             author: self.author.clone(),
             dashed,
+            fill,
+            ends,
         });
     }
 
@@ -1179,6 +1325,8 @@ impl Annotate {
             contents,
             author: self.author.clone(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         });
     }
 
@@ -1197,6 +1345,8 @@ impl Annotate {
             contents: String::new(),
             author: self.author.clone(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         });
     }
 
@@ -1637,6 +1787,39 @@ impl Annotate {
                     ev(Event::Dashed),
                 ));
             }
+        }
+        // Line endings and inside colour. No tooltips: they would cover the lists when open.
+        let (ends, fills) = match self.picked_annotation() {
+            Some(a) => (has_ends(&a.kind), fillable(&a.kind)),
+            None => (self.tool.ends(), self.tool.fills()),
+        };
+        let list_width = if vertical { 56 } else { 132 };
+        if ends {
+            let current = self.ends();
+            for (side, now) in current.into_iter().enumerate() {
+                let options = LineEnd::ALL.map(|end| Ending(side, end));
+                items.push(
+                    pick_list(options, Some(Ending(side, now)), move |e: Ending| {
+                        ev(Event::End(e.0, e.1))
+                    })
+                    .text_size(12)
+                    .padding([3, 6])
+                    .width(list_width)
+                    .into(),
+                );
+            }
+        }
+        if fills {
+            let fill = self.fill();
+            let chosen = FILLS.iter().copied().find(|f| f.0 == fill);
+            items.push(
+                pick_list(FILLS, chosen, move |f: InsideColor| ev(Event::Fill(f.0)))
+                    .placeholder("Fill")
+                    .text_size(12)
+                    .padding([3, 6])
+                    .width(list_width)
+                    .into(),
+            );
         }
         items.push(divider(vertical));
         let m = icons::MOD;
@@ -2526,6 +2709,8 @@ mod tests {
             contents: String::new(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         let mut saved = Comment::from(&accepted);
         let saved_id = CommentId {
@@ -2576,6 +2761,46 @@ mod tests {
         a.update(Event::Undo);
         assert_eq!(a.items.len(), 2);
         assert_eq!(a.status(parent.annot), ReviewState::Rejected);
+    }
+
+    #[test]
+    fn fills_and_line_endings_go_to_new_and_selected_comments() {
+        let mut a = Annotate::new();
+        // An arrow starts out ending in an open arrow; other lines have plain ends.
+        a.update(Event::Tool(Tool::Arrow));
+        assert_eq!(a.ends(), [LineEnd::None, LineEnd::OpenArrow]);
+        a.update(Event::Tool(Tool::Line));
+        assert_eq!(a.ends(), [LineEnd::None; 2]);
+        a.update(Event::Tool(Tool::Rect));
+        let fill = FILLS[3].0;
+        a.update(Event::Fill(fill));
+        assert_eq!(a.fill(), fill);
+        rect_at(&mut a, 10.0);
+        assert_eq!(a.items.first().map(|i| i.fill), Some(fill));
+        // Picking the shape shows, and changes, its own fill.
+        a.pick(Picked::New(0));
+        assert!(matches!(a.update(Event::Fill(None)), Outcome::Changed));
+        assert_eq!(a.items.first().map(|i| i.fill), Some(None));
+        // A rectangle has no line endings to change.
+        assert!(matches!(
+            a.update(Event::End(1, LineEnd::Circle)),
+            Outcome::Nothing
+        ));
+        a.unpick();
+        // An arrow drawn with a circle at its start keeps its head at the end.
+        a.update(Event::Tool(Tool::Arrow));
+        a.update(Event::End(0, LineEnd::Circle));
+        a.press(0, (10.0, 60.0));
+        a.drag(0, (90.0, 60.0));
+        a.release();
+        let line = a.items.last().map(|i| i.line_ends());
+        assert_eq!(line, Some([LineEnd::Circle, LineEnd::OpenArrow]));
+        // Taking the head off a picked arrow leaves a plain end, not the arrow's default.
+        a.update(Event::Tool(Tool::Select));
+        a.pick(Picked::New(1));
+        assert!(matches!(a.update(Event::End(1, LineEnd::None)), Outcome::Changed));
+        let line = a.items.last().map(|i| i.line_ends());
+        assert_eq!(line, Some([LineEnd::Circle, LineEnd::None]));
     }
 
     #[test]
@@ -2649,6 +2874,8 @@ mod tests {
             contents: String::new(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         let mut comment = Comment::from(&shape);
         comment.id = Some(id);

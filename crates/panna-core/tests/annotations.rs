@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
 use panna_core::{
-    Annotation, Changes, Color, Comment, CommentKind, Document, Kind, Limits, ReviewState, TextBox,
+    Annotation, Changes, Color, Comment, CommentKind, Document, Kind, Limits, LineEnd, ReviewState, TextBox,
 };
 
 /// Assembles numbered objects (1-based) into a PDF with a classic xref table.
@@ -76,6 +76,8 @@ fn annotation(kind: Kind) -> Annotation {
         contents: "Hello (world)".into(),
         author: "Tester".into(),
         dashed: false,
+        fill: None,
+        ends: Default::default(),
     }
 }
 
@@ -546,4 +548,44 @@ fn inserted_text_comes_back_as_a_caret() {
         comment.editable.as_ref().map(|a| &a.kind),
         Some(Kind::Caret { .. })
     ));
+}
+
+#[test]
+fn fills_and_line_endings_save_and_come_back() {
+    let doc = reopen(build(&objects(false)));
+    let blue = Color([0.0, 0.0, 1.0]);
+    let mut rect = annotation(Kind::Rect(TextBox {
+        x0: 40.0,
+        y0: 40.0,
+        x1: 160.0,
+        y1: 60.0,
+    }));
+    rect.fill = Some(blue);
+    let mut line = annotation(Kind::Line {
+        from: (20.0, 20.0),
+        to: (180.0, 20.0),
+        arrow: false,
+    });
+    line.ends = [LineEnd::Circle, LineEnd::ClosedArrow];
+    line.fill = Some(blue);
+    let mut polyline = annotation(Kind::PolyLine(vec![(20.0, 80.0), (60.0, 90.0), (100.0, 80.0)]));
+    polyline.ends = [LineEnd::Square, LineEnd::Slash];
+    let saved = doc.with_annotations(&[rect, line, polyline]).unwrap();
+    let doc = reopen(saved);
+    // The rectangle's inside is blue now, not white.
+    let inside = pixel(&doc, 100, 50);
+    assert!(inside[2] > 200 && inside[0] < 60, "{inside:?}");
+    let listed = doc.info().unwrap().comments;
+    let back: Vec<_> = listed
+        .iter()
+        .map(|c| c.editable.as_ref().map(|a| (a.fill, a.ends)))
+        .collect();
+    assert_eq!(
+        back,
+        [
+            Some((Some(blue), [LineEnd::None; 2])),
+            Some((Some(blue), [LineEnd::Circle, LineEnd::ClosedArrow])),
+            Some((None, [LineEnd::Square, LineEnd::Slash])),
+        ]
+    );
 }

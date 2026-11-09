@@ -10,7 +10,7 @@ use hayro::hayro_syntax::page::Page;
 
 use crate::TextBox;
 use crate::document::decode_text_string;
-use crate::edit::{Annotation, Color, Kind, NOTE_SIZE};
+use crate::edit::{Annotation, Color, Kind, LineEnd, NOTE_SIZE};
 
 const MAX_COMMENTS: usize = 20_000;
 const MAX_PER_PAGE: usize = 2_000;
@@ -463,6 +463,14 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             contents: contents.clone(),
             author: author.clone(),
             dashed: dashed(&annot),
+            fill: matches!(subtype, "Square" | "Circle" | "Polygon" | "Line" | "PolyLine")
+                .then(|| color_in(&annot, b"IC"))
+                .flatten(),
+            ends: if matches!(subtype, "Line" | "PolyLine") {
+                line_ends(&annot)
+            } else {
+                Default::default()
+            },
         });
         out.push(Comment {
             id,
@@ -644,8 +652,13 @@ fn is_cloudy(annot: &Dict<'_>) -> bool {
 
 /// The colour in /C: grey, RGB or CMYK.
 fn color(annot: &Dict<'_>) -> Color {
+    color_in(annot, b"C").unwrap_or(Color::BLACK)
+}
+
+/// The colour under `key`, or `None` when it is missing or empty (no colour).
+fn color_in(annot: &Dict<'_>, key: &[u8]) -> Option<Color> {
     let c: Vec<f32> = annot
-        .get::<Array<'_>>(b"C")
+        .get::<Array<'_>>(key)
         .map(|c| {
             c.iter::<f64>()
                 .take(4)
@@ -654,15 +667,26 @@ fn color(annot: &Dict<'_>) -> Color {
         })
         .unwrap_or_default();
     match c.as_slice() {
-        [g] => Color([*g, *g, *g]),
-        [r, g, b] => Color([*r, *g, *b]),
-        [c, m, y, k] => Color([
+        [g] => Some(Color([*g, *g, *g])),
+        [r, g, b] => Some(Color([*r, *g, *b])),
+        [c, m, y, k] => Some(Color([
             (1.0 - c) * (1.0 - k),
             (1.0 - m) * (1.0 - k),
             (1.0 - y) * (1.0 - k),
-        ]),
-        _ => Color::BLACK,
+        ])),
+        _ => None,
     }
+}
+
+/// The two line endings in /LE, for lines and polylines.
+fn line_ends(annot: &Dict<'_>) -> [LineEnd; 2] {
+    let mut ends = [LineEnd::None; 2];
+    if let Some(le) = annot.get::<Array<'_>>(b"LE") {
+        for (end, name) in ends.iter_mut().zip(le.iter::<Name<'_>>()) {
+            *end = LineEnd::from_name(name.as_str());
+        }
+    }
+    ends
 }
 
 /// Whether the border is dashed, from /BS or the older /Border array's dash part.

@@ -271,6 +271,8 @@ fn the_worker_changes_pages_with_undo_and_saves() {
                 contents: String::new(),
                 author: String::new(),
                 dashed: false,
+                fill: None,
+                ends: Default::default(),
             }],
             ..Changes::default()
         },
