@@ -353,7 +353,7 @@ impl Document {
                 })
                 .collect();
             let meta = self.pdf.metadata();
-            let text = |v: &Option<Vec<u8>>| {
+            let text = |v: &Option<Box<[u8]>>| {
                 // Control characters (such as a C string's closing NUL) are dropped.
                 v.as_deref()
                     .map(|t| {
@@ -539,8 +539,9 @@ impl Document {
     /// it can be found, selected and copied. Pages that have text already are left alone.
     /// Also gives how many pages got text, and how many words in all.
     pub fn recognised(&self, pages: &[usize]) -> Result<(Vec<u8>, usize, usize), crate::SaveError> {
-        /// Pages are read at this resolution, in dots per inch...
-        const DPI: f32 = 200.0;
+        /// Pages are read at this resolution, in dots per inch (300, the usual for OCR: at 200
+        /// and 250 the recognition model dropped thin last letters such as "l" and "1")...
+        const DPI: f32 = 300.0;
         /// ...but no wider or taller than this, in pixels.
         const MAX_SIDE: f32 = 5000.0;
         let cache = self.new_cache();

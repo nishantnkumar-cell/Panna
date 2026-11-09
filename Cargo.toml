@@ -6,7 +6,7 @@ exclude = ["fuzz"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 
 [workspace.lints.rust]
@@ -38,7 +38,3 @@ strip = true
 # Keep unwinding so engine panics on malformed PDFs can be caught instead of aborting.
 panic = "unwind"
 overflow-checks = true
-
-[patch.crates-io]
-# See vendor/README.md.
-hayro-syntax = { path = "vendor/hayro-syntax" }

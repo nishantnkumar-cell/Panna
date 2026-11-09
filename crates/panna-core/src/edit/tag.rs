@@ -20,7 +20,7 @@ pub(crate) fn tag(pdf: &Pdf, original: &[u8]) -> Result<Vec<u8>, SaveError> {
     let xref = pdf.xref();
     let id = |n: u32, g: u16| {
         Ok::<_, SaveError>(hayro::hayro_syntax::object::ObjectIdentifier::new(
-            i32::try_from(n).map_err(|_| SaveError::Damaged)?,
+            n,
             i32::from(g),
         ))
     };
@@ -100,7 +100,7 @@ pub(crate) fn tag(pdf: &Pdf, original: &[u8]) -> Result<Vec<u8>, SaveError> {
         }
         let page_id = raw.obj_id().ok_or(SaveError::Damaged)?;
         let (page_num, page_gen) = (
-            u32::try_from(page_id.obj_number).map_err(|_| SaveError::Damaged)?,
+            page_id.obj_number,
             u16::try_from(page_id.gen_number).map_err(|_| SaveError::Damaged)?,
         );
         let mut marked = Vec::with_capacity(content.len() + blocks.len() * 24);
@@ -198,10 +198,7 @@ pub(crate) fn describe(
     }
     let mut out = update::Update::new(trailer);
     for ((number, generation), alt) in alts {
-        let id = hayro::hayro_syntax::object::ObjectIdentifier::new(
-            i32::try_from(*number).map_err(|_| SaveError::Damaged)?,
-            i32::from(*generation),
-        );
+        let id = hayro::hayro_syntax::object::ObjectIdentifier::new(*number, i32::from(*generation));
         let elem = pdf.xref().get::<Dict<'_>>(id).ok_or(SaveError::Damaged)?;
         // Only structure elements: anything else named here is left as it is.
         if !elem.contains_key(b"S") || !elem.contains_key(b"P") {

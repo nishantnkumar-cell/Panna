@@ -80,6 +80,47 @@ fn forms_fanning_out_are_refused() {
 /// and finding the page's text never finished.
 #[test]
 fn forms_through_inherited_resources_are_refused() {
+    let form = "/X Do /X Do";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /XObject << /X 5 0 R >> >> >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>".to_owned(),
+        "<< /Length 5 >>\nstream\n/X Do\nendstream".to_owned(),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{form}\nendstream",
+            form.len()
+        ),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    let refused = Document::from_bytes(out, None, Limits::default());
+    assert!(matches!(refused, Err(panna_core::OpenError::Hostile(_))));
+}
+
+/// The fuzzed file that first showed the bug above. hayro 0.9 reads its damaged page tree
+/// differently and finds no page contents to draw, so it may now open; either way, it must
+/// not hang.
+#[test]
+fn the_fuzzed_inherited_resources_file_finishes() {
     let bytes = include_bytes!("regressions/forms-through-inherited-resources.pdf");
-    assert!(Document::from_bytes(bytes.to_vec(), None, Limits::default()).is_err());
+    let started = std::time::Instant::now();
+    if let Ok(doc) = Document::from_bytes(bytes.to_vec(), None, Limits::default()) {
+        for page in 0..doc.page_count() {
+            let _ = doc.page_text(page);
+            let _ = doc.render_page(&doc.new_cache(), page, 1.0);
+        }
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }

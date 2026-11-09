@@ -216,7 +216,7 @@ pub(crate) fn apply(
         let raw = page.raw();
         let id = raw.obj_id().ok_or(SaveError::Damaged)?;
         let (num, generation) = (
-            u32::try_from(id.obj_number).map_err(|_| SaveError::Damaged)?,
+            id.obj_number,
             u16::try_from(id.gen_number).map_err(|_| SaveError::Damaged)?,
         );
         let info = annot::PageInfo {
@@ -311,7 +311,7 @@ pub(crate) fn with_layers(
         .get::<hayro::hayro_syntax::object::Dict<'_>>(root)
         .ok_or(SaveError::Damaged)?;
     let (num, generation) = (
-        u32::try_from(root.obj_number).map_err(|_| SaveError::Damaged)?,
+        root.obj_number,
         u16::try_from(root.gen_number).map_err(|_| SaveError::Damaged)?,
     );
     let data = catalog.data();
@@ -969,10 +969,7 @@ fn encrypt_dict(pdf: &Pdf, raw: &[u8]) -> Result<Vec<u8>, SaveError> {
     }
     let r = lex::reference(raw).ok_or(SaveError::Damaged)?;
     pdf.xref()
-        .get::<Dict<'_>>(ObjectIdentifier::new(
-            i32::try_from(r.number).map_err(|_| SaveError::Damaged)?,
-            i32::from(r.generation),
-        ))
+        .get::<Dict<'_>>(ObjectIdentifier::new(r.number, i32::from(r.generation)))
         .map(|d| d.data().to_vec())
         .ok_or(SaveError::Damaged)
 }
@@ -989,12 +986,7 @@ fn fill_fields(
     }
     let fields = crate::forms::read(pdf);
     let xref = pdf.xref();
-    let get = |r: ObjRef| {
-        xref.get::<Dict<'_>>(ObjectIdentifier::new(
-            i32::try_from(r.number).unwrap_or(-1),
-            i32::from(r.generation),
-        ))
-    };
+    let get = |r: ObjRef| xref.get::<Dict<'_>>(ObjectIdentifier::new(r.number, i32::from(r.generation)));
     // Every edit to one object, so a field that is also its own widget is written once.
     let mut edits: BTreeMap<(u32, u16), field::Entries> = BTreeMap::new();
     for (id, value) in values {
@@ -1097,10 +1089,7 @@ fn encryption(pdf: &Pdf, raw: &[u8], id: Option<&[u8]>, password: &str) -> Resul
     let r = lex::reference(raw).ok_or(SaveError::Damaged)?;
     let dict = pdf
         .xref()
-        .get::<Dict<'_>>(ObjectIdentifier::new(
-            i32::try_from(r.number).map_err(|_| SaveError::Damaged)?,
-            i32::from(r.generation),
-        ))
+        .get::<Dict<'_>>(ObjectIdentifier::new(r.number, i32::from(r.generation)))
         .ok_or(SaveError::Damaged)?;
     crypt::Crypt::new(dict.data(), &first_id, password)
 }

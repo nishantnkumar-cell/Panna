@@ -74,10 +74,11 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
     }
     let mut runs = FormRuns::default();
     for (index, page) in pdf.pages().iter().enumerate() {
-        let resources = page_resources(page.raw());
+        // The resources the engine draws the page with, inherited from the page tree if need be.
+        let xobjects = &page.resources().x_objects;
         let mut total = 0u64;
         for content in page_contents(page.raw()) {
-            total = total.saturating_add(runs.of_content(&content, resources.as_ref(), MAX_FORM_DEPTH));
+            total = total.saturating_add(runs.of_content(&content, Some(xobjects), MAX_FORM_DEPTH));
         }
         if total > MAX_FORM_RUNS {
             return Err(Refusal::Forms {
@@ -87,19 +88,6 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
         }
     }
     Ok(())
-}
-
-/// The page's resources, which it may inherit from the page tree above it, as the engine
-/// draws with them.
-fn page_resources<'a>(page: &Dict<'a>) -> Option<Dict<'a>> {
-    let mut node = page.clone();
-    for _ in 0..64 {
-        if let Some(resources) = node.get::<Dict<'_>>(b"Resources") {
-            return Some(resources);
-        }
-        node = node.get::<Dict<'_>>(b"Parent")?;
-    }
-    None
 }
 
 fn page_contents<'a>(page: &Dict<'a>) -> Vec<Stream<'a>> {
@@ -117,13 +105,14 @@ struct FormRuns {
 }
 
 impl FormRuns {
-    /// Form runs caused by `content`, drawn with `resources`, with `depth` levels left.
-    fn of_content(&mut self, content: &Stream<'_>, resources: Option<&Dict<'_>>, depth: u32) -> u64 {
+    /// Form runs caused by `content`, drawn with the external objects `xobjects`, with
+    /// `depth` levels left.
+    fn of_content(&mut self, content: &Stream<'_>, xobjects: Option<&Dict<'_>>, depth: u32) -> u64 {
         if depth == 0 {
             return 0;
         }
         let Ok(data) = content.decoded() else { return 0 };
-        let Some(xobjects) = resources.and_then(|r| r.get::<Dict<'_>>(b"XObject")) else {
+        let Some(xobjects) = xobjects else {
             return 0;
         };
         let mut total = 0u64;
@@ -135,7 +124,7 @@ impl FormRuns {
             }) else {
                 continue;
             };
-            total = total.saturating_add(self.of_form(&form, resources, depth - 1));
+            total = total.saturating_add(self.of_form(&form, Some(xobjects), depth - 1));
             if total > MAX_FORM_RUNS {
                 break;
             }
@@ -151,8 +140,16 @@ impl FormRuns {
         }
         // Stop a cycle being followed while it is worked out; the depth bounds it anyway.
         self.known.insert(key, 1);
-        let own = form.dict().get::<Dict<'_>>(b"Resources");
-        let n = 1u64.saturating_add(self.of_content(form, own.as_ref().or(parent), depth));
+        // A form without resources of its own draws with those of whatever drew it.
+        let own = form
+            .dict()
+            .get::<Dict<'_>>(b"Resources")
+            .map(|r| r.get::<Dict<'_>>(b"XObject"));
+        let xobjects = match &own {
+            Some(own) => own.as_ref(),
+            None => parent,
+        };
+        let n = 1u64.saturating_add(self.of_content(form, xobjects, depth));
         self.known.insert(key, n);
         n
     }

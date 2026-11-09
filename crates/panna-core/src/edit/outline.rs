@@ -30,12 +30,12 @@ struct Node {
 }
 
 fn ident(num: u32, generation: u16) -> ObjectIdentifier {
-    ObjectIdentifier::new(i32::try_from(num).unwrap_or(-1), i32::from(generation))
+    ObjectIdentifier::new(num, i32::from(generation))
 }
 
 fn id_of(id: ObjectIdentifier) -> Result<(u32, u16), SaveError> {
     Ok((
-        u32::try_from(id.obj_number).map_err(|_| SaveError::Damaged)?,
+        id.obj_number,
         u16::try_from(id.gen_number).map_err(|_| SaveError::Damaged)?,
     ))
 }

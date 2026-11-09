@@ -60,13 +60,17 @@ mod system {
         no_network_or_programs()
     }
 
-    /// Every file-system access is handled and none allowed. Kernels without Landlock (before
-    /// 5.13, or with it turned off) are left as they are; seccomp still applies.
+    /// Every file-system and TCP access is handled and none allowed, and the process may not
+    /// signal or reach (through abstract Unix sockets) anything outside itself. Each part
+    /// applies as far as the kernel supports it: kernels without Landlock (before 5.13, or with
+    /// it turned off) are left as they are, and seccomp still applies.
     fn no_files() -> Result<(), String> {
-        use landlock::{ABI, Access, AccessFs, Ruleset, RulesetAttr};
-        let abi = ABI::V5;
+        use landlock::{ABI, Access, AccessFs, AccessNet, Ruleset, RulesetAttr, Scope};
+        let abi = ABI::V9;
         Ruleset::default()
             .handle_access(AccessFs::from_all(abi))
+            .and_then(|r| r.handle_access(AccessNet::from_all(abi)))
+            .and_then(|r| r.scope(Scope::from_all(abi)))
             .and_then(|r| r.create())
             .and_then(|r| r.restrict_self())
             .map(|_| ())
@@ -102,6 +106,11 @@ mod system {
             libc::SYS_bpf,
             libc::SYS_perf_event_open,
             libc::SYS_userfaultfd,
+            // io_uring runs its operations (opening sockets and files among them) inside the
+            // kernel, where the filter never sees them.
+            libc::SYS_io_uring_setup,
+            libc::SYS_io_uring_enter,
+            libc::SYS_io_uring_register,
         ];
         // Elsewhere (aarch64) new processes come only from clone, which threads need too;
         // execve stays refused, so a child could only be another copy of this one.
@@ -119,9 +128,52 @@ mod system {
             arch,
         )
         .map_err(|e| format!("seccomp: {e}"))?;
-        let program: BpfProgram = filter.try_into().map_err(|e| format!("seccomp: {e:?}"))?;
+        let mut program: BpfProgram = filter.try_into().map_err(|e| format!("seccomp: {e:?}"))?;
+        refuse_x32(&mut program);
         seccompiler::apply_filter(&program).map_err(|e| format!("seccomp: {e}"))
     }
+
+    /// On x86-64, the x32 ABI's calls pass the architecture check with their numbers offset
+    /// by bit 30, so none of them would match the list above (an x32 `socket` would be
+    /// allowed). Refuse every call with that bit set, right after the architecture check
+    /// (its first three instructions; the jumps after it are relative, so they still hold).
+    #[cfg(target_arch = "x86_64")]
+    fn refuse_x32(program: &mut seccompiler::BpfProgram) {
+        use seccompiler::sock_filter;
+        const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+        // From linux/bpf_common.h and linux/seccomp.h: BPF_LD | BPF_W | BPF_ABS,
+        // BPF_JMP | BPF_JGE | BPF_K and BPF_RET | BPF_K (BPF_LD, BPF_W and BPF_K are 0).
+        const LD_W_ABS: u16 = 0x20;
+        const JMP_JGE_K: u16 = 0x35;
+        const RET_K: u16 = 0x06;
+        const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+        let check = [
+            // The call's number is the first word of seccomp_data.
+            sock_filter {
+                code: LD_W_ABS,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            },
+            sock_filter {
+                code: JMP_JGE_K,
+                jt: 0,
+                jf: 1,
+                k: X32_SYSCALL_BIT,
+            },
+            sock_filter {
+                code: RET_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_ERRNO | libc::EPERM as u32,
+            },
+        ];
+        let at = program.len().min(3);
+        program.splice(at..at, check);
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn refuse_x32(_program: &mut seccompiler::BpfProgram) {}
 }
 
 #[cfg(target_os = "macos")]
@@ -351,6 +403,10 @@ mod tests {
         if files_enforced() && std::fs::read("/etc/hosts").is_ok() {
             worked |= 8;
         }
+        #[cfg(target_os = "linux")]
+        if !filter_refuses_kernel_side_calls() {
+            worked |= 32;
+        }
         // Allocating past the cap fails rather than taking the machine's memory (Linux only;
         // macOS ignores the cap).
         let mut big: Vec<u8> = Vec::new();
@@ -362,6 +418,29 @@ mod tests {
             worked |= 16;
         }
         std::process::exit(worked);
+    }
+
+    /// Whether the seccomp filter itself refuses io_uring and, on x86-64, an x32 `socket`
+    /// (EPERM comes from the filter; unfiltered, the kernel would say EFAULT or ENOSYS, or
+    /// open the socket).
+    #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    fn filter_refuses_kernel_side_calls() -> bool {
+        let refused = |result: libc::c_long| {
+            result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        };
+        // SAFETY: io_uring_setup with no entries and a null parameter pointer reads and
+        // writes no memory of ours; it can only fail.
+        let uring =
+            refused(unsafe { libc::syscall(libc::SYS_io_uring_setup, 0, std::ptr::null_mut::<u8>()) });
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: socket takes three integers and touches no memory.
+        let x32 = refused(unsafe {
+            libc::syscall(0x4000_0000 | libc::SYS_socket, libc::AF_INET, libc::SOCK_DGRAM, 0)
+        });
+        #[cfg(not(target_arch = "x86_64"))]
+        let x32 = true;
+        uring && x32
     }
 
     /// Whether file access can be taken away here: always on macOS, and on Linux when the

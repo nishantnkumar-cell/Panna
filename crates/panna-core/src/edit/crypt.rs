@@ -6,8 +6,7 @@
 //! and streams are encrypted with it; values copied from the original file are already
 //! encrypted for their object and are left alone.
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::{Array, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use aes::{Aes128, Aes256};
 use md5::{Digest, Md5};
 use sha2::{Sha256, Sha384, Sha512};
@@ -380,7 +379,7 @@ impl Protection {
             let mut prev = [0u8; 16];
             let mut out = Vec::with_capacity(32);
             for chunk in key.as_chunks::<16>().0 {
-                let mut block = GenericArray::clone_from_slice(chunk);
+                let mut block = Array::from(*chunk);
                 block.iter_mut().zip(prev).for_each(|(a, b)| *a ^= b);
                 cipher.encrypt_block(&mut block);
                 prev.copy_from_slice(&block);
@@ -406,7 +405,7 @@ impl Protection {
         perms.extend_from_slice(b"Tadb");
         perms.extend_from_slice(&random(4)?);
         let cipher = Aes256::new_from_slice(&key).map_err(|_| SaveError::Damaged)?;
-        let mut block = GenericArray::clone_from_slice(&perms);
+        let mut block = Array::try_from(perms.as_slice()).map_err(|_| SaveError::Damaged)?;
         cipher.encrypt_block(&mut block);
         let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
         let dict = format!(
@@ -549,7 +548,7 @@ fn modern_key(r: i64, password: &[u8], o: &[u8], u: &[u8], oe: &[u8], ue: &[u8])
     let mut prev = [0u8; 16];
     let mut key = Vec::with_capacity(32);
     for chunk in wrapped.get(..32)?.as_chunks::<16>().0 {
-        let mut block = GenericArray::clone_from_slice(chunk);
+        let mut block = Array::from(*chunk);
         cipher.decrypt_block(&mut block);
         key.extend(block.iter().zip(prev).map(|(a, b)| a ^ b));
         prev.copy_from_slice(chunk);
@@ -586,7 +585,7 @@ fn hash(r: i64, password: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
         prev.copy_from_slice(iv);
         let mut e = Vec::with_capacity(k1.len());
         for chunk in k1.as_chunks::<16>().0 {
-            let mut block = GenericArray::clone_from_slice(chunk);
+            let mut block = Array::from(*chunk);
             block.iter_mut().zip(prev).for_each(|(a, b)| *a ^= b);
             cipher.encrypt_block(&mut block);
             prev.copy_from_slice(&block);
@@ -635,7 +634,7 @@ fn rc4(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 /// AES-CBC with a random IV written first and PKCS#7 padding, as PDF expects.
 fn cbc_encrypt(
-    encrypt_block: impl Fn(&mut GenericArray<u8, aes::cipher::consts::U16>),
+    encrypt_block: impl Fn(&mut Array<u8, aes::cipher::consts::U16>),
     data: &[u8],
 ) -> Result<Vec<u8>, SaveError> {
     let mut iv = [0u8; 16];
@@ -646,7 +645,7 @@ fn cbc_encrypt(
     let mut out = iv.to_vec();
     let mut prev = iv;
     for chunk in plain.as_chunks::<16>().0 {
-        let mut block = GenericArray::clone_from_slice(chunk);
+        let mut block = Array::from(*chunk);
         block.iter_mut().zip(prev).for_each(|(a, b)| *a ^= b);
         encrypt_block(&mut block);
         prev.copy_from_slice(&block);
@@ -657,10 +656,7 @@ fn cbc_encrypt(
 
 /// Reverses [`cbc_encrypt`]. Damaged input (too short, or bad padding) gives what can be
 /// recovered, as readers do.
-fn cbc_decrypt(
-    decrypt_block: impl Fn(&mut GenericArray<u8, aes::cipher::consts::U16>),
-    data: &[u8],
-) -> Vec<u8> {
+fn cbc_decrypt(decrypt_block: impl Fn(&mut Array<u8, aes::cipher::consts::U16>), data: &[u8]) -> Vec<u8> {
     let (blocks, _) = data.as_chunks::<16>();
     let Some((iv, blocks)) = blocks.split_first() else {
         return Vec::new();
@@ -668,7 +664,7 @@ fn cbc_decrypt(
     let mut out = Vec::with_capacity(data.len());
     let mut prev = *iv;
     for chunk in blocks {
-        let mut block = GenericArray::clone_from_slice(chunk);
+        let mut block = Array::from(*chunk);
         decrypt_block(&mut block);
         block.iter_mut().zip(prev).for_each(|(a, b)| *a ^= b);
         prev = *chunk;

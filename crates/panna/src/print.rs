@@ -98,8 +98,8 @@ mod system {
     use std::io::{Seek, SeekFrom, Write};
     use std::os::unix::fs::OpenOptionsExt;
 
-    use zbus::blocking::{Connection, Proxy};
-    use zbus::zvariant::{Fd, OwnedObjectPath, OwnedValue, Value};
+    use zbus::export::futures_core::Stream;
+    use zbus::{Connection, Fd, OwnedObjectPath, OwnedVariant, Proxy, Variant};
 
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -142,7 +142,11 @@ mod system {
     /// dialog first, and its answer arrives as a Response signal on the request it names:
     /// 0 for printed, 1 for cancelled, 2 for failed.
     fn portal(file: &File, title: &str, job: usize) -> zbus::Result<u32> {
-        let conn = Connection::session()?;
+        zbus::block_on(ask_portal(file, title, job))
+    }
+
+    async fn ask_portal(file: &File, title: &str, job: usize) -> zbus::Result<u32> {
+        let conn = Connection::session().await?;
         let token = format!("panna_print_{}_{job}", std::process::id());
         let sender = conn
             .unique_name()
@@ -151,26 +155,27 @@ mod system {
             .replace('.', "_");
         // Listen before asking, so the answer can't arrive before anyone is waiting for it.
         let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
-        let request = Proxy::new(&conn, PORTAL, path.as_str(), "org.freedesktop.portal.Request")?;
-        let mut responses = request.receive_signal("Response")?;
+        let request = Proxy::new(&conn, PORTAL, path.as_str(), "org.freedesktop.portal.Request").await?;
+        let mut responses = std::pin::pin!(request.receive_signal("Response").await?);
 
         let print = Proxy::new(
             &conn,
             PORTAL,
             "/org/freedesktop/portal/desktop",
             "org.freedesktop.portal.Print",
-        )?;
-        let mut options: HashMap<&str, Value<'_>> = HashMap::new();
+        )
+        .await?;
+        let mut options: HashMap<&str, Variant<'_>> = HashMap::new();
         options.insert("handle_token", token.as_str().into());
         options.insert("modal", true.into());
-        let handle: OwnedObjectPath = print.call("Print", &("", title, Fd::from(file), options))?;
+        let handle: OwnedObjectPath = print.call("Print", &("", title, Fd::from(file), options)).await?;
         if handle.as_str() != path {
             return Err(zbus::Error::Failure("the portal is too old".into()));
         }
-        let response = responses
-            .next()
+        let response = std::future::poll_fn(|cx| responses.as_mut().poll_next(cx))
+            .await
             .ok_or_else(|| zbus::Error::Failure("no answer from the portal".into()))?;
-        let (code, _results): (u32, HashMap<String, OwnedValue>) = response.body().deserialize()?;
+        let (code, _results): (u32, HashMap<String, OwnedVariant>) = response.body().deserialize()?;
         Ok(code)
     }
 }

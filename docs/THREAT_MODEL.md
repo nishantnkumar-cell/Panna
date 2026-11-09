@@ -3,7 +3,8 @@
 This is Panna's security model: what it protects, who and what it protects against, where
 untrusted data enters, the known attack classes for PDF software and how each is handled, and
 what is still open. [SECURITY.md](../SECURITY.md) is the short policy; this is the detail
-behind it. Last reviewed 2026-10-19 against branch `windows/security`.
+behind it. Last reviewed 2026-11-09 (security audit and dependency upgrade), after 2026-10-19 against
+branch `windows/security`.
 
 ## 1. What Panna protects
 
@@ -99,9 +100,10 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 | Spoofed names (signer, bookmark, file name) with Unicode direction overrides | **Mitigated (fixed in this review)** | Overrides, embeddings and isolates are removed from PDF text strings, certificate names and attachment names. The marks right-to-left languages use are kept |
 | Weak encryption on save | Mitigated | New protection is always AES-256 (revision 6), with keys, salts and IVs from the OS random generator. Saving changes into a file that already uses RC4 or AES-128 keeps that protection: use Protect to upgrade it |
 | Passwords stored or leaked | Partly | Passwords are never written to disk or settings, and password fields are masked. They stay in process memory while the document is open, and aren't zeroed afterwards |
-| Private keys | Mitigated | Windows-store keys never leave Windows: Panna sends the digest and Windows signs (and asks for a PIN if needed). Certificate-file keys are read only to sign, then dropped. The `rsa` crate's Marvin timing issue (RUSTSEC-2023-0071) needs someone timing many private-key operations from outside, which local signing doesn't allow |
+| Private keys | Mitigated | Windows-store keys never leave Windows: Panna sends the digest and Windows signs (and asks for a PIN if needed). Certificate-file keys are read only to sign, then dropped. RSA signing uses `rsa` 0.10, whose constant-time arithmetic fixes the Marvin timing issue (RUSTSEC-2023-0071); P-256 and P-384 use the 0.14 crates on `crypto-bigint` 0.7, which fixes RUSTSEC-2026-0387 |
 | XML attacks (external entities, entity expansion) on XFDF | Mitigated | `roxmltree` with `allow_dtd: false`: no DTDs, so no entities; it never fetches anything. XMP metadata is only searched as text |
 | Network leaks (tracking pixels, phone-home, remote fonts) | Mitigated | No networking code or crates; nothing is fetched while opening or rendering |
+| Saving loosens a file's permissions, or writes through a planted link | **Mitigated (fixed 2026-11-09)** | A save writes a new temporary file next to the document and renames it over. The temporary file is now created exclusively (never opening an existing file or following a link at its name), and it takes the permissions of the file it replaces, so a file only its owner could read stays that way. Before, a saved copy got default permissions |
 | Settings file tampering | Mitigated | Size-capped (64 KiB), line-based, unknown keys ignored, values validated; recent-file paths are only offered, never opened automatically |
 
 ## 5. How this was checked
@@ -121,11 +123,14 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
   nightly (1 hour each): `open_render`, `analyse` (checks, redaction, flattening, compaction,
   tagging, reopening each output) and `import_data` (FDF and XFDF).
 - **Dependency audit**: `cargo audit` (RustSec) and `cargo deny` (advisories, licences, banned
-  crates, sources) on every push and nightly. Status at this review: one advisory, accepted
-  with a reason (RUSTSEC-2023-0071 in `rsa`, see 4.3); `lru` is flagged unsound
+  crates, sources) on every push and nightly. Status at the 2026-11-09 review, after moving
+  every direct dependency to its latest release: no vulnerabilities and nothing ignored (the
+  `rsa` and `crypto-bigint` timing advisories are fixed by the new versions); `lru` is flagged unsound
   (RUSTSEC-2026-0253) but is used only by iced's glyph cache for the app's own text, with no
-  fixed release yet; `ttf-parser`, `rustybuzz`, `paste` and the zbus/zvariant family are
-  flagged unmaintained, and none of them parse PDF content (PDF fonts go through skrifa).
+  fixed release that iced 0.14 (the latest) can use; `ttf-parser`, `rustybuzz`, `paste` and
+  zbus 5's zvariant family are flagged unmaintained. All of them come in through iced 0.14,
+  none of them parse PDF content (PDF fonts go through skrifa), and they go when iced moves
+  on. Panna's own D-Bus code uses zbus 6, which replaces zvariant.
 
 ## 6. Building and releasing
 
@@ -143,7 +148,11 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
    (`panna_core::isolate`), which locks itself down before reading PDF data
    (`panna-sandbox`): on Linux, Landlock takes away all file access, seccomp refuses
    sockets, starting programs and reaching into other processes, and the address space is
-   capped at 4 GB; on Windows it starts in an AppContainer with no capabilities (no network,
+   capped at 4 GB. Since 2026-11-09 the seccomp filter also refuses io_uring (whose
+   operations run inside the kernel, unseen by the filter) and every x32-ABI call (on x86-64
+   these pass the architecture check under different numbers, so an x32 `socket` or `execve`
+   got through before), and Landlock also refuses TCP, signals to other processes and
+   abstract Unix sockets on kernels that support those (6.7 and 6.12); on Windows it starts in an AppContainer with no capabilities (no network,
    no access to the user's files; it falls back to low integrity if Windows refuses the
    container) and joins a job object with a 4 GB memory cap, no child processes and no
    clipboard or desktop access; on macOS the system sandbox (Seatbelt) denies everything

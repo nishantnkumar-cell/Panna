@@ -19,7 +19,7 @@ pub(crate) fn with_initial_view(
     let root = xref.root_id();
     let catalog = xref.get::<Dict<'_>>(root).ok_or(SaveError::Damaged)?;
     let (num, generation) = (
-        u32::try_from(root.obj_number).map_err(|_| SaveError::Damaged)?,
+        root.obj_number,
         u16::try_from(root.gen_number).map_err(|_| SaveError::Damaged)?,
     );
     let pages: Vec<String> = pdf

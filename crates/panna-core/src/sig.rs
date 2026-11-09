@@ -77,13 +77,13 @@ pub struct Cert {
 impl Cert {
     fn of(cert: &Certificate) -> Option<Self> {
         let der = cert.to_der().ok()?;
-        let tbs = &cert.tbs_certificate;
+        let tbs = cert.tbs_certificate();
         Some(Self {
-            name: common_name(&tbs.subject),
-            issuer: if tbs.issuer == tbs.subject {
+            name: common_name(tbs.subject()),
+            issuer: if tbs.issuer() == tbs.subject() {
                 String::new()
             } else {
-                common_name(&tbs.issuer)
+                common_name(tbs.issuer())
             },
             fingerprint: Sha256::digest(&der).iter().map(|b| format!("{b:02X}")).collect(),
             der,
@@ -214,7 +214,7 @@ fn pdf_date(s: &str) -> Option<String> {
 }
 
 /// What the field walk gathers, the page of each widget, and the certifying signature.
-type Walk<'a> = (Vec<Raw>, &'a HashMap<(i32, i32), usize>, Option<(i32, i32)>);
+type Walk<'a> = (Vec<Raw>, &'a HashMap<(u32, i32), usize>, Option<(u32, i32)>);
 
 fn read_fields(pdf: &Pdf) -> Vec<Raw> {
     let xref = pdf.xref();
@@ -366,8 +366,8 @@ impl Hash {
 
 /// A name's common name, or the whole name when it has none.
 fn common_name(name: &X509Name) -> String {
-    for rdn in name.0.iter() {
-        for atv in rdn.0.iter() {
+    for rdn in name.iter_rdn() {
+        for atv in rdn.iter() {
             if atv.oid.to_string() == "2.5.4.3" {
                 return crate::document::without_overrides(&String::from_utf8_lossy(atv.value.value()));
             }
@@ -529,7 +529,7 @@ fn verifies(
     digest_hash: Hash,
     message: &[u8],
 ) -> Result<bool, String> {
-    let spki = &cert.tbs_certificate.subject_public_key_info;
+    let spki = &cert.tbs_certificate().subject_public_key_info();
     let key = spki.subject_public_key.raw_bytes();
     let alg = algorithm.oid.to_string();
     // The hash the signature algorithm names, when it names one.
@@ -547,7 +547,7 @@ fn verifies(
         "1.2.840.113549.1.1.1" | "1.2.840.113549.1.1.10" => {
             let mut reader = SliceReader::new(key).map_err(|e| e.to_string())?;
             let (n, e) = reader
-                .sequence(|r| Ok((UintRef::decode(r)?, UintRef::decode(r)?)))
+                .sequence(|r| Ok::<_, der::Error>((UintRef::decode(r)?, UintRef::decode(r)?)))
                 .map_err(|_| "The certificate's RSA key can't be read".to_owned())?;
             if alg == "1.2.840.113549.1.1.10" {
                 let pss = pss_params(algorithm.parameters.as_ref())?;
@@ -591,27 +591,27 @@ fn verifies(
 
 /// Whether `parent`'s key signed `child`.
 fn cert_signed_by(child: &Certificate, parent: &Certificate) -> bool {
-    if child.tbs_certificate.issuer != parent.tbs_certificate.subject {
+    if child.tbs_certificate().issuer() != parent.tbs_certificate().subject() {
         return false;
     }
     // Only a certificate authority may vouch for another certificate; otherwise anyone the
     // user trusts could issue certificates in other people's names. And a SHA-1 link isn't
     // trusted: chosen-prefix collisions make forged CA certificates practical.
-    if !may_issue(parent) || is_sha1(&child.signature_algorithm) {
+    if !may_issue(parent) || is_sha1(child.signature_algorithm()) {
         return false;
     }
-    let (Ok(tbs), Some(sig)) = (child.tbs_certificate.to_der(), child.signature.as_bytes()) else {
+    let (Ok(tbs), Some(sig)) = (child.tbs_certificate().to_der(), child.signature().as_bytes()) else {
         return false;
     };
-    verifies(parent, &child.signature_algorithm, sig, Hash::Sha256, &tbs).unwrap_or(false)
+    verifies(parent, child.signature_algorithm(), sig, Hash::Sha256, &tbs).unwrap_or(false)
 }
 
 /// Whether `cert` may issue certificates: its basic constraints say it's a CA, or it's an old
 /// self-signed root with no extensions at all (version 1 certificates predate them).
 fn may_issue(cert: &Certificate) -> bool {
-    let tbs = &cert.tbs_certificate;
-    let Some(exts) = tbs.extensions.as_ref() else {
-        return tbs.issuer == tbs.subject;
+    let tbs = cert.tbs_certificate();
+    let Some(exts) = tbs.extensions() else {
+        return tbs.issuer() == tbs.subject();
     };
     exts.iter()
         .find(|e| e.extn_id.to_string() == "2.5.29.19")
@@ -673,18 +673,16 @@ fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
         .unwrap_or_default();
     let cert = certs.iter().copied().find(|c| match &info.sid {
         SignerIdentifier::IssuerAndSerialNumber(id) => {
-            id.issuer.to_der().ok() == c.tbs_certificate.issuer.to_der().ok()
-                && id.serial_number.to_der().ok() == c.tbs_certificate.serial_number.to_der().ok()
+            id.issuer.to_der().ok() == c.tbs_certificate().issuer().to_der().ok()
+                && id.serial_number.to_der().ok() == c.tbs_certificate().serial_number().to_der().ok()
         }
-        SignerIdentifier::SubjectKeyIdentifier(ski) => {
-            c.tbs_certificate.extensions.as_ref().is_some_and(|exts| {
-                exts.iter().any(|e| {
-                    e.extn_id.to_string() == "2.5.29.14"
-                        && OctetString::from_der(e.extn_value.as_bytes())
-                            .is_ok_and(|v| v.as_bytes() == ski.0.as_bytes())
-                })
+        SignerIdentifier::SubjectKeyIdentifier(ski) => c.tbs_certificate().extensions().is_some_and(|exts| {
+            exts.iter().any(|e| {
+                e.extn_id.to_string() == "2.5.29.14"
+                    && OctetString::from_der(e.extn_value.as_bytes())
+                        .is_ok_and(|v| v.as_bytes() == ski.0.as_bytes())
             })
-        }
+        }),
     });
     let Some(cert) = cert else {
         out.status = unsupported("The signer's certificate isn't in the signature");
@@ -693,17 +691,17 @@ fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
     // Up from the signer's certificate, through those in the signature that issued each.
     let mut at = cert;
     out.chain.extend(Cert::of(at));
-    while out.chain.len() < 10 && at.tbs_certificate.issuer != at.tbs_certificate.subject {
+    while out.chain.len() < 10 && at.tbs_certificate().issuer() != at.tbs_certificate().subject() {
         let Some(next) = certs.iter().copied().find(|c| cert_signed_by(at, c)) else {
             break;
         };
         out.chain.extend(Cert::of(next));
         at = next;
     }
-    let tbs = &cert.tbs_certificate;
-    out.signer = Some(common_name(&tbs.subject));
-    if tbs.issuer != tbs.subject {
-        out.issuer = common_name(&tbs.issuer);
+    let tbs = cert.tbs_certificate();
+    out.signer = Some(common_name(tbs.subject()));
+    if tbs.issuer() != tbs.subject() {
+        out.issuer = common_name(tbs.issuer());
     }
     let Some(hash) = Hash::from_oid(&info.digest_alg.oid) else {
         out.status = unsupported("The signature uses a hash Panna doesn't know");
@@ -730,7 +728,7 @@ fn check_cms(der: &[u8], signed: &[&[u8]]) -> Checked {
                             .next()
                             .and_then(|v| x509_cert::time::Time::from_der(&v.to_der().ok()?).ok());
                         if let Some(when) = when {
-                            let v = &tbs.validity;
+                            let v = &tbs.validity();
                             out.outside_validity = when.to_unix_duration() < v.not_before.to_unix_duration()
                                 || when.to_unix_duration() > v.not_after.to_unix_duration();
                             out.time = Some(unix_date(when));
@@ -901,7 +899,7 @@ pub enum DigitalId {
 
 /// A private key to sign with.
 pub(crate) enum Key {
-    Rsa(Box<rsa::RsaPrivateKey>),
+    Rsa(Box<rsa::PrivateKey>),
     P256(p256::ecdsa::SigningKey),
     P384(p384::ecdsa::SigningKey),
     /// Held elsewhere; `curve` is P-256 or P-384's size in bytes for an elliptic-curve key.
@@ -921,16 +919,18 @@ pub(crate) struct Signer {
 
 impl Signer {
     pub(crate) fn from_pkcs12(bytes: &[u8], password: &str) -> Result<Self, String> {
-        let store = p12_keystore::KeyStore::from_pkcs12(bytes, password).map_err(|_| {
-            "The password is wrong, or the file isn't a certificate file (.p12 or .pfx).".to_owned()
-        })?;
+        let store =
+            p12_keystore::KeyStore::from_pkcs12(bytes, password, p12_keystore::Pkcs12ImportPolicy::Strict)
+                .map_err(|_| {
+                    "The password is wrong, or the file isn't a certificate file (.p12 or .pfx).".to_owned()
+                })?;
         let (_, chain) = store
             .private_key_chain()
             .ok_or_else(|| "The certificate file has no private key to sign with.".to_owned())?;
-        let key_der = chain.key();
+        let key_der = chain.key().as_der();
         let key = {
             use p256::pkcs8::DecodePrivateKey;
-            if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_der(key_der) {
+            if let Ok(k) = rsa::PrivateKey::from_pkcs8_der(key_der) {
                 Key::Rsa(Box::new(k))
             } else if let Ok(k) = p256::ecdsa::SigningKey::from_pkcs8_der(key_der) {
                 Key::P256(k)
@@ -941,7 +941,7 @@ impl Signer {
             }
         };
         let chain: Vec<Certificate> = chain
-            .chain()
+            .certs()
             .iter()
             .filter_map(|c| Certificate::from_der(c.as_der()).ok())
             .collect();
@@ -967,7 +967,7 @@ impl Signer {
         let cert = chain
             .first()
             .ok_or_else(|| "The certificate couldn't be read.".to_owned())?;
-        let spki = &cert.tbs_certificate.subject_public_key_info;
+        let spki = &cert.tbs_certificate().subject_public_key_info();
         let curve = match spki.algorithm.oid.to_string().as_str() {
             "1.2.840.113549.1.1.1" => None,
             "1.2.840.10045.2.1" => {
@@ -998,7 +998,7 @@ impl Signer {
     pub(crate) fn name(&self) -> String {
         self.chain
             .first()
-            .map(|c| common_name(&c.tbs_certificate.subject))
+            .map(|c| common_name(c.tbs_certificate().subject()))
             .unwrap_or_default()
     }
 
@@ -1050,7 +1050,7 @@ impl Signer {
         let message_digest = Hash::Sha256.digest(&[&signed]);
         let (signature, algorithm) = match &self.key {
             Key::Rsa(key) => {
-                let mut rng = rand_core::OsRng;
+                let mut rng = getrandom::SysRng;
                 let sig = key
                     .sign_with_rng(&mut rng, rsa::Pkcs1v15Sign::new::<Sha256>(), &message_digest)
                     .map_err(|e| format!("The signature couldn't be made: {e}"))?;
@@ -1101,8 +1101,8 @@ impl Signer {
         let info = SignerInfo {
             version: CmsVersion::V1,
             sid: SignerIdentifier::IssuerAndSerialNumber(cms::cert::IssuerAndSerialNumber {
-                issuer: cert.tbs_certificate.issuer.clone(),
-                serial_number: cert.tbs_certificate.serial_number.clone(),
+                issuer: cert.tbs_certificate().issuer().clone(),
+                serial_number: cert.tbs_certificate().serial_number().clone(),
             }),
             digest_alg: sha256.clone(),
             signed_attrs: Some(attrs),
