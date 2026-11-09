@@ -33,6 +33,9 @@ pub enum CommentKind {
     Line,
     Polygon,
     Cloud,
+    PolyLine,
+    /// Text to insert, marked with a caret.
+    Caret,
     Stamp,
     /// A reply in another comment's thread, or a review status set on it.
     Reply,
@@ -53,6 +56,8 @@ impl CommentKind {
             "Circle" => Self::Ellipse,
             "Line" => Self::Line,
             "Polygon" => Self::Polygon,
+            "PolyLine" => Self::PolyLine,
+            "Caret" => Self::Caret,
             "Stamp" => Self::Stamp,
             "Link" | "Widget" | "Popup" | "PrinterMark" | "TrapNet" | "Watermark" | "3D" | "RichMedia"
             | "Screen" | "Movie" | "Sound" => return None,
@@ -74,6 +79,8 @@ impl CommentKind {
             Self::Line => "Line",
             Self::Polygon => "Polygon",
             Self::Cloud => "Cloud",
+            Self::PolyLine => "Polygon line",
+            Self::Caret => "Inserted text",
             Self::Stamp => "Stamp",
             Self::Reply => "Reply",
             Self::Other(name) => name,
@@ -245,6 +252,17 @@ impl From<&Annotation> for Comment {
                 } else {
                     CommentKind::Polygon
                 }
+            }
+            Kind::PolyLine(points) => {
+                for &(x, y) in points {
+                    add(x, y);
+                }
+                CommentKind::PolyLine
+            }
+            Kind::Caret { rect } => {
+                add(rect.x0, rect.y0);
+                add(rect.x1, rect.y1);
+                CommentKind::Caret
             }
             Kind::Stamp { rect, .. } => {
                 add(rect.x0, rect.y0);
@@ -521,6 +539,23 @@ fn editable(
                 cloud: is_cloudy(annot),
             }
         }
+        "PolyLine" => {
+            let numbers: Vec<f64> = annot
+                .get::<Array<'_>>(b"Vertices")?
+                .iter::<f64>()
+                .take(20_000)
+                .collect();
+            let (pairs, _) = numbers.as_chunks::<2>();
+            let points: Vec<(f32, f32)> = pairs
+                .iter()
+                .filter_map(|&[x, y]| view_box(&[(x, y)]).map(|p| (p.x0, p.y0)))
+                .collect();
+            if points.len() < 2 {
+                return None;
+            }
+            Kind::PolyLine(points)
+        }
+        "Caret" => Kind::Caret { rect: at },
         // Only Panna's own word stamps: redrawing another program's, or a picture, would lose
         // its artwork.
         "Stamp"

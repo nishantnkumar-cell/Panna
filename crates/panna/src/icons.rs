@@ -130,6 +130,9 @@ pub enum Icon {
     PrevView,
     NextView,
     FitHeight,
+    PolyLine,
+    InsertText,
+    ReplaceText,
 }
 
 impl Icon {
@@ -250,6 +253,9 @@ impl Icon {
             Icon::Outdent => include_bytes!("../icons/indent-decrease.svg"),
             Icon::Hand => include_bytes!("../icons/hand.svg"),
             Icon::ZoomBox => include_bytes!("../icons/scan-search.svg"),
+            Icon::PolyLine => include_bytes!("../icons/spline.svg"),
+            Icon::InsertText => include_bytes!("../icons/text-cursor.svg"),
+            Icon::ReplaceText => include_bytes!("../icons/replace-all.svg"),
             Icon::ReadMode => include_bytes!("../icons/book-open-text.svg"),
             Icon::ReadModeExit => include_bytes!("../icons/book-x.svg"),
             Icon::PrevView => include_bytes!("../icons/arrow-big-left.svg"),
@@ -363,7 +369,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 120] = [
+    const ALL: [Icon; 123] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -479,6 +485,9 @@ mod tests {
         Icon::Outdent,
         Icon::Hand,
         Icon::ZoomBox,
+        Icon::PolyLine,
+        Icon::InsertText,
+        Icon::ReplaceText,
         Icon::ReadMode,
         Icon::ReadModeExit,
         Icon::PrevView,

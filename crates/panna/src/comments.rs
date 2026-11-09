@@ -26,6 +26,8 @@ fn icon(kind: &CommentKind) -> Icon {
         CommentKind::Line => Icon::Line,
         CommentKind::Polygon => Icon::Polygon,
         CommentKind::Cloud => Icon::Cloud,
+        CommentKind::PolyLine => Icon::PolyLine,
+        CommentKind::Caret => Icon::InsertText,
         CommentKind::Reply => Icon::Reply,
         CommentKind::Stamp => Icon::Stamp,
         CommentKind::Other(_) => Icon::Annotate,

@@ -338,9 +338,10 @@ fn saved_comments_come_back_editable() {
             cloud: false,
         }),
         annotation(Kind::Polygon {
-            points: polygon,
+            points: polygon.clone(),
             cloud: true,
         }),
+        annotation(Kind::PolyLine(polygon)),
         annotation(Kind::Stamp {
             rect,
             name: "NotApproved".into(),
@@ -386,6 +387,13 @@ fn saved_comments_come_back_editable() {
                 }
                 let label = if *cloud { "Cloud" } else { "Polygon" };
                 assert_eq!(comment.kind.label(), label);
+            }
+            (Kind::PolyLine(points), Kind::PolyLine(p)) => {
+                assert_eq!(points.len(), p.len());
+                for (a, b) in points.iter().zip(p) {
+                    assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01, "{p:?}");
+                }
+                assert_eq!(comment.kind.label(), "Polygon line");
             }
             (Kind::Stamp { rect: a, name, .. }, Kind::Stamp { rect: b, name: n, .. }) => {
                 assert_eq!(name, n);
@@ -503,4 +511,28 @@ fn replies_and_statuses_join_the_comment_thread() {
     );
     // Replies have no look of their own on the page.
     assert!(!text.contains("/F 32 /AP"));
+}
+
+#[test]
+fn inserted_text_comes_back_as_a_caret() {
+    let doc = reopen(build(&objects(false)));
+    let caret = annotation(Kind::Caret {
+        rect: TextBox {
+            x0: 40.0,
+            y0: 30.0,
+            x1: 48.0,
+            y1: 38.0,
+        },
+    });
+    let saved = doc.with_annotations(&[caret]).unwrap();
+    let text = String::from_utf8_lossy(&saved);
+    assert!(text.contains("/Subtype /Caret"));
+    let listed = reopen(saved).info().unwrap().comments;
+    let comment = listed.first().unwrap();
+    assert_eq!(comment.kind, CommentKind::Caret);
+    assert_eq!(comment.contents, "Hello (world)");
+    assert!(matches!(
+        comment.editable.as_ref().map(|a| &a.kind),
+        Some(Kind::Caret { .. })
+    ));
 }

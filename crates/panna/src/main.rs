@@ -3178,7 +3178,10 @@ impl App {
                 let marks_now = matches!(
                     event,
                     annotate::Event::Tool(
-                        annotate::Tool::Highlight | annotate::Tool::Underline | annotate::Tool::StrikeOut
+                        annotate::Tool::Highlight
+                            | annotate::Tool::Underline
+                            | annotate::Tool::StrikeOut
+                            | annotate::Tool::Replace
                     )
                 ) && self.selection.is_some_and(|s| !s.is_empty());
                 let opening = matches!(event, annotate::Event::Toggle);
@@ -5126,6 +5129,13 @@ impl App {
             .collect();
         self.selection = None;
         let outcome = self.annotate.mark_text(per_page);
+        if self.annotate.editing.is_some() {
+            // Replace text asks for the new words.
+            return Task::batch([
+                self.after_annotate(outcome),
+                operation::focus(annotate::editor_id()),
+            ]);
+        }
         self.after_annotate(outcome)
     }
 
@@ -6609,9 +6619,12 @@ impl App {
                     tool(Tool::Highlight),
                     tool(Tool::Underline),
                     tool(Tool::StrikeOut),
+                    tool(Tool::Replace),
+                    tool(Tool::InsertText),
                     tool(Tool::Note),
                     tool(Tool::TextBox),
                     tool(Tool::Pen),
+                    tool(Tool::Eraser),
                     sub(
                         Some(Icon::Square),
                         "Shapes",
@@ -6620,6 +6633,7 @@ impl App {
                             Tool::Ellipse,
                             Tool::Arrow,
                             Tool::Line,
+                            Tool::PolyLine,
                             Tool::Polygon,
                             Tool::Cloud,
                         ]
