@@ -75,10 +75,10 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
     let mut runs = FormRuns::default();
     for (index, page) in pdf.pages().iter().enumerate() {
         // The resources the engine draws the page with, inherited from the page tree if need be.
-        let xobjects = &page.resources().x_objects;
+        let res = Res::of_page(page.resources());
         let mut total = 0u64;
         for content in page_contents(page.raw()) {
-            total = total.saturating_add(runs.of_content(&content, Some(xobjects), MAX_FORM_DEPTH));
+            total = total.saturating_add(runs.of_content(&content, &res, MAX_FORM_DEPTH));
         }
         // Annotations' appearances are drawn after the content, as forms with the page's
         // resources to fall back on.
@@ -86,7 +86,7 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
             if total > MAX_FORM_RUNS {
                 break;
             }
-            total = total.saturating_add(runs.of_form(&appearance, resources.as_ref(), MAX_FORM_DEPTH));
+            total = total.saturating_add(runs.of_stream(&appearance, &res, MAX_FORM_DEPTH));
         }
         if total > MAX_FORM_RUNS {
             return Err(Refusal::Forms {
@@ -114,47 +114,117 @@ fn page_appearances<'a>(page: &Dict<'a>) -> Vec<Stream<'a>> {
     annots
         .iter::<Dict<'_>>()
         .take(10_000)
-        .filter_map(|annot| {
-            match annot.get::<Dict<'_>>(b"AP")?.get::<Object<'_>>(b"N")? {
+        .filter_map(
+            |annot| match annot.get::<Dict<'_>>(b"AP")?.get::<Object<'_>>(b"N")? {
                 Object::Stream(stream) => Some(stream),
                 Object::Dict(states) => annot
                     .get::<Name<'_>>(b"AS")
                     .and_then(|state| states.get::<Stream<'_>>(state.as_ref()))
                     .or_else(|| states.get::<Stream<'_>>(b"Off")),
                 _ => None,
-            }
-        })
+            },
+        )
         .collect()
 }
 
-/// How many times forms run, counted as the engine would draw them.
+/// The resources content is drawn with: what `Do`, `Tf`, `scn`/`SCN` and `gs` look names up
+/// in.
+#[derive(Clone, Default)]
+struct Res<'a> {
+    xobjects: Option<Dict<'a>>,
+    fonts: Option<Dict<'a>>,
+    patterns: Option<Dict<'a>>,
+    states: Option<Dict<'a>>,
+}
+
+impl<'a> Res<'a> {
+    fn of_page(resources: &hayro::hayro_syntax::page::Resources<'a>) -> Self {
+        Self {
+            xobjects: Some(resources.x_objects.clone()),
+            fonts: Some(resources.fonts.clone()),
+            patterns: Some(resources.patterns.clone()),
+            states: Some(resources.ext_g_states.clone()),
+        }
+    }
+
+    fn of_dict(resources: &Dict<'a>) -> Self {
+        Self {
+            xobjects: resources.get::<Dict<'_>>(b"XObject"),
+            fonts: resources.get::<Dict<'_>>(b"Font"),
+            patterns: resources.get::<Dict<'_>>(b"Pattern"),
+            states: resources.get::<Dict<'_>>(b"ExtGState"),
+        }
+    }
+}
+
+/// How many times forms and other drawn streams run, counted as the engine would draw
+/// them. Besides forms (`Do`), content runs the glyph procedures of Type 3 fonts (`Tf`), the
+/// cells of tiling patterns (`scn`, `SCN`) and the groups of soft masks (`gs`); each of
+/// those can draw forms too, so they're counted the same way, each at least once.
 #[derive(Default)]
 struct FormRuns {
-    /// By form and the depth left when it runs.
+    /// By stream and the depth left when it runs.
     known: HashMap<(ObjectIdentifier, u32), u64>,
 }
 
 impl FormRuns {
-    /// Form runs caused by `content`, drawn with the external objects `xobjects`, with
-    /// `depth` levels left.
-    fn of_content(&mut self, content: &Stream<'_>, xobjects: Option<&Dict<'_>>, depth: u32) -> u64 {
+    /// Runs caused by `content`, drawn with `res`, with `depth` levels left.
+    fn of_content(&mut self, content: &Stream<'_>, res: &Res<'_>, depth: u32) -> u64 {
         if depth == 0 {
             return 0;
         }
         let Ok(data) = content.decoded() else { return 0 };
-        let Some(xobjects) = xobjects else {
-            return 0;
-        };
         let mut total = 0u64;
-        for name in drawn_names(&data) {
-            let Some(form) = xobjects.get::<Stream<'_>>(name.as_slice()).filter(|s| {
-                s.dict()
-                    .get::<Name<'_>>(b"Subtype")
-                    .is_some_and(|n| n.as_str() == "Form")
-            }) else {
-                continue;
+        for (op, name) in used_names(&data) {
+            let name = name.as_slice();
+            let n = match op {
+                Op::Do => res
+                    .xobjects
+                    .as_ref()
+                    .and_then(|x| x.get::<Stream<'_>>(name))
+                    .filter(|s| {
+                        s.dict()
+                            .get::<Name<'_>>(b"Subtype")
+                            .is_some_and(|n| n.as_str() == "Form")
+                    })
+                    .map_or(0, |form| self.of_stream(&form, res, depth - 1)),
+                Op::Font => {
+                    let font = res.fonts.as_ref().and_then(|f| f.get::<Dict<'_>>(name));
+                    let Some(font) = font.filter(|f| {
+                        f.get::<Name<'_>>(b"Subtype")
+                            .is_some_and(|n| n.as_str() == "Type3")
+                    }) else {
+                        continue;
+                    };
+                    let glyph_res = font.get::<Dict<'_>>(b"Resources").map(|r| Res::of_dict(&r));
+                    let glyph_res = glyph_res.as_ref().unwrap_or(res);
+                    let mut glyphs = 0u64;
+                    if let Some(procs) = font.get::<Dict<'_>>(b"CharProcs") {
+                        for key in procs.keys().take(10_000) {
+                            if let Some(proc_) = procs.get::<Stream<'_>>(key.as_ref()) {
+                                glyphs = glyphs.saturating_add(self.of_stream(&proc_, glyph_res, depth - 1));
+                            }
+                            if glyphs > MAX_FORM_RUNS {
+                                break;
+                            }
+                        }
+                    }
+                    glyphs
+                }
+                Op::Pattern => res
+                    .patterns
+                    .as_ref()
+                    .and_then(|p| p.get::<Stream<'_>>(name))
+                    .map_or(0, |cell| self.of_stream(&cell, res, depth - 1)),
+                Op::State => res
+                    .states
+                    .as_ref()
+                    .and_then(|s| s.get::<Dict<'_>>(name))
+                    .and_then(|state| state.get::<Dict<'_>>(b"SMask"))
+                    .and_then(|mask| mask.get::<Stream<'_>>(b"G"))
+                    .map_or(0, |group| self.of_stream(&group, res, depth - 1)),
             };
-            total = total.saturating_add(self.of_form(&form, Some(xobjects), depth - 1));
+            total = total.saturating_add(n);
             if total > MAX_FORM_RUNS {
                 break;
             }
@@ -162,24 +232,21 @@ impl FormRuns {
         total
     }
 
-    /// Runs of `form` itself and the forms it draws, with `depth` levels left after it.
-    fn of_form(&mut self, form: &Stream<'_>, parent: Option<&Dict<'_>>, depth: u32) -> u64 {
-        let key = (form.obj_id(), depth);
+    /// Runs of `stream` itself (a form, glyph, pattern cell or mask group) and of what it
+    /// draws, with `depth` levels left after it.
+    fn of_stream(&mut self, stream: &Stream<'_>, parent: &Res<'_>, depth: u32) -> u64 {
+        let key = (stream.obj_id(), depth);
         if let Some(n) = self.known.get(&key) {
             return *n;
         }
         // Stop a cycle being followed while it is worked out; the depth bounds it anyway.
         self.known.insert(key, 1);
-        // A form without resources of its own draws with those of whatever drew it.
-        let own = form
+        // A stream without resources of its own draws with those of whatever drew it.
+        let own = stream
             .dict()
             .get::<Dict<'_>>(b"Resources")
-            .map(|r| r.get::<Dict<'_>>(b"XObject"));
-        let xobjects = match &own {
-            Some(own) => own.as_ref(),
-            None => parent,
-        };
-        let n = 1u64.saturating_add(self.of_content(form, xobjects, depth));
+            .map(|r| Res::of_dict(&r));
+        let n = 1u64.saturating_add(self.of_content(stream, own.as_ref().unwrap_or(parent), depth));
         self.known.insert(key, n);
         n
     }
@@ -190,8 +257,27 @@ fn is_space(c: u8) -> bool {
     b"\0\t\n\x0c\r ".contains(&c)
 }
 
-/// The names given to `Do` in content, in order.
-fn drawn_names(content: &[u8]) -> Vec<Vec<u8>> {
+/// PDF's delimiter characters.
+fn is_delimiter(c: u8) -> bool {
+    b"/[]<>(){}%".contains(&c)
+}
+
+/// The operators that draw a named resource.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Op {
+    /// `Do`: an external object.
+    Do,
+    /// `Tf`: a font, whose glyphs may be drawn by procedures (Type 3).
+    Font,
+    /// `scn` or `SCN`: a colour, which may be a tiling pattern.
+    Pattern,
+    /// `gs`: a graphics state, which may hold a soft mask.
+    State,
+}
+
+/// The names given to `Do`, `Tf`, `scn`, `SCN` and `gs` in content, in order: the last name
+/// before each.
+fn used_names(content: &[u8]) -> Vec<(Op, Vec<u8>)> {
     let mut out = Vec::new();
     let mut last_name: Option<&[u8]> = None;
     let mut i = 0;
@@ -201,7 +287,7 @@ fn drawn_names(content: &[u8]) -> Vec<Vec<u8>> {
             let mut end = start;
             while content
                 .get(end)
-                .is_some_and(|c| !is_space(*c) && !b"/[]<>(){}%".contains(c))
+                .is_some_and(|c| !is_space(*c) && !is_delimiter(*c))
             {
                 end += 1;
             }
@@ -209,22 +295,32 @@ fn drawn_names(content: &[u8]) -> Vec<Vec<u8>> {
             i = end;
             continue;
         }
-        if b == b'D'
-            && content.get(i + 1) == Some(&b'o')
-            && content
-                .get(i + 2)
-                .is_none_or(|c| is_space(*c) || b"/[]<>(){}%".contains(c))
-            && i.checked_sub(1)
-                .and_then(|p| content.get(p))
-                .is_none_or(|c| is_space(*c))
-        {
-            if let Some(name) = last_name.take() {
-                out.push(name.to_vec());
+        let starts_word = i
+            .checked_sub(1)
+            .and_then(|p| content.get(p))
+            .is_none_or(|c| is_space(*c));
+        if b.is_ascii_alphabetic() && starts_word {
+            let mut end = i;
+            while content.get(end).is_some_and(|c| c.is_ascii_alphabetic()) {
+                end += 1;
+            }
+            let ends_word = content.get(end).is_none_or(|c| is_space(*c) || is_delimiter(*c));
+            let op = match content.get(i..end) {
+                Some(b"Do") => Some(Op::Do),
+                Some(b"Tf") => Some(Op::Font),
+                Some(b"scn" | b"SCN") => Some(Op::Pattern),
+                Some(b"gs") => Some(Op::State),
+                _ => None,
+            };
+            if let (true, Some(op)) = (ends_word, op)
+                && let Some(name) = last_name.take()
+            {
+                out.push((op, name.to_vec()));
                 if out.len() >= 100_000 {
                     break;
                 }
             }
-            i += 2;
+            i = end;
             continue;
         }
         i += 1;
