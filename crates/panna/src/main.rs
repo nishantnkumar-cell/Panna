@@ -922,7 +922,7 @@ fn properties_view<'a>(
 /// The keyboard shortcuts, in two columns.
 fn shortcuts_card<'a>() -> Element<'a, Message> {
     let m = icons::MOD;
-    let keys: [(String, &str); 34] = [
+    let keys: [(String, &str); 35] = [
         (format!("{m}O"), "Open"),
         (format!("{m}S"), "Save"),
         (format!("{m}Shift+S"), "Save as"),
