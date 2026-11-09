@@ -8,8 +8,9 @@ class and how it's handled, and what's still open) is in
 ## What we guarantee
 
 - **Memory safety in our own code.** `panna` and `panna-core` use `#![forbid(unsafe_code)]`.
-  The only `unsafe` we wrote is in `panna-print`: the Windows and macOS print dialogs, and on
-  macOS receiving the files opened from Finder. It is kept small and commented.
+  The only `unsafe` we wrote calls the operating system: the Windows and macOS print dialogs
+  and receiving files opened from Finder (`panna-print`), and the Windows and macOS sandbox
+  calls (`panna-sandbox`). Each block is small and says why it is sound.
 - **No network access.** The app never connects to the internet. There are no updates, no
   telemetry and no cloud features. Links in documents open in your browser only after you
   agree.
@@ -31,7 +32,9 @@ the GPU stack and OS dialogs are listed in the threat model. We reduce the risk 
 - fuzzing the open, render, analysis, save and import paths in CI,
 - auditing dependencies against the RustSec advisory database on every change and nightly,
   and pinning every CI action and build tool,
-- planning to isolate rendering in a sandboxed child process (threat model, section 7).
+- parsing PDF data in a locked-down child process, with no access to files, the network or
+  other programs (threat model, section 7),
+- keeping every dependency on its latest release.
 
 ## Reporting a vulnerability
 

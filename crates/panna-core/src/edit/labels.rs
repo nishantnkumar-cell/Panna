@@ -25,7 +25,7 @@ pub(crate) fn with_page_labels(
     let root = xref.root_id();
     let catalog = xref.get::<Dict<'_>>(root).ok_or(SaveError::Damaged)?;
     let (num, generation) = (
-        u32::try_from(root.obj_number).map_err(|_| SaveError::Damaged)?,
+        root.obj_number,
         u16::try_from(root.gen_number).map_err(|_| SaveError::Damaged)?,
     );
     let data = catalog.data();

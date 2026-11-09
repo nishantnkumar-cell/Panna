@@ -71,10 +71,7 @@ fn pdf_text(s: &str) -> String {
 }
 
 fn id_of(r: ObjRef) -> Result<ObjectIdentifier, SaveError> {
-    Ok(ObjectIdentifier::new(
-        i32::try_from(r.number).map_err(|_| SaveError::Damaged)?,
-        i32::from(r.generation),
-    ))
+    Ok(ObjectIdentifier::new(r.number, i32::from(r.generation)))
 }
 
 /// The items of an array, copied as they are, followed by `extra`.
@@ -196,7 +193,7 @@ pub(crate) fn prepare(
     let page_raw = page.raw();
     let page_id = page_raw.obj_id().ok_or(SaveError::Damaged)?;
     let (page_num, page_gen) = (
-        u32::try_from(page_id.obj_number).map_err(|_| SaveError::Damaged)?,
+        page_id.obj_number,
         u16::try_from(page_id.gen_number).map_err(|_| SaveError::Damaged)?,
     );
 
@@ -312,7 +309,7 @@ pub(crate) fn prepare(
     let form_set = vec![("Fields", fields), ("SigFlags", "3".to_owned())];
     match (catalog.get_ref(b"AcroForm"), &acro) {
         (Some(r), Some(form)) => {
-            let num = u32::try_from(r.obj_number).map_err(|_| SaveError::Damaged)?;
+            let num = r.obj_number;
             let generation = u16::try_from(r.gen_number).map_err(|_| SaveError::Damaged)?;
             out.put_copied(num, generation, rewrite(form.data(), &form_set)?);
         }
