@@ -1095,6 +1095,7 @@ fn password_id() -> iced::widget::Id {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
+        let redact_look = settings.redact.clone();
         let unit = settings.unit;
         let annotate = annotator(&settings);
         let mut app = Self {
@@ -1187,7 +1188,7 @@ impl App {
             snapshot: None,
             measure: measure::Measure::default(),
             adder: add::Adder::default(),
-            redactor: redact::Redactor::default(),
+            redactor: redact::Redactor::with_look(redact_look),
             preparer: prepare::Preparer::default(),
             picture_editor: pictures::PictureEditor::default(),
             reader: speech::Reader::default(),
@@ -2878,7 +2879,15 @@ impl App {
                     }
                     redact::Outcome::Apply(areas, scrub) => {
                         let show = areas.first().map_or(0, |(page, _)| *page);
-                        return self.edit_pages(PageEdit::Redact { areas, scrub }, show, false);
+                        let look = self.redactor.look.clone();
+                        return self.edit_pages(PageEdit::Redact { areas, scrub, look }, show, false);
+                    }
+                    redact::Outcome::FindPattern(pattern) => {
+                        return self.find_event(find::Event::Pattern(Some(pattern)));
+                    }
+                    redact::Outcome::SaveLook => {
+                        self.settings.redact = self.redactor.look.clone();
+                        self.settings.save();
                     }
                 }
                 if self.redactor.on {
@@ -5260,12 +5269,26 @@ impl App {
             find::Event::Close => {
                 self.find.open = false;
                 self.find.query.clear();
+                self.find.pattern = None;
                 self.rescan_find();
                 Task::none()
+            }
+            find::Event::Pattern(pattern) => {
+                self.find.pattern = pattern;
+                self.find.query.clear();
+                self.find.open = pattern.is_some();
+                if pattern.is_some() {
+                    self.sidebar.open = true;
+                    self.sidebar.tab = sidebar::Tab::Results;
+                    self.save_sidebar();
+                }
+                self.rescan_find();
+                Task::batch([self.request_search_text(), self.step_find(true)])
             }
             find::Event::Query(query) => {
                 self.find.open = true;
                 self.find.query = query;
+                self.find.pattern = None;
                 if self.find.active() && self.sidebar.tab != sidebar::Tab::Results {
                     // Typing a search shows the results list, like Word.
                     self.sidebar.tab = sidebar::Tab::Results;
@@ -6922,13 +6945,16 @@ impl App {
         }
         if self.redactor.on && self.doc.is_some() {
             layers.push(
-                container(self.redactor.bar(!self.find.hits().is_empty()))
-                    .width(Fill)
-                    .height(Fill)
-                    .padding(16)
-                    .align_x(Center)
-                    .align_y(iced::Bottom)
-                    .into(),
+                container(self.redactor.bar(
+                    !self.find.hits().is_empty(),
+                    self.doc.as_ref().map_or(0, |d| d.pages.len()),
+                ))
+                .width(Fill)
+                .height(Fill)
+                .padding(16)
+                .align_x(Center)
+                .align_y(iced::Bottom)
+                .into(),
             );
         }
         if let Some(card) = self.redactor.card() {

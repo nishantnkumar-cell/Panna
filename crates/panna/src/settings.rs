@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use panna_core::{Color, RedactLook};
+
 use crate::colors::PageColors;
 use crate::layout::Spread;
 use crate::measure::Unit;
@@ -37,6 +39,8 @@ pub struct Settings {
     pub present_loop: bool,
     /// Full screen: turn the page every this many seconds; 0 for never.
     pub present_seconds: u32,
+    /// How redaction boxes look: fill colour and overlay text.
+    pub redact: RedactLook,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
 }
@@ -57,6 +61,7 @@ impl Default for Settings {
             single_keys: true,
             present_loop: false,
             present_seconds: 0,
+            redact: RedactLook::default(),
             recent: Vec::new(),
         }
     }
@@ -126,6 +131,11 @@ impl Settings {
                 "present.seconds" => {
                     out.present_seconds = value.trim().parse::<u32>().map_or(0, |s| s.min(MAX_SECONDS));
                 }
+                "redact.fill" => out.redact.fill = parse_hex(value.trim()).unwrap_or(out.redact.fill),
+                "redact.overlay" => {
+                    out.redact.overlay = value.trim().chars().take(crate::redact::MAX_OVERLAY).collect();
+                }
+                "redact.repeat" => out.redact.repeat = value.trim() == "true",
                 "comments.author" => out.author = value.trim().chars().take(MAX_AUTHOR).collect(),
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
@@ -157,6 +167,14 @@ impl Settings {
             self.present_loop,
             self.present_seconds,
         ));
+        out.push_str(&format!(
+            "redact.fill={}\nredact.repeat={}\n",
+            hex(self.redact.fill),
+            self.redact.repeat
+        ));
+        if !self.redact.overlay.contains(['\n', '\r']) {
+            out.push_str(&format!("redact.overlay={}\n", self.redact.overlay));
+        }
         // A name with a line break can't be stored in this format.
         if !self.author.contains(['\n', '\r']) {
             out.push_str(&format!("comments.author={}\n", self.author));
@@ -171,6 +189,25 @@ impl Settings {
         }
         out
     }
+}
+
+/// A colour as #rrggbb.
+fn hex(Color(rgb): Color) -> String {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", byte(rgb[0]), byte(rgb[1]), byte(rgb[2]))
+}
+
+fn parse_hex(s: &str) -> Option<Color> {
+    let digits = s.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.is_ascii() {
+        return None;
+    }
+    let part = |i: usize| {
+        u8::from_str_radix(digits.get(i..i + 2)?, 16)
+            .ok()
+            .map(|v| f32::from(v) / 255.0)
+    };
+    Some(Color([part(0)?, part(2)?, part(4)?]))
 }
 
 fn finite(s: &str) -> Option<f32> {
@@ -224,6 +261,11 @@ mod tests {
             single_keys: false,
             present_loop: true,
             present_seconds: 7,
+            redact: RedactLook {
+                fill: Color([1.0, 1.0, 1.0]),
+                overlay: "Withheld".into(),
+                repeat: true,
+            },
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);

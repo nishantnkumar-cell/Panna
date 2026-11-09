@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
-use panna_core::{Document, FindOptions, Limits, SaveError, TextBox};
+use panna_core::{Color, Document, FindOptions, Limits, RedactLook, SaveError, TextBox};
 
 fn build(objects: &[&str]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -163,6 +163,41 @@ fn marked_areas_are_covered_in_black() {
     };
     assert!(at(150, 40).iter().all(|c| *c < 20));
     assert!(at(250, 40).iter().all(|c| *c > 235));
+}
+
+#[test]
+fn boxes_take_the_chosen_fill_and_overlay_text() {
+    let doc = sample();
+    let area = TextBox {
+        x0: 100.0,
+        y0: 20.0,
+        x1: 300.0,
+        y1: 60.0,
+    };
+    let look = RedactLook {
+        fill: Color([1.0, 0.0, 0.0]),
+        overlay: "Withheld".into(),
+        repeat: false,
+    };
+    let new = doc
+        .reopen(doc.redacted_as(&[(0, vec![area])], &[], &look).unwrap())
+        .unwrap();
+    let cache = new.new_cache();
+    let page = new.render_page(&cache, 0, 1.0).unwrap();
+    let at = |x: u32, y: u32| {
+        let i = ((y * page.width + x) * 4) as usize;
+        [page.rgba[i], page.rgba[i + 1], page.rgba[i + 2]]
+    };
+    // A corner of the box is red; the words are written in white across its middle.
+    let [r, g, b] = at(102, 22);
+    assert!(r > 235 && g < 20 && b < 20, "{r} {g} {b}");
+    assert!(new.page_text(0).unwrap().text_in(&[area]).contains("Withheld"));
+    let repeated = RedactLook { repeat: true, ..look };
+    let new = doc
+        .reopen(doc.redacted_as(&[(0, vec![area])], &[], &repeated).unwrap())
+        .unwrap();
+    let text = new.page_text(0).unwrap().text_in(&[area]);
+    assert!(text.matches("Withheld").count() >= 4, "{text}");
 }
 
 #[test]
