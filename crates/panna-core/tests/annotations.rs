@@ -338,9 +338,10 @@ fn saved_comments_come_back_editable() {
             cloud: false,
         }),
         annotation(Kind::Polygon {
-            points: polygon,
+            points: polygon.clone(),
             cloud: true,
         }),
+        annotation(Kind::PolyLine(polygon)),
         annotation(Kind::Stamp {
             rect,
             name: "NotApproved".into(),
@@ -386,6 +387,13 @@ fn saved_comments_come_back_editable() {
                 }
                 let label = if *cloud { "Cloud" } else { "Polygon" };
                 assert_eq!(comment.kind.label(), label);
+            }
+            (Kind::PolyLine(points), Kind::PolyLine(p)) => {
+                assert_eq!(points.len(), p.len());
+                for (a, b) in points.iter().zip(p) {
+                    assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01, "{p:?}");
+                }
+                assert_eq!(comment.kind.label(), "Polygon line");
             }
             (Kind::Stamp { rect: a, name, .. }, Kind::Stamp { rect: b, name: n, .. }) => {
                 assert_eq!(name, n);
@@ -467,27 +475,34 @@ fn replies_and_statuses_join_the_comment_thread() {
     let doc = reopen(build(&objects(true)));
     let note = doc.info().unwrap().comments.remove(0);
     let parent = note.id.unwrap().annot;
-    let reply = |contents: &str, state| {
+    let reply = |contents: &str, state, checked| {
         let mut a = annotation(Kind::Reply {
             to: parent,
             at: note.at,
             state,
+            checked,
         });
         a.contents = contents.into();
         a
     };
     let saved = doc
         .with_annotations(&[
-            reply("Agreed", None),
-            reply("Accepted set by Tester", Some(ReviewState::Accepted)),
+            reply("Agreed", None, None),
+            reply("Accepted set by Tester", Some(ReviewState::Accepted), None),
+            reply("", None, Some(true)),
         ])
         .unwrap();
     let text = String::from_utf8_lossy(&saved).into_owned();
     assert!(text.contains("/IRT 5 0 R"), "{text}");
     assert!(text.contains("/State (Accepted) /StateModel (Review)"), "{text}");
+    assert!(text.contains("/State (Marked) /StateModel (Marked)"), "{text}");
     let doc = reopen(saved);
     let listed = doc.info().unwrap().comments;
-    assert_eq!(listed.len(), 3);
+    assert_eq!(listed.len(), 4);
+    // A checkmark is not a review status, and every saved reply carries its date.
+    assert_eq!((listed[3].state, listed[3].checked), (None, Some(true)));
+    assert_eq!(listed[1].checked, None);
+    assert!(listed[1].date.starts_with("20"), "{}", listed[1].date);
     assert_eq!(
         (
             listed[1].kind.clone(),
@@ -503,4 +518,28 @@ fn replies_and_statuses_join_the_comment_thread() {
     );
     // Replies have no look of their own on the page.
     assert!(!text.contains("/F 32 /AP"));
+}
+
+#[test]
+fn inserted_text_comes_back_as_a_caret() {
+    let doc = reopen(build(&objects(false)));
+    let caret = annotation(Kind::Caret {
+        rect: TextBox {
+            x0: 40.0,
+            y0: 30.0,
+            x1: 48.0,
+            y1: 38.0,
+        },
+    });
+    let saved = doc.with_annotations(&[caret]).unwrap();
+    let text = String::from_utf8_lossy(&saved);
+    assert!(text.contains("/Subtype /Caret"));
+    let listed = reopen(saved).info().unwrap().comments;
+    let comment = listed.first().unwrap();
+    assert_eq!(comment.kind, CommentKind::Caret);
+    assert_eq!(comment.contents, "Hello (world)");
+    assert!(matches!(
+        comment.editable.as_ref().map(|a| &a.kind),
+        Some(Kind::Caret { .. })
+    ));
 }

@@ -1,9 +1,11 @@
 //! Redacting: marking areas of pages, then taking everything in them out of the file for good
-//! and covering them in black, as a page change that can be undone until the file is closed.
+//! and covering them, as a page change that can be undone until the file is closed. As in
+//! Acrobat, marks can be repeated across pages, Find can mark phone numbers, emails and such,
+//! and the boxes left behind take a fill colour and overlay text.
 
-use iced::widget::{button, checkbox, column, container, pin, row, space, text};
+use iced::widget::{button, checkbox, column, container, pick_list, pin, row, space, text, text_input};
 use iced::{Center, Element, Theme};
-use panna_core::{Leftovers, TextBox};
+use panna_core::{Color, Leftovers, Pattern, RedactLook, TextBox};
 
 use crate::Message;
 use crate::icons::{self, Icon};
@@ -13,6 +15,48 @@ use crate::selection::PageMap;
 const CLICK_SLOP: f32 = 3.0;
 /// Marks kept at most.
 const MAX_MARKS: usize = 10_000;
+/// Longest overlay text kept.
+pub const MAX_OVERLAY: usize = 200;
+
+/// The fill colours offered for redaction boxes.
+pub const FILLS: [(Color, &str); 5] = [
+    (Color([0.0, 0.0, 0.0]), "Black"),
+    (Color([1.0, 1.0, 1.0]), "White"),
+    (Color([0.5, 0.5, 0.5]), "Grey"),
+    (Color([0.8, 0.1, 0.1]), "Red"),
+    (Color([0.1, 0.2, 0.5]), "Dark blue"),
+];
+
+/// Which pages a mark is repeated on, as Acrobat's Repeat Mark Across Pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatOn {
+    All,
+    Odd,
+    Even,
+}
+
+impl RepeatOn {
+    pub const ALL: [RepeatOn; 3] = [RepeatOn::All, RepeatOn::Odd, RepeatOn::Even];
+
+    fn keeps(self, page: usize) -> bool {
+        // Page numbers count from 1, so index 0 is an odd page.
+        match self {
+            RepeatOn::All => true,
+            RepeatOn::Odd => page.is_multiple_of(2),
+            RepeatOn::Even => !page.is_multiple_of(2),
+        }
+    }
+}
+
+impl std::fmt::Display for RepeatOn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RepeatOn::All => "Repeat the last mark on every page",
+            RepeatOn::Odd => "Repeat it on odd pages",
+            RepeatOn::Even => "Repeat it on even pages",
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -29,6 +73,17 @@ pub enum Event {
     Found(Leftovers),
     /// Whether to take out the bookmarks and comments that mention it too.
     Scrub(bool),
+    /// Copies the last mark to the same place on other pages of a document this many pages long.
+    Repeat(RepeatOn, usize),
+    /// Has Find look for phone numbers, emails and such, ready to mark.
+    Pattern(Pattern),
+    /// Opens the Redaction properties card.
+    Properties,
+    Fill(Color),
+    Overlay(String),
+    RepeatOverlay(bool),
+    PropertiesDone,
+    PropertiesCancel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,6 +120,10 @@ pub struct Redactor {
     leftovers: Option<Leftovers>,
     /// Take those out too (the default).
     keep_mentions: bool,
+    /// How the boxes look once applied.
+    pub look: RedactLook,
+    /// The look being chosen on the properties card.
+    choosing: Option<RedactLook>,
 }
 
 /// What the main view does next.
@@ -77,23 +136,39 @@ pub enum Outcome {
     /// Redact these areas, page by page, and the comments and bookmark titles that mention
     /// these phrases.
     Apply(Vec<(usize, Vec<TextBox>)>, Vec<String>),
+    /// Find this pattern.
+    FindPattern(Pattern),
+    /// The look changed: remember it.
+    SaveLook,
 }
 
 impl Redactor {
-    /// Whether a drag or the question is under way, for Esc.
-    pub fn busy(&self) -> bool {
-        self.drag.is_some() || self.confirming
+    pub fn with_look(look: RedactLook) -> Self {
+        Self {
+            look,
+            ..Self::default()
+        }
     }
 
-    /// Stops the drag or the question, keeping the marks.
+    /// Whether a drag, the question or the properties card is under way, for Esc.
+    pub fn busy(&self) -> bool {
+        self.drag.is_some() || self.confirming || self.choosing.is_some()
+    }
+
+    /// Stops the drag, the question or the properties card, keeping the marks.
     pub fn cancel(&mut self) {
         self.drag = None;
         self.confirming = false;
+        self.choosing = None;
     }
 
-    /// Leaves redacting, forgetting the marks.
+    /// Leaves redacting, forgetting the marks but not the look.
     pub fn stop(&mut self) {
-        *self = Self::default();
+        let look = std::mem::take(&mut self.look);
+        *self = Self {
+            look,
+            ..Self::default()
+        };
     }
 
     pub fn update(&mut self, event: Event) -> Outcome {
@@ -123,6 +198,45 @@ impl Redactor {
                 }
             }
             Event::Scrub(on) => self.keep_mentions = !on,
+            Event::Repeat(on, pages) => {
+                if let Some(last) = self.marks.last().copied() {
+                    let copies: Vec<usize> = (0..pages).filter(|p| on.keeps(*p) && *p != last.page).collect();
+                    for page in copies {
+                        self.mark(page, [last.rect]);
+                    }
+                }
+            }
+            Event::Pattern(pattern) => return Outcome::FindPattern(pattern),
+            Event::Properties => self.choosing = Some(self.look.clone()),
+            Event::Fill(color) => {
+                if let Some(look) = &mut self.choosing {
+                    look.fill = color;
+                }
+            }
+            Event::Overlay(words) => {
+                if let Some(look) = &mut self.choosing {
+                    look.overlay = words
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(MAX_OVERLAY)
+                        .collect();
+                }
+            }
+            Event::RepeatOverlay(on) => {
+                if let Some(look) = &mut self.choosing {
+                    look.repeat = on;
+                }
+            }
+            Event::PropertiesDone => {
+                if let Some(look) = self.choosing.take() {
+                    let changed = look != self.look;
+                    self.look = look;
+                    if changed {
+                        return Outcome::SaveLook;
+                    }
+                }
+            }
+            Event::PropertiesCancel => self.choosing = None,
             Event::Confirm => {
                 if !self.confirming {
                     return Outcome::Nothing;
@@ -225,7 +339,7 @@ impl Redactor {
     }
 
     /// The floating bar: marking Find's matches, taking marks back, and redacting.
-    pub fn bar(&self, has_results: bool) -> Element<'_, Message> {
+    pub fn bar(&self, has_results: bool, pages: usize) -> Element<'_, Message> {
         let ev = Message::Redact;
         let marked = !self.marks.is_empty();
         let hint = match self.marks.len() {
@@ -249,7 +363,30 @@ impl Redactor {
                 "Clear every mark",
                 marked.then_some(ev(Event::Clear))
             ),
-            text(hint).size(13).width(330),
+            icons::with_tip(
+                pick_list(Pattern::ALL, None::<Pattern>, move |p| ev(Event::Pattern(p)))
+                    .placeholder("Find…")
+                    .width(90)
+                    .text_size(13)
+                    .padding([3, 6]),
+                "Find phone numbers, emails, card numbers and such, then mark what Find matched",
+            ),
+            icons::with_tip(
+                pick_list(RepeatOn::ALL, None::<RepeatOn>, move |on| {
+                    ev(Event::Repeat(on, pages))
+                })
+                .placeholder("Repeat…")
+                .width(100)
+                .text_size(13)
+                .padding([3, 6]),
+                "Repeat the last mark in the same place on other pages",
+            ),
+            text(hint).size(13).width(250),
+            icons::button(
+                Icon::Preferences,
+                "Redaction properties: fill colour and overlay text…",
+                Some(ev(Event::Properties))
+            ),
             icons::button(
                 Icon::Check,
                 "Remove what's marked, for good…",
@@ -274,8 +411,106 @@ impl Redactor {
             .into()
     }
 
-    /// The question before redacting.
+    /// The Redaction properties card: how the boxes look once applied.
+    fn properties(&self, look: &RedactLook) -> Element<'_, Message> {
+        let ev = Message::Redact;
+        let swatches = FILLS.iter().map(|&(color, name)| {
+            let Color([r, g, b]) = color;
+            let chosen = look.fill == color;
+            icons::with_tip(
+                button(space().width(22).height(22))
+                    .padding(0)
+                    .style(move |theme: &Theme, _| {
+                        let palette = theme.extended_palette();
+                        button::Style {
+                            background: Some(iced::Color::from_rgb(r, g, b).into()),
+                            border: iced::Border {
+                                color: if chosen {
+                                    palette.primary.base.color
+                                } else {
+                                    palette.background.strong.color
+                                },
+                                width: if chosen { 3.0 } else { 1.0 },
+                                radius: 4.0.into(),
+                            },
+                            ..button::Style::default()
+                        }
+                    })
+                    .on_press(ev(Event::Fill(color))),
+                name,
+            )
+        });
+        // A sample box as it will look.
+        let Color([r, g, b]) = look.fill;
+        let light = 0.299 * r + 0.587 * g + 0.114 * b > 0.5;
+        let words = if look.overlay.trim().is_empty() {
+            String::new()
+        } else if look.repeat {
+            format!("{} ", look.overlay.trim()).repeat(4)
+        } else {
+            look.overlay.trim().to_owned()
+        };
+        let sample = container(
+            text(words)
+                .size(12)
+                .color(if light {
+                    iced::Color::BLACK
+                } else {
+                    iced::Color::WHITE
+                })
+                .wrapping(text::Wrapping::None),
+        )
+        .center_x(iced::Fill)
+        .center_y(36)
+        .clip(true)
+        .style(move |_: &Theme| container::Style::default().background(iced::Color::from_rgb(r, g, b)));
+        container(
+            column![
+                text("Redaction properties").size(16),
+                row![text("Fill").size(13).width(90)]
+                    .extend(swatches)
+                    .spacing(8)
+                    .align_y(Center),
+                row![
+                    text("Overlay text").size(13).width(90),
+                    text_input("None, or words such as Redacted", &look.overlay)
+                        .on_input(move |w| ev(Event::Overlay(w)))
+                        .on_submit(ev(Event::PropertiesDone))
+                        .size(13),
+                ]
+                .spacing(8)
+                .align_y(Center),
+                checkbox(look.repeat)
+                    .label("Repeat the text to fill each box")
+                    .on_toggle(move |on| ev(Event::RepeatOverlay(on)))
+                    .size(16)
+                    .text_size(13),
+                sample,
+                text("Applies to marks redacted from now on.")
+                    .size(12)
+                    .style(text::secondary),
+                row![
+                    space::horizontal(),
+                    button("Cancel")
+                        .style(button::secondary)
+                        .on_press(ev(Event::PropertiesCancel)),
+                    button("Done").on_press(ev(Event::PropertiesDone)),
+                ]
+                .spacing(8),
+            ]
+            .spacing(10)
+            .width(380),
+        )
+        .padding(16)
+        .style(container::rounded_box)
+        .into()
+    }
+
+    /// The question before redacting, or the properties card.
     pub fn card(&self) -> Option<Element<'_, Message>> {
+        if let Some(look) = &self.choosing {
+            return Some(self.properties(look));
+        }
         if !self.confirming {
             return None;
         }
@@ -316,7 +551,17 @@ impl Redactor {
             text("Remove marked content for good?").size(16),
             text(format!(
                 "Text, pictures and drawings in {what} are taken out of the file and covered \
-                 in black. Comments over them go too."
+                 in {}{}. Comments over them go too.",
+                FILLS
+                    .iter()
+                    .find(|(c, _)| *c == self.look.fill)
+                    .map_or("colour", |(_, name)| name)
+                    .to_lowercase(),
+                if self.look.overlay.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" with “{}” written over", self.look.overlay.trim())
+                }
             ))
             .size(13),
         ]
@@ -355,6 +600,37 @@ mod tests {
             on: true,
             ..Redactor::default()
         }
+    }
+
+    #[test]
+    fn the_last_mark_repeats_across_pages() {
+        let mut r = on();
+        r.press(1, (10.0, 10.0));
+        r.hover(1, (50.0, 30.0));
+        r.release();
+        r.update(Event::Repeat(RepeatOn::Odd, 5));
+        let pages: Vec<usize> = r.marks.iter().map(|m| m.page).collect();
+        assert_eq!(pages, [1, 0, 2, 4]);
+        r.update(Event::Repeat(RepeatOn::All, 5));
+        assert_eq!(r.marks.len(), 5);
+    }
+
+    #[test]
+    fn properties_keep_their_look_until_done() {
+        let mut r = on();
+        r.update(Event::Properties);
+        r.update(Event::Fill(FILLS[3].0));
+        r.update(Event::Overlay("Withheld\n".into()));
+        assert_eq!(r.look, RedactLook::default());
+        r.update(Event::PropertiesCancel);
+        assert_eq!(r.look, RedactLook::default());
+        r.update(Event::Properties);
+        r.update(Event::Overlay("Withheld\n".into()));
+        assert!(matches!(r.update(Event::PropertiesDone), Outcome::SaveLook));
+        assert_eq!(r.look.overlay, "Withheld");
+        // Leaving redaction keeps the look.
+        r.update(Event::Toggle);
+        assert_eq!(r.look.overlay, "Withheld");
     }
 
     #[test]

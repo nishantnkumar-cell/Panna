@@ -28,6 +28,7 @@ mod links;
 mod ocr;
 mod office;
 mod outline;
+mod patterns;
 mod preflight;
 mod remote;
 mod sig;
@@ -40,7 +41,9 @@ pub use attachments::Attachment;
 pub use calc::{CalcOp, Calculation, Expr, Formula, number as calc_number, value_text as calc_value_text};
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use compare::{Change, ChangeKind};
-pub use document::{Document, DocumentInfo, Leftovers, OpenError, PageSize, RenderError, RenderedPage};
+pub use document::{
+    Document, DocumentInfo, Leftovers, OpenError, PageSize, RedactLook, RenderError, RenderedPage,
+};
 pub use edit::{
     Addition, Annotation, Changes, Cleanup, Color, Corner, HeaderFooter, Kind, LINE_HEIGHT, MAX_BLANK_PAGES,
     MAX_PICTURES, Margins, NOTE_SIZE, NewField, NewFieldKind, PageSource, PictureChange, Protection,
@@ -56,6 +59,7 @@ pub use layers::Layer;
 pub use limits::Limits;
 pub use links::{Link, LinkTarget, safe_uri};
 pub use outline::OutlineItem;
+pub use patterns::Pattern;
 pub use preflight::{Finding, Rule, Standard};
 pub use remote::Isolated;
 pub use sig::{Cert, DigitalId, HeldKey, SigStatus, SignDigest, Signature, trusted_by};

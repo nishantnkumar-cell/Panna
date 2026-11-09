@@ -8,8 +8,8 @@ all-features = false
 version = 2
 yanked = "deny"
 unmaintained = "workspace"
-# Nothing is ignored. (RUSTSEC-2023-0071, the rsa crate's Marvin timing issue, was fixed by
-# rsa 0.10's constant-time arithmetic.)
+# Nothing is ignored. (RUSTSEC-2023-0071 in rsa and RUSTSEC-2026-0387 in crypto-bigint,
+# both timing issues, are fixed by rsa 0.10 and the 0.14 elliptic-curve crates.)
 ignore = []
 
 [licenses]

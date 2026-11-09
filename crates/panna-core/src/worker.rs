@@ -103,6 +103,8 @@ pub enum PageEdit {
     Redact {
         areas: Vec<(usize, Vec<crate::TextBox>)>,
         scrub: Vec<String>,
+        #[serde(default)]
+        look: crate::RedactLook,
     },
     /// Adds new form fields and takes out these ones.
     FormFields {

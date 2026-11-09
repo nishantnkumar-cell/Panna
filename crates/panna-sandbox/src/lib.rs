@@ -106,8 +106,8 @@ mod system {
             libc::SYS_bpf,
             libc::SYS_perf_event_open,
             libc::SYS_userfaultfd,
-            // io_uring runs its operations (opening sockets and files among them) inside the
-            // kernel, where the filter never sees them.
+            // io_uring runs its operations (socket, connect, openat, ...) in the kernel
+            // without passing through this filter, so it would undo everything above.
             libc::SYS_io_uring_setup,
             libc::SYS_io_uring_enter,
             libc::SYS_io_uring_register,
@@ -403,9 +403,8 @@ mod tests {
         if files_enforced() && std::fs::read("/etc/hosts").is_ok() {
             worked |= 8;
         }
-        #[cfg(target_os = "linux")]
-        if !filter_refuses_kernel_side_calls() {
-            worked |= 32;
+        if !x32_refused() {
+            worked |= 64;
         }
         // Allocating past the cap fails rather than taking the machine's memory (Linux only;
         // macOS ignores the cap).
@@ -417,37 +416,76 @@ mod tests {
         {
             worked |= 16;
         }
+        if io_uring_works() {
+            worked |= 32;
+        }
         std::process::exit(worked);
     }
 
-    /// Whether the seccomp filter itself refuses io_uring and, on x86-64, an x32 `socket`
-    /// (EPERM comes from the filter; unfiltered, the kernel would say EFAULT or ENOSYS, or
-    /// open the socket).
+    /// Whether the seccomp filter itself refuses an x32-ABI `socket` on x86-64 (EPERM comes
+    /// from the filter; unfiltered, the kernel would say ENOSYS or open the socket).
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[allow(unsafe_code)]
+    fn x32_refused() -> bool {
+        // SAFETY: socket takes three integers and touches no memory.
+        let result =
+            unsafe { libc::syscall(0x4000_0000 | libc::SYS_socket, libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    fn x32_refused() -> bool {
+        true
+    }
+
+    /// Whether an io_uring can be set up, which would let the process run calls the seccomp
+    /// filter never sees.
     #[cfg(target_os = "linux")]
     #[allow(unsafe_code)]
-    fn filter_refuses_kernel_side_calls() -> bool {
-        let refused = |result: libc::c_long| {
-            result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-        };
-        // SAFETY: io_uring_setup with no entries and a null parameter pointer reads and
-        // writes no memory of ours; it can only fail.
-        let uring =
-            refused(unsafe { libc::syscall(libc::SYS_io_uring_setup, 0, std::ptr::null_mut::<u8>()) });
-        #[cfg(target_arch = "x86_64")]
-        // SAFETY: socket takes three integers and touches no memory.
-        let x32 = refused(unsafe {
-            libc::syscall(0x4000_0000 | libc::SYS_socket, libc::AF_INET, libc::SOCK_DGRAM, 0)
-        });
-        #[cfg(not(target_arch = "x86_64"))]
-        let x32 = true;
-        uring && x32
+    fn io_uring_works() -> bool {
+        let mut params = [0u8; 120]; // struct io_uring_params, zeroed
+        // SAFETY: io_uring_setup reads and writes only the 120-byte params buffer, which
+        // lives across the call; any fd it returns is closed straight away.
+        let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 1u32, params.as_mut_ptr()) };
+        if let Ok(fd) = libc::c_int::try_from(fd)
+            && fd >= 0
+        {
+            // SAFETY: the fd was just returned to us and isn't used anywhere else.
+            unsafe { libc::close(fd) };
+            return true;
+        }
+        false
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn io_uring_works() -> bool {
+        false
     }
 
     /// Whether file access can be taken away here: always on macOS, and on Linux when the
     /// kernel has Landlock.
+    #[cfg(target_os = "macos")]
     fn files_enforced() -> bool {
-        cfg!(target_os = "macos")
-            || std::fs::read_to_string("/sys/kernel/security/lsm").is_ok_and(|l| l.contains("landlock"))
+        true
+    }
+
+    /// Asks the kernel for its Landlock version, which works where securityfs isn't mounted
+    /// (WSL, many containers) too.
+    #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    fn files_enforced() -> bool {
+        const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1;
+        // SAFETY: with this flag and a null attribute pointer of size 0, the kernel only
+        // returns its Landlock version (or an error); no memory is read or written.
+        let version = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                std::ptr::null::<libc::c_void>(),
+                0usize,
+                LANDLOCK_CREATE_RULESET_VERSION,
+            )
+        };
+        version > 0
     }
 
     #[test]

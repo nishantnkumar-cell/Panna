@@ -9,7 +9,21 @@ use crate::find::Event;
 use crate::menu::{self, Menu, Nav};
 
 pub fn map(event: keyboard::Event) -> Option<Message> {
-    let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+    // Holding Space picks the Hand tool until it's let go, as in Acrobat.
+    if let keyboard::Event::KeyReleased {
+        key: Key::Named(Named::Space),
+        ..
+    } = event
+    {
+        return Some(Message::SpaceHand(false));
+    }
+    let keyboard::Event::KeyPressed {
+        key,
+        modifiers,
+        repeat,
+        ..
+    } = event
+    else {
         return None;
     };
     if key == Key::Named(Named::Tab) && !modifiers.command() && !modifiers.alt() {
@@ -18,6 +32,20 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         } else {
             Message::FocusNext
         });
+    }
+    // Previous and next view retrace where you've been: Alt+Left and Alt+Right in Acrobat on
+    // Windows, Cmd+Left and Cmd+Right on macOS.
+    let history = if cfg!(target_os = "macos") {
+        modifiers.command() && !modifiers.shift()
+    } else {
+        modifiers.alt() && !modifiers.command() && !modifiers.shift()
+    };
+    if history {
+        match key.as_ref() {
+            Key::Named(Named::ArrowLeft) => return Some(Message::PrevView),
+            Key::Named(Named::ArrowRight) => return Some(Message::NextView),
+            _ => {}
+        }
     }
     // Alt and a menu's underlined letter opens it, and F10 opens the first, as on Windows and
     // Linux. macOS keeps Option for typing accented letters.
@@ -31,8 +59,14 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             return Some(Message::Menu(menu::Event::OpenKey(Menu::File)));
         }
     }
-    if modifiers.shift() && !modifiers.command() && key == Key::Named(Named::F3) {
-        return Some(Message::Find(Event::Prev));
+    if modifiers.shift() && !modifiers.command() {
+        match key.as_ref() {
+            Key::Named(Named::F3) => return Some(Message::Find(Event::Prev)),
+            // Shift+F4 opens or closes the tools pane.
+            Key::Named(Named::F4) => return Some(Message::ToggleAllTools),
+            Key::Named(Named::Enter) => return Some(Message::EnterKey(true)),
+            _ => {}
+        }
     }
     if modifiers.command() && key == Key::Named(Named::Tab) {
         return Some(Message::NextTab(!modifiers.shift()));
@@ -46,12 +80,21 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("-" | "_") => Some(Message::RotateCcw),
             Key::Character("n" | "N") => Some(Message::FocusPageBox),
             Key::Character("c" | "C") => Some(Message::Annotate(annotate::Event::Toggle)),
-            Key::Character("t" | "T") => Some(Message::NextSpread),
-            Key::Character("d" | "D") => Some(Message::NextColors),
+            // Acrobat's page keys: insert blank pages, insert files, delete pages.
+            Key::Character("t" | "T") => Some(Message::Pages(crate::pages::Op::InsertBlank)),
+            Key::Character("i" | "I") => Some(Message::Pages(crate::pages::Op::InsertFile)),
+            Key::Character("d" | "D") => Some(Message::Pages(crate::pages::Op::DeletePages)),
+            Key::Character("r" | "R") => Some(Message::Pages(crate::pages::Op::RotatePages)),
+            // Automatic scrolling.
+            Key::Character("h" | "H") => Some(Message::AutoScroll),
             // Acrobat's Read Out Loud keys.
+            Key::Character("y" | "Y") => Some(Message::ReadAloudToggle),
             Key::Character("v" | "V") => Some(Message::ReadAloud(crate::speech::Event::Page)),
             Key::Character("b" | "B") => Some(Message::ReadAloud(crate::speech::Event::ToEnd)),
             Key::Character("e" | "E") => Some(Message::ReadAloud(crate::speech::Event::Stop)),
+            Key::Named(Named::PageUp | Named::ArrowUp) => Some(Message::GoToPage(0)),
+            Key::Named(Named::PageDown | Named::ArrowDown) => Some(Message::GoToPage(usize::MAX)),
+            Key::Named(Named::F5) => Some(Message::ShowSidebar),
             _ => None,
         };
     }
@@ -59,8 +102,10 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         return match key.as_ref() {
             Key::Character("o") => Some(Message::OpenDialog),
             Key::Character("w") => Some(Message::CloseTab),
+            Key::Named(Named::F4) => Some(Message::CloseTab),
             Key::Character("d") => Some(Message::ToggleProperties),
             Key::Character("l") => Some(Message::Present),
+            Key::Character("h") => Some(Message::ToggleReadMode),
             Key::Character("=" | "+") => Some(Message::ZoomIn),
             Key::Character("-") => Some(Message::ZoomOut),
             Key::Character("0") => Some(Message::FitPage),
@@ -69,11 +114,16 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("f") => Some(Message::Find(Event::Open)),
             Key::Character("g") => Some(Message::Find(Event::Next)),
             Key::Character("c") => Some(Message::Copy),
+            Key::Character("a") => Some(Message::SelectAll),
             Key::Character("s") => Some(Message::Save),
             Key::Character("p") => Some(Message::Print),
-            Key::Character(",") => Some(Message::Preferences(crate::preferences::Event::Open)),
+            Key::Character("b") => Some(Message::AddBookmark),
+            // Edit › Preferences is Ctrl+K in Acrobat; Ctrl+, is the usual key elsewhere.
+            Key::Character("," | "k") => Some(Message::Preferences(crate::preferences::Event::Open)),
             Key::Character("z") => Some(Message::Annotate(annotate::Event::Undo)),
             Key::Character("y") => Some(Message::Annotate(annotate::Event::Redo)),
+            Key::Named(Named::PageUp) => Some(Message::PrevPage),
+            Key::Named(Named::PageDown) => Some(Message::NextPage),
             _ => None,
         };
     }
@@ -83,20 +133,31 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         Key::Named(Named::Home) => Some(Message::GoToPage(0)),
         Key::Named(Named::End) => Some(Message::GoToPage(usize::MAX)),
         Key::Named(Named::Escape) => Some(Message::CloseOverlays),
-        Key::Named(Named::Enter) => Some(Message::Annotate(annotate::Event::FinishShape)),
+        // Enter finishes a polygon, or else moves on a screen (Shift+Enter back), as in Acrobat.
+        Key::Named(Named::Enter) => Some(Message::EnterKey(false)),
         // F4 shows or hides the navigation pane, as in Acrobat.
         Key::Named(Named::F3) => Some(Message::Find(Event::Next)),
         Key::Named(Named::F4) => Some(Message::Sidebar(crate::sidebar::Event::Toggle)),
         Key::Named(Named::F11) => Some(Message::ToggleFullScreen),
-        // Arrows and Space step through pages while presenting, and do nothing here otherwise.
-        Key::Named(Named::ArrowRight | Named::ArrowDown | Named::Space) => Some(Message::Advance(true)),
-        Key::Named(Named::ArrowLeft | Named::ArrowUp) => Some(Message::Advance(false)),
+        // Left and Right turn pages; Up and Down scroll (and turn pages while presenting).
+        Key::Named(Named::ArrowRight) => Some(Message::NextPage),
+        Key::Named(Named::ArrowLeft) => Some(Message::PrevPage),
+        Key::Named(Named::ArrowDown) => Some(Message::ArrowScroll(true)),
+        Key::Named(Named::ArrowUp) => Some(Message::ArrowScroll(false)),
+        Key::Named(Named::Space) if !repeat => Some(Message::SpaceHand(true)),
         Key::Named(Named::Delete | Named::Backspace) => {
             Some(Message::Annotate(annotate::Event::DeletePicked))
         }
-        // Single letters pick comment tools, as Acrobat's single-key accelerators do.
-        Key::Character(c) if !modifiers.alt() && !modifiers.shift() => {
-            annotate::Tool::from_key(c).map(Message::ToolKey)
+        // Single letters pick tools, as Acrobat's single-key accelerators do.
+        Key::Character(c) if !modifiers.alt() => {
+            let mut chars = c.chars();
+            match (chars.next(), chars.next()) {
+                (Some(letter), None) if letter.is_ascii_alphabetic() => Some(Message::Accelerator {
+                    key: letter.to_ascii_lowercase(),
+                    shift: modifiers.shift(),
+                }),
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -143,17 +204,26 @@ mod tests {
     }
 
     #[test]
-    fn letters_pick_tools_only_without_modifiers() {
+    fn letters_are_accelerators_only_without_modifiers() {
         assert!(matches!(
-            letter("r", Modifiers::empty()),
-            Some(Message::ToolKey(annotate::Tool::Rect))
+            letter("S", Modifiers::SHIFT),
+            Some(Message::Accelerator {
+                key: 's',
+                shift: true
+            })
         ));
         assert!(matches!(
-            letter("c", Modifiers::empty()),
-            Some(Message::ToolKey(annotate::Tool::Cloud))
+            letter("q", Modifiers::empty()),
+            Some(Message::Accelerator {
+                key: 'q',
+                shift: false
+            })
         ));
-        assert!(!matches!(letter("r", Modifiers::ALT), Some(Message::ToolKey(_))));
-        assert!(letter("q", Modifiers::empty()).is_none());
+        assert!(!matches!(
+            letter("r", Modifiers::ALT),
+            Some(Message::Accelerator { .. })
+        ));
+        assert!(letter("1", Modifiers::empty()).is_none());
         assert!(matches!(
             letter("C", Modifiers::COMMAND | Modifiers::SHIFT),
             Some(Message::Annotate(annotate::Event::Toggle))
@@ -169,11 +239,15 @@ mod tests {
         ));
         assert!(matches!(
             press(Key::Named(Named::Space), Modifiers::empty()),
-            Some(Message::Advance(true))
+            Some(Message::SpaceHand(true))
         ));
         assert!(matches!(
             press(Key::Named(Named::ArrowLeft), Modifiers::empty()),
-            Some(Message::Advance(false))
+            Some(Message::PrevPage)
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::Enter), Modifiers::SHIFT),
+            Some(Message::EnterKey(true))
         ));
     }
 
@@ -200,6 +274,68 @@ mod tests {
             }),
             Some(Message::MenuNav(Nav::Down))
         ));
+    }
+
+    #[test]
+    fn acrobat_page_keys() {
+        let cs = Modifiers::COMMAND | Modifiers::SHIFT;
+        assert!(matches!(
+            letter("D", cs),
+            Some(Message::Pages(crate::pages::Op::DeletePages))
+        ));
+        assert!(matches!(
+            letter("T", cs),
+            Some(Message::Pages(crate::pages::Op::InsertBlank))
+        ));
+        assert!(matches!(
+            letter("I", cs),
+            Some(Message::Pages(crate::pages::Op::InsertFile))
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::PageUp), cs),
+            Some(Message::GoToPage(0))
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::ArrowDown), cs),
+            Some(Message::GoToPage(usize::MAX))
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::PageDown), Modifiers::COMMAND),
+            Some(Message::NextPage)
+        ));
+        assert!(matches!(
+            letter("k", Modifiers::COMMAND),
+            Some(Message::Preferences(_))
+        ));
+        assert!(matches!(
+            letter("b", Modifiers::COMMAND),
+            Some(Message::AddBookmark)
+        ));
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn alt_arrows_retrace_views() {
+        assert!(matches!(
+            press(Key::Named(Named::ArrowLeft), Modifiers::ALT),
+            Some(Message::PrevView)
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::ArrowRight), Modifiers::ALT),
+            Some(Message::NextView)
+        ));
+    }
+
+    #[test]
+    fn letting_go_of_space_drops_the_hand() {
+        let released = map(keyboard::Event::KeyReleased {
+            key: Key::Named(Named::Space),
+            modified_key: Key::Named(Named::Space),
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: Location::Standard,
+            modifiers: Modifiers::empty(),
+        });
+        assert!(matches!(released, Some(Message::SpaceHand(false))));
     }
 
     #[test]

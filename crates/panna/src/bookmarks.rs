@@ -17,6 +17,8 @@ pub enum Event {
     /// Picks a bookmark, and goes to its page.
     Select(usize),
     Add,
+    /// Adds one named after the selected text, as Acrobat does.
+    AddTitled(String),
     Rename,
     Typed(String),
     /// Keeps the name typed.
@@ -123,14 +125,23 @@ impl Editor {
                     .and_then(|b| b.page)
                     .map_or(Outcome::None, Outcome::GoTo)
             }
-            Event::Add => {
+            Event::Add | Event::AddTitled(_) => {
                 // After the selected bookmark and the ones under it, at its level.
                 let (at, depth) = match selected.and_then(|i| Some((i, depth(outline, i)?))) {
                     Some((i, d)) => (subtree(outline, i).end, d),
                     None => (outline.len(), 0),
                 };
                 let mut list = outline.to_vec();
-                let title = format!("Page {}", page + 1);
+                let title = match event {
+                    Event::AddTitled(name) if !name.trim().is_empty() => name
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(200)
+                        .collect(),
+                    _ => format!("Page {}", page + 1),
+                };
                 list.insert(
                     at,
                     OutlineItem {

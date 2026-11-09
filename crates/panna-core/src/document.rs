@@ -222,6 +222,27 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
+/// How redacted areas look once their content is gone, as Acrobat's Redaction Properties:
+/// a fill colour and, optionally, words such as "Redacted" written in each box.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RedactLook {
+    pub fill: crate::Color,
+    /// Words written over each box; empty for none.
+    pub overlay: String,
+    /// Repeat the words to fill each box, rather than once in the middle.
+    pub repeat: bool,
+}
+
+impl Default for RedactLook {
+    fn default() -> Self {
+        Self {
+            fill: crate::Color([0.0, 0.0, 0.0]),
+            overlay: String::new(),
+            repeat: false,
+        }
+    }
+}
+
 /// Where text about to be redacted still appears outside the pages.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Leftovers {
@@ -951,12 +972,23 @@ impl Document {
         areas: &[(usize, Vec<crate::TextBox>)],
         scrub: &[String],
     ) -> Result<Vec<u8>, crate::SaveError> {
+        self.redacted_as(areas, scrub, &RedactLook::default())
+    }
+
+    /// As [`Document::redacted`], with the boxes looking as `look` says.
+    pub fn redacted_as(
+        &self,
+        areas: &[(usize, Vec<crate::TextBox>)],
+        scrub: &[String],
+        look: &RedactLook,
+    ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::redact(
                 (&self.pdf, &self.bytes, self.password.as_str()),
                 self.page_count(),
                 areas,
                 scrub,
+                look,
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?

@@ -214,6 +214,10 @@ pub(crate) enum Drawing {
     Boxes {
         rects: Vec<[f64; 4]>,
         color: Color,
+        /// Words written in each box, in black or white, whichever shows on `color`.
+        overlay: String,
+        /// Repeat the words across and down each box.
+        repeat: bool,
     },
     /// Words that can't be seen, each stretched over its box (left, top, right, bottom from
     /// the top-left corner of the page as shown): recognised text over a scanned page.
@@ -225,6 +229,68 @@ pub(crate) enum Drawing {
     },
     /// One, then the other.
     Both(Box<Drawing>, Box<Drawing>),
+}
+
+/// Largest overlay text, in points.
+const OVERLAY_MAX: f64 = 72.0;
+/// Overlay text size when repeated, unless the box is shorter.
+const OVERLAY_REPEAT: f64 = 10.0;
+/// Rows and copies per row of repeated overlay text, at most.
+const OVERLAY_MAX_COPIES: usize = 200;
+
+/// Words written over redaction boxes (left, top, right, bottom from the top-left corner of a
+/// page `height` points tall), in black or white to show on `fill`, each clipped to its box.
+fn overlay_text(rects: &[[f64; 4]], fill: Color, words: &str, repeat: bool, height: f64) -> String {
+    let Color([r, g, b]) = fill;
+    let light = 0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b) > 0.5;
+    let ink = if light { "0 g" } else { "1 g" };
+    let em = text_width(words).max(0.1);
+    let mut out = String::new();
+    for &[x0, top, x1, bottom] in rects {
+        let (w, h) = (x1 - x0, bottom - top);
+        let base = height - bottom;
+        let mut lines: Vec<(f64, f64, String)> = Vec::new();
+        let size;
+        if repeat {
+            size = OVERLAY_REPEAT.min(h * 0.8);
+            let pitch = size * 1.25;
+            let unit = format!("{words} ");
+            let copies = ((w / (text_width(&unit) * size)).ceil() as usize).clamp(1, OVERLAY_MAX_COPIES);
+            let row = unit.repeat(copies);
+            let rows = ((h / pitch).floor() as usize).clamp(1, OVERLAY_MAX_COPIES);
+            // Rows centred down the box.
+            let first = base + (h + (rows as f64 - 1.0) * pitch - 0.72 * size) / 2.0;
+            for i in 0..rows {
+                lines.push((x0 + size * 0.2, first - i as f64 * pitch, row.clone()));
+            }
+        } else {
+            size = OVERLAY_MAX.min(h * 0.8).min(w * 0.9 / em);
+            lines.push((
+                x0 + (w - em * size) / 2.0,
+                base + (h - 0.72 * size) / 2.0,
+                words.to_owned(),
+            ));
+        }
+        if size < 2.0 {
+            continue;
+        }
+        let _ = write!(
+            out,
+            "q {} {} {} {} re W n BT /PaHe {} Tf {ink}",
+            n(x0),
+            n(base),
+            n(w),
+            n(h),
+            n(size)
+        );
+        for (x, y, text) in lines {
+            let _ = write!(out, " 1 0 0 1 {} {} Tm (", n(x), n(y));
+            out.push_str(&literal(&win_ansi(&text)));
+            out.push_str(") Tj");
+        }
+        out.push_str(" ET Q\n");
+    }
+    out
 }
 
 /// Words and their boxes on a page: left, top, right, bottom from its top-left corner as shown.
@@ -372,7 +438,12 @@ impl Drawing {
                     n(-h / 2.0)
                 )
             }
-            Drawing::Boxes { rects, color } => {
+            Drawing::Boxes {
+                rects,
+                color,
+                overlay,
+                repeat,
+            } => {
                 let mut out = format!("q {} rg", rgb(*color));
                 for [x0, top, x1, bottom] in rects {
                     let _ = write!(
@@ -385,6 +456,9 @@ impl Drawing {
                     );
                 }
                 out.push_str(" f Q\n");
+                if !overlay.is_empty() {
+                    out.push_str(&overlay_text(rects, *color, overlay, *repeat, height));
+                }
                 out
             }
             Drawing::Hidden(words) => {
