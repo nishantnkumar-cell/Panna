@@ -635,3 +635,53 @@ fn callouts_save_and_come_back() {
     let line = pixel(&doc, 60, 55);
     assert!(line[0] > 200 && line[1] + 30 < line[0], "{line:?}");
 }
+
+#[test]
+fn attached_files_save_move_and_can_be_taken_out_again() {
+    let doc = reopen(build(&objects(false)));
+    let bytes: Vec<u8> = (0..5_000u32).map(|i| (i % 251) as u8).collect();
+    let file = panna_core::AttachedFile::new("notes.txt", &bytes).unwrap();
+    let mut added = annotation(Kind::File {
+        x: 30.0,
+        y: 40.0,
+        file,
+    });
+    added.contents = "notes.txt".into();
+    let doc = reopen(doc.with_annotations(&[added]).unwrap());
+    let info = doc.info().unwrap();
+    assert_eq!(info.attachments.len(), 1, "{:?}", info.attachments);
+    assert_eq!(
+        (
+            info.attachments[0].name.as_str(),
+            info.attachments[0].size,
+            info.attachments[0].page
+        ),
+        ("notes.txt", Some(5_000), Some(0))
+    );
+    assert_eq!(doc.attachment(0).unwrap(), bytes);
+    let comment = &info.comments[0];
+    assert_eq!(comment.kind, CommentKind::File);
+    // Moving it redraws the comment, pointing at the same file.
+    let mut moved = comment.editable.clone().unwrap();
+    assert!(
+        matches!(&moved.kind, Kind::File { x, y, file } if (*x - 30.0).abs() < 0.01 && (*y - 40.0).abs() < 0.01 && file.name == "notes.txt")
+    );
+    moved.translate(50.0, 10.0);
+    let doc = reopen(
+        doc.with_changes(&Changes {
+            add: vec![moved],
+            remove: vec![comment.id.unwrap()],
+            ..Changes::default()
+        })
+        .unwrap(),
+    );
+    let info = doc.info().unwrap();
+    assert_eq!(info.comments.len(), 1);
+    assert!(
+        (info.comments[0].at.x0 - 80.0).abs() < 1.5,
+        "{:?}",
+        info.comments[0].at
+    );
+    assert_eq!(info.attachments.len(), 1);
+    assert_eq!(doc.attachment(0).unwrap(), bytes);
+}

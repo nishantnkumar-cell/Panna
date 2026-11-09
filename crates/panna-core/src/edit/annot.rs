@@ -114,6 +114,12 @@ pub enum Kind {
         #[serde(default)]
         pointer: Vec<(f32, f32)>,
     },
+    /// A file attached here, shown as a paperclip with its top-left corner at (x, y).
+    File {
+        x: f32,
+        y: f32,
+        file: super::AttachedFile,
+    },
     /// Freehand strokes.
     Ink(Vec<Vec<(f32, f32)>>),
     Rect(TextBox),
@@ -235,7 +241,7 @@ impl Annotation {
             Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
                 boxes.iter_mut().for_each(shift);
             }
-            Kind::Note { x, y } => {
+            Kind::Note { x, y } | Kind::File { x, y, .. } => {
                 *x += dx;
                 *y += dy;
             }
@@ -300,6 +306,7 @@ impl Annotation {
             | Kind::Underline(_)
             | Kind::StrikeOut(_)
             | Kind::Note { .. }
+            | Kind::File { .. }
             | Kind::Caret { .. }
             | Kind::Reply { .. } => {}
             Kind::FreeText { rect, pointer, .. } => {
@@ -431,6 +438,37 @@ impl Annotation {
                         }
                     }
                 }
+            }
+            Kind::File { x, y, file } => {
+                let [x0, y0, x1, y1] = user_box(&TextBox {
+                    x0: *x,
+                    y0: *y,
+                    x1: x + NOTE_SIZE,
+                    y1: y + NOTE_SIZE,
+                });
+                bounds.add(x0, y0);
+                bounds.add(x1, y1);
+                // A paperclip: two loops, one inside the other.
+                let (w, h) = (x1 - x0, y1 - y0);
+                let p = |fx: f64, fy: f64| format!("{} {}", n(x0 + w * fx), n(y0 + h * fy));
+                let _ = write!(
+                    content,
+                    "{color} RG 1.6 w 1 J 1 j {} m {} l {} {} {} c {} l {} {} {} c {} l S ",
+                    p(0.56, 0.36),
+                    p(0.56, 0.74),
+                    p(0.56, 0.95),
+                    p(0.30, 0.95),
+                    p(0.30, 0.74),
+                    p(0.30, 0.22),
+                    p(0.30, 0.0),
+                    p(0.72, 0.0),
+                    p(0.72, 0.22),
+                    p(0.72, 0.80),
+                );
+                let spec = image_ref.unwrap_or("null");
+                let _ = write!(extra, "/FS {spec} /Name /Paperclip ");
+                let _ = file;
+                "FileAttachment"
             }
             Kind::Note { x, y } => {
                 let [x0, y0, x1, y1] = user_box(&TextBox {

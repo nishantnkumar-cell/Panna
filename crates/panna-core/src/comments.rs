@@ -29,6 +29,8 @@ pub enum CommentKind {
     TextBox,
     /// A text box with a line pointing at something.
     Callout,
+    /// A file attached to the page.
+    File,
     Ink,
     Rect,
     Ellipse,
@@ -61,6 +63,7 @@ impl CommentKind {
             "PolyLine" => Self::PolyLine,
             "Caret" => Self::Caret,
             "Stamp" => Self::Stamp,
+            "FileAttachment" => Self::File,
             "Link" | "Widget" | "Popup" | "PrinterMark" | "TrapNet" | "Watermark" | "3D" | "RichMedia"
             | "Screen" | "Movie" | "Sound" => return None,
             other => Self::Other(other.to_owned()),
@@ -76,6 +79,7 @@ impl CommentKind {
             Self::Note => "Sticky note",
             Self::TextBox => "Text box",
             Self::Callout => "Callout",
+            Self::File => "Attached file",
             Self::Ink => "Drawing",
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
@@ -224,6 +228,11 @@ impl From<&Annotation> for Comment {
                 add(*x, *y);
                 add(x + NOTE_SIZE, y + NOTE_SIZE);
                 CommentKind::Note
+            }
+            Kind::File { x, y, .. } => {
+                add(*x, *y);
+                add(x + NOTE_SIZE, y + NOTE_SIZE);
+                CommentKind::File
             }
             Kind::FreeText { rect, pointer, .. } => {
                 add(rect.x0, rect.y0);
@@ -537,6 +546,30 @@ fn editable(
         "Underline" if !marked.is_empty() => Kind::Underline(marked.to_vec()),
         "StrikeOut" if !marked.is_empty() => Kind::StrikeOut(marked.to_vec()),
         // Panna pads a note's /Rect by a point too, so it doesn't creep each time it's redrawn.
+        // An attached file can be moved by pointing at its file specification, which stays.
+        "FileAttachment" => {
+            let spec_ref = annot.get_ref(b"FS")?;
+            let spec = ObjRef::new(spec_ref.obj_number, spec_ref.gen_number)?;
+            let fs = annot.get::<Dict<'_>>(b"FS")?;
+            let name = [&b"UF"[..], b"F"]
+                .into_iter()
+                .find_map(|key| fs.get::<hayro::hayro_syntax::object::String<'_>>(key))
+                .map(|s| decode_text_string(s.as_bytes()))
+                .unwrap_or_default();
+            let size = fs
+                .get::<Dict<'_>>(b"EF")
+                .and_then(|ef| ef.get::<hayro::hayro_syntax::object::Stream<'_>>(b"F"))
+                .and_then(|f| f.dict().get::<Dict<'_>>(b"Params"))
+                .and_then(|p| p.get::<f64>(b"Size"))
+                .filter(|s| *s >= 0.0)
+                .map(|s| s as u64);
+            let pad = if made_by_panna(annot) { 1.0 } else { 0.0 };
+            Kind::File {
+                x: at.x0 + pad,
+                y: at.y0 + pad,
+                file: crate::edit::AttachedFile::saved(name, size, spec),
+            }
+        }
         "Text" => {
             let pad = if made_by_panna(annot) { 1.0 } else { 0.0 };
             Kind::Note {
@@ -817,7 +850,7 @@ mod tests {
         assert_eq!(CommentKind::from_subtype("Caret"), Some(CommentKind::Caret));
         assert_eq!(
             CommentKind::from_subtype("FileAttachment"),
-            Some(CommentKind::Other("FileAttachment".into()))
+            Some(CommentKind::File)
         );
     }
 

@@ -248,6 +248,10 @@ enum Message {
     /// Asks for a picture to stamp.
     StampPicture,
     StampPictureChosen(Option<PathBuf>),
+    /// A file is being attached as a comment: pick it.
+    AttachFile,
+    AttachFileChosen(Option<PathBuf>),
+    AttachFileLoaded(Result<panna_core::AttachedFile, String>),
     StampPictureLoaded(Result<(panna_core::StampImage, String), String>),
     /// Prints the document with its unsaved changes (Ctrl+P).
     Print,
@@ -3152,6 +3156,9 @@ impl App {
                     if self.annotate.editing.is_some() {
                         return operation::focus(annotate::editor_id());
                     }
+                    if self.annotate.attaching.is_some() {
+                        return self.update(Message::AttachFile);
+                    }
                     return self.after_annotate(outcome);
                 }
                 if !self.selecting {
@@ -3931,6 +3938,56 @@ impl App {
                 },
                 Message::StampPictureChosen,
             ),
+            Message::AttachFile => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Attach a file")
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::AttachFileChosen,
+            ),
+            Message::AttachFileChosen(None) => {
+                self.annotate.update(annotate::Event::Attach(None));
+                Task::none()
+            }
+            Message::AttachFileChosen(Some(path)) => {
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let too_big = std::fs::metadata(&path)
+                        .is_ok_and(|m| m.len() > panna_core::MAX_ATTACHMENT_BYTES as u64);
+                    let result = if too_big {
+                        Err(format!(
+                            "That file is too big to attach (the most is {} MB).",
+                            panna_core::MAX_ATTACHMENT_BYTES / (1024 * 1024)
+                        ))
+                    } else {
+                        std::fs::read(&path)
+                            .map_err(|e| format!("Couldn't open the file: {e}"))
+                            .and_then(|bytes| {
+                                let name = path
+                                    .file_name()
+                                    .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+                                panna_core::AttachedFile::new(&name, &bytes)
+                            })
+                    };
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::AttachFileLoaded(
+                        result.unwrap_or_else(|_| Err("The file couldn't be read.".into())),
+                    )
+                })
+            }
+            Message::AttachFileLoaded(Err(e)) => {
+                self.annotate.update(annotate::Event::Attach(None));
+                self.notice = Some(e);
+                Task::none()
+            }
+            Message::AttachFileLoaded(Ok(file)) => {
+                self.update(Message::Annotate(annotate::Event::Attach(Some(file))))
+            }
             Message::StampPictureChosen(None) => Task::none(),
             Message::StampPictureChosen(Some(path)) => {
                 let (tx, rx) = futures_channel::oneshot::channel();
@@ -6705,6 +6762,7 @@ impl App {
                     tool(Tool::Note),
                     tool(Tool::TextBox),
                     tool(Tool::Callout),
+                    tool(Tool::Attach),
                     tool(Tool::Pen),
                     tool(Tool::Eraser),
                     sub(

@@ -8,8 +8,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
-    Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, LineEnd, NOTE_SIZE, ObjRef,
-    ReviewState, STAMPS, StampImage, TextBox, stamp_label, text_width, wrap,
+    Annotation, AttachedFile, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, LineEnd, NOTE_SIZE,
+    ObjRef, ReviewState, STAMPS, StampImage, TextBox, stamp_label, text_width, wrap,
 };
 
 use crate::Message;
@@ -31,6 +31,8 @@ pub enum Tool {
     TextBox,
     /// A text box with a line pointing at something.
     Callout,
+    /// Attaches a file where you click, shown as a paperclip.
+    Attach,
     Pen,
     /// Rubs out parts of freehand drawings.
     Eraser,
@@ -46,7 +48,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 20] = [
+    pub const ALL: [Tool; 21] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
@@ -56,6 +58,7 @@ impl Tool {
         Tool::Note,
         Tool::TextBox,
         Tool::Callout,
+        Tool::Attach,
         Tool::Pen,
         Tool::Eraser,
         Tool::Rect,
@@ -82,6 +85,7 @@ impl Tool {
             Tool::Note => Icon::StickyNote,
             Tool::TextBox => Icon::TextBox,
             Tool::Callout => Icon::Callout,
+            Tool::Attach => Icon::Paperclip,
             Tool::Pen => Icon::Pen,
             Tool::Rect => Icon::Square,
             Tool::Ellipse => Icon::Circle,
@@ -107,6 +111,7 @@ impl Tool {
             Tool::Note => "Add a sticky note",
             Tool::TextBox => "Add a text box",
             Tool::Callout => "Add a callout: drag from what it points at to where the text goes",
+            Tool::Attach => "Attach a file: click where its paperclip goes",
             Tool::Pen => "Draw freehand",
             Tool::Rect => "Draw a rectangle",
             Tool::Ellipse => "Draw an ellipse",
@@ -139,6 +144,7 @@ impl Tool {
             Tool::Note => "Sticky note",
             Tool::TextBox => "Text box",
             Tool::Callout => "Callout",
+            Tool::Attach => "Attach file",
             Tool::Pen => "Draw",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
@@ -169,7 +175,7 @@ impl Tool {
             | Tool::Line
             | Tool::PolyLine
             | Tool::Polygon => Some("Shift+D"),
-            Tool::Replace | Tool::InsertText | Tool::Callout => None,
+            Tool::Replace | Tool::InsertText | Tool::Callout | Tool::Attach => None,
             Tool::Cloud => Some("Q"),
             Tool::Stamp => Some("K"),
             Tool::Sign => None,
@@ -252,7 +258,7 @@ impl Tool {
         match self {
             Tool::Select | Tool::Highlight | Tool::Note => SWATCHES[0],
             Tool::TextBox | Tool::Sign => SWATCHES[5],
-            Tool::Pen | Tool::Replace | Tool::InsertText => SWATCHES[2],
+            Tool::Pen | Tool::Replace | Tool::InsertText | Tool::Attach => SWATCHES[2],
             _ => SWATCHES[3],
         }
     }
@@ -384,6 +390,8 @@ pub enum Event {
     Dashed,
     /// The inside colour of shapes, or none.
     Fill(Option<Color>),
+    /// The file chosen to attach where the page was clicked, or `None` when none was.
+    Attach(Option<AttachedFile>),
     /// How lines start (0) or end (1).
     End(usize, LineEnd),
     /// Deletes the selected comment.
@@ -509,6 +517,8 @@ pub struct Annotate {
     /// Saved comments Panna can redraw, so they can be moved and restyled.
     saved: Vec<(CommentId, Annotation)>,
     pub picked: Option<Picked>,
+    /// Where a file is to be attached (page, point), while one is being chosen.
+    pub attaching: Option<(usize, (f32, f32))>,
     moving: Option<Moving>,
     /// The opacity slider is being dragged; its undo step is already recorded.
     sliding: bool,
@@ -908,6 +918,15 @@ impl Annotate {
                     }
                 } else if let Some(slot) = self.dashes.get_mut(self.tool.index()) {
                     *slot = !*slot;
+                }
+            }
+            Event::Attach(file) => {
+                let place = self.attaching.take();
+                if let (Some((page, (x, y))), Some(file)) = (place, file) {
+                    let name = file.name.clone();
+                    self.record();
+                    self.push(page, Kind::File { x, y, file }, Tool::Attach, name);
+                    return Outcome::Changed;
                 }
             }
             Event::Fill(fill) => {
@@ -1727,6 +1746,10 @@ impl Annotate {
                     replacing: Vec::new(),
                     pointer: vec![start],
                 });
+                return Outcome::Nothing;
+            }
+            Tool::Attach => {
+                self.attaching = Some((draft.page, start));
                 return Outcome::Nothing;
             }
             Tool::Pen => Kind::Ink(vec![draft.points]),
@@ -2838,6 +2861,28 @@ mod tests {
         a.update(Event::Undo);
         assert_eq!(a.items.len(), 2);
         assert_eq!(a.status(parent.annot), ReviewState::Rejected);
+    }
+
+    #[test]
+    fn attaching_a_file_puts_a_paperclip_where_the_page_was_clicked() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Attach));
+        a.press(0, (40.0, 60.0));
+        a.release();
+        assert_eq!(a.attaching, Some((0, (40.0, 60.0))));
+        // Choosing nothing adds nothing.
+        assert!(matches!(a.update(Event::Attach(None)), Outcome::Nothing));
+        assert!(a.items.is_empty() && a.attaching.is_none());
+        a.press(0, (40.0, 60.0));
+        a.release();
+        let file = AttachedFile::new("plan.txt", b"hello").ok();
+        assert!(matches!(a.update(Event::Attach(file)), Outcome::Changed));
+        assert!(matches!(
+            a.items.first(),
+            Some(Annotation { kind: Kind::File { x, y, file }, contents, .. })
+                if (*x, *y) == (40.0, 60.0) && file.name == "plan.txt" && contents == "plan.txt"
+        ));
+        assert!(a.can_undo());
     }
 
     #[test]

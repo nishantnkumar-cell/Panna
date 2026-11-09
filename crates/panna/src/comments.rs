@@ -177,6 +177,7 @@ fn icon(kind: &CommentKind) -> Icon {
         CommentKind::Note => Icon::StickyNote,
         CommentKind::TextBox => Icon::TextBox,
         CommentKind::Callout => Icon::Callout,
+        CommentKind::File => Icon::Paperclip,
         CommentKind::Ink => Icon::Pen,
         CommentKind::Rect => Icon::Square,
         CommentKind::Ellipse => Icon::Circle,

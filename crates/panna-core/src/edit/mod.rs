@@ -13,6 +13,7 @@ pub(crate) use labels::with_page_labels;
 pub(crate) use outline::with_outline;
 mod view;
 pub(crate) use view::with_initial_view;
+mod file;
 mod pack;
 mod pdfa;
 mod picture;
@@ -35,6 +36,7 @@ use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 pub use annot::{
     Annotation, Color, Kind, LINE_HEIGHT, LineEnd, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap,
 };
+pub use file::{AttachedFile, MAX_ATTACHMENT_BYTES};
 pub use picture::StampImage;
 
 pub use convert::{MAX_BLANK_PAGES, MAX_PICTURES, blank_pdf, pictures_to_pdf, rgba_to_pdf};
@@ -245,11 +247,32 @@ pub(crate) fn apply(
                     }
                     Some(format!("{image_id} 0 R"))
                 }
+                // A new attached file's contents are a stream of their own.
+                // Its file specification is an object of its own too, so that the comment can
+                // be moved later and still point at it.
+                Kind::File { file, .. } => match file.stream(&date) {
+                    Some(body) => {
+                        let stream_id = out.alloc();
+                        out.put(stream_id, 0, body)?;
+                        let spec_id = out.alloc();
+                        out.put(
+                            spec_id,
+                            0,
+                            file.spec(Some(&format!("{stream_id} 0 R"))).into_bytes(),
+                        )?;
+                        Some(format!("{spec_id} 0 R"))
+                    }
+                    None => Some(file.spec(None)),
+                },
                 _ => None,
             };
             // Image stamps are named apart, so that reading the file back doesn't take them
             // for word stamps to redraw.
-            let image_tag = if image_ref.is_some() { "image-" } else { "" };
+            let image_tag = if matches!(a.kind, Kind::Stamp { image: Some(_), .. }) {
+                "image-"
+            } else {
+                ""
+            };
             let built = a.build(
                 &info,
                 &ap_id.map_or_else(String::new, |id| format!("{id} 0 R")),
