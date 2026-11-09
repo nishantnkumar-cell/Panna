@@ -6704,6 +6704,7 @@ impl App {
                     tool(Tool::InsertText),
                     tool(Tool::Note),
                     tool(Tool::TextBox),
+                    tool(Tool::Callout),
                     tool(Tool::Pen),
                     tool(Tool::Eraser),
                     sub(

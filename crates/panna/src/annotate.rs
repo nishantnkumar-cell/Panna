@@ -29,6 +29,8 @@ pub enum Tool {
     InsertText,
     Note,
     TextBox,
+    /// A text box with a line pointing at something.
+    Callout,
     Pen,
     /// Rubs out parts of freehand drawings.
     Eraser,
@@ -44,7 +46,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 19] = [
+    pub const ALL: [Tool; 20] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
@@ -53,6 +55,7 @@ impl Tool {
         Tool::InsertText,
         Tool::Note,
         Tool::TextBox,
+        Tool::Callout,
         Tool::Pen,
         Tool::Eraser,
         Tool::Rect,
@@ -78,6 +81,7 @@ impl Tool {
             Tool::PolyLine => Icon::PolyLine,
             Tool::Note => Icon::StickyNote,
             Tool::TextBox => Icon::TextBox,
+            Tool::Callout => Icon::Callout,
             Tool::Pen => Icon::Pen,
             Tool::Rect => Icon::Square,
             Tool::Ellipse => Icon::Circle,
@@ -102,6 +106,7 @@ impl Tool {
             Tool::PolyLine => "Draw a polygon line: click each point, double-click or Enter to finish",
             Tool::Note => "Add a sticky note",
             Tool::TextBox => "Add a text box",
+            Tool::Callout => "Add a callout: drag from what it points at to where the text goes",
             Tool::Pen => "Draw freehand",
             Tool::Rect => "Draw a rectangle",
             Tool::Ellipse => "Draw an ellipse",
@@ -133,6 +138,7 @@ impl Tool {
             Tool::PolyLine => "Polygon line",
             Tool::Note => "Sticky note",
             Tool::TextBox => "Text box",
+            Tool::Callout => "Callout",
             Tool::Pen => "Draw",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
@@ -163,7 +169,7 @@ impl Tool {
             | Tool::Line
             | Tool::PolyLine
             | Tool::Polygon => Some("Shift+D"),
-            Tool::Replace | Tool::InsertText => None,
+            Tool::Replace | Tool::InsertText | Tool::Callout => None,
             Tool::Cloud => Some("Q"),
             Tool::Stamp => Some("K"),
             Tool::Sign => None,
@@ -214,6 +220,7 @@ impl Tool {
         matches!(
             self,
             Tool::Pen
+                | Tool::Callout
                 | Tool::Rect
                 | Tool::Ellipse
                 | Tool::Arrow
@@ -226,12 +233,15 @@ impl Tool {
 
     /// Tools whose shapes have an inside that can be filled.
     pub fn fills(self) -> bool {
-        matches!(self, Tool::Rect | Tool::Ellipse | Tool::Polygon | Tool::Cloud)
+        matches!(
+            self,
+            Tool::Rect | Tool::Ellipse | Tool::Polygon | Tool::Cloud | Tool::Callout
+        )
     }
 
     /// Tools that draw lines with endings: arrows, circles, squares and the like.
     pub fn ends(self) -> bool {
-        matches!(self, Tool::Line | Tool::Arrow | Tool::PolyLine)
+        matches!(self, Tool::Line | Tool::Arrow | Tool::PolyLine | Tool::Callout)
     }
 
     fn index(self) -> usize {
@@ -305,12 +315,17 @@ impl std::fmt::Display for Ending {
 
 /// Whether a comment of this kind has an inside that can be filled.
 fn fillable(kind: &Kind) -> bool {
-    matches!(kind, Kind::Rect(_) | Kind::Ellipse(_) | Kind::Polygon { .. })
+    matches!(kind, Kind::Rect(_) | Kind::Ellipse(_) | Kind::Polygon { .. }) || callout(kind)
+}
+
+/// Whether it is a callout: a text box pointing at something.
+fn callout(kind: &Kind) -> bool {
+    matches!(kind, Kind::FreeText { pointer, .. } if !pointer.is_empty())
 }
 
 /// Whether a comment of this kind has line endings.
 fn has_ends(kind: &Kind) -> bool {
-    matches!(kind, Kind::Line { .. } | Kind::PolyLine(_))
+    matches!(kind, Kind::Line { .. } | Kind::PolyLine(_)) || callout(kind)
 }
 
 /// Whether a comment of this kind is drawn with lines whose thickness and dashing show.
@@ -323,7 +338,7 @@ fn stroked(kind: &Kind) -> bool {
             | Kind::Line { .. }
             | Kind::Polygon { .. }
             | Kind::PolyLine(_)
-    )
+    ) || callout(kind)
 }
 
 /// Yellow, green, blue, red, purple, black.
@@ -464,6 +479,8 @@ pub struct Editing {
     reply: Option<Thread>,
     /// For Replace text: the words crossed out, by page.
     replacing: Vec<(usize, Vec<TextBox>)>,
+    /// For a callout: the point its line goes to.
+    pointer: Vec<(f32, f32)>,
 }
 
 #[derive(Default)]
@@ -591,10 +608,10 @@ impl Annotate {
             .get(tool.index())
             .copied()
             .flatten()
-            .unwrap_or(if tool == Tool::Arrow {
-                [LineEnd::None, LineEnd::OpenArrow]
-            } else {
-                [LineEnd::None; 2]
+            .unwrap_or(match tool {
+                Tool::Arrow => [LineEnd::None, LineEnd::OpenArrow],
+                Tool::Callout => [LineEnd::OpenArrow, LineEnd::None],
+                _ => [LineEnd::None; 2],
             })
     }
 
@@ -743,6 +760,7 @@ impl Annotate {
         };
         let tool = match a.kind {
             Kind::Note { .. } => Tool::Note,
+            Kind::FreeText { ref pointer, .. } if !pointer.is_empty() => Tool::Callout,
             Kind::FreeText { .. } => Tool::TextBox,
             _ => Tool::Select,
         };
@@ -754,6 +772,7 @@ impl Annotate {
             target: Some(picked),
             reply: None,
             replacing: Vec::new(),
+            pointer: Vec::new(),
         });
         true
     }
@@ -997,7 +1016,9 @@ impl Annotate {
             Event::EditDone => {
                 if let Some(editing) = self.editing.take() {
                     let text = editing.content.text().trim_end().to_owned();
-                    if (editing.tool == Tool::TextBox || editing.reply.is_some()) && text.trim().is_empty() {
+                    if (matches!(editing.tool, Tool::TextBox | Tool::Callout) || editing.reply.is_some())
+                        && text.trim().is_empty()
+                    {
                         return Outcome::Nothing;
                     }
                     if let Some(thread) = editing.reply {
@@ -1047,9 +1068,17 @@ impl Annotate {
                             y: editing.at.y0,
                         }
                     } else {
+                        let mut rect = fit_text_box(editing.at, &text);
+                        // A callout's box to the left of its tip keeps its right edge by it.
+                        if editing.pointer.first().is_some_and(|&(x, _)| x > editing.at.x1) {
+                            let shift = editing.at.x1 - rect.x1;
+                            rect.x0 += shift;
+                            rect.x1 += shift;
+                        }
                         Kind::FreeText {
-                            rect: fit_text_box(editing.at, &text),
+                            rect,
                             size: TEXT_SIZE,
+                            pointer: editing.pointer,
                         }
                     };
                     self.record();
@@ -1091,6 +1120,7 @@ impl Annotate {
                     target: None,
                     reply: Some(thread),
                     replacing: Vec::new(),
+                    pointer: Vec::new(),
                 });
             }
             Event::SetStatus(thread, state) => {
@@ -1242,6 +1272,7 @@ impl Annotate {
                     Kind::FreeText {
                         rect,
                         size: TEXT_SIZE,
+                        pointer: Vec::new(),
                     },
                     Tool::Sign,
                     date,
@@ -1285,7 +1316,8 @@ impl Annotate {
             .copied()
             .flatten()
             .unwrap_or(STROKE_WIDTH);
-        let dashed = tool != Tool::Cloud && self.dashes.get(tool.index()).copied().unwrap_or(false);
+        let dashed = !matches!(tool, Tool::Cloud | Tool::Callout)
+            && self.dashes.get(tool.index()).copied().unwrap_or(false);
         let fill = if tool.fills() { self.tool_fill(tool) } else { None };
         let mut kind = kind;
         let ends = if tool.ends() {
@@ -1418,6 +1450,7 @@ impl Annotate {
                 target: None,
                 reply: None,
                 replacing,
+                pointer: Vec::new(),
             });
             return Outcome::Nothing;
         }
@@ -1661,6 +1694,38 @@ impl Annotate {
                     target: None,
                     reply: None,
                     replacing: Vec::new(),
+                    pointer: Vec::new(),
+                });
+                return Outcome::Nothing;
+            }
+            Tool::Callout => {
+                // The box goes where the drag ends (or up and to the right of a click), on
+                // the far side from the point it shows.
+                let (bx, by) = if dragged {
+                    end
+                } else {
+                    (start.0 + 40.0, start.1 - 40.0)
+                };
+                let (x0, x1) = if bx >= start.0 {
+                    (bx, bx + TEXT_BOX_WIDTH)
+                } else {
+                    (bx - TEXT_BOX_WIDTH, bx)
+                };
+                let y0 = by - NOTE_SIZE / 2.0;
+                self.editing = Some(Editing {
+                    page: draft.page,
+                    tool: Tool::Callout,
+                    at: TextBox {
+                        x0,
+                        y0,
+                        x1,
+                        y1: y0 + NOTE_SIZE,
+                    },
+                    content: text_editor::Content::new(),
+                    target: None,
+                    reply: None,
+                    replacing: Vec::new(),
+                    pointer: vec![start],
                 });
                 return Outcome::Nothing;
             }
@@ -1675,6 +1740,7 @@ impl Annotate {
                     target: None,
                     reply: None,
                     replacing: Vec::new(),
+                    pointer: Vec::new(),
                 });
                 return Outcome::Nothing;
             }
@@ -1776,9 +1842,12 @@ impl Annotate {
                     .width(if vertical { 56 } else { 64 })
                     .into(),
             );
-            let cloud = self.picked_annotation().map_or(self.tool == Tool::Cloud, |a| {
-                matches!(a.kind, Kind::Polygon { cloud: true, .. })
-            });
+            // Clouds have bumps for a style, and callouts are drawn solid, as in Acrobat.
+            let cloud = self
+                .picked_annotation()
+                .map_or(matches!(self.tool, Tool::Cloud | Tool::Callout), |a| {
+                    matches!(a.kind, Kind::Polygon { cloud: true, .. }) || callout(&a.kind)
+                });
             if !cloud {
                 items.push(icons::toggle(
                     Icon::Dashed,
@@ -1795,8 +1864,14 @@ impl Annotate {
         };
         let list_width = if vertical { 56 } else { 132 };
         if ends {
+            // A callout's line has one ending, where it points.
+            let sides = match self.picked_annotation() {
+                Some(a) if callout(&a.kind) => 1,
+                None if self.tool == Tool::Callout => 1,
+                _ => 2,
+            };
             let current = self.ends();
-            for (side, now) in current.into_iter().enumerate() {
+            for (side, now) in current.into_iter().enumerate().take(sides) {
                 let options = LineEnd::ALL.map(|end| Ending(side, end));
                 items.push(
                     pick_list(options, Some(Ending(side, now)), move |e: Ending| {
@@ -1852,6 +1927,8 @@ impl Annotate {
             (Tool::Note, true) => "Edit note",
             (Tool::TextBox, false) => "Text box",
             (Tool::TextBox, true) => "Edit text box",
+            (Tool::Callout, false) => "Callout",
+            (Tool::Callout, true) => "Edit callout",
             (Tool::Replace, _) => "Replace with",
             (Tool::InsertText, _) => "Insert text",
             _ => "Comment",
@@ -2121,7 +2198,7 @@ fn resized(m: &Moving) -> TextBox {
 
 /// New text for a comment; a text box grows or shrinks in height to fit it.
 fn set_text(a: &mut Annotation, text: String) {
-    if let Kind::FreeText { rect, size } = &mut a.kind {
+    if let Kind::FreeText { rect, size, .. } = &mut a.kind {
         let size_f = size.max(1.0);
         let lines = wrap(&text, f64::from((rect.width() - 4.0).max(10.0) / size_f));
         let height = lines.len().max(1) as f32 * size_f * LINE_HEIGHT + 6.0;
@@ -2761,6 +2838,38 @@ mod tests {
         a.update(Event::Undo);
         assert_eq!(a.items.len(), 2);
         assert_eq!(a.status(parent.annot), ReviewState::Rejected);
+    }
+
+    #[test]
+    fn callouts_point_from_their_box_to_where_the_drag_began() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Callout));
+        assert_eq!(a.ends(), [LineEnd::OpenArrow, LineEnd::None]);
+        a.press(0, (300.0, 100.0));
+        a.drag(0, (150.0, 60.0));
+        a.release();
+        if let Some(e) = a.editing.as_mut() {
+            e.content = text_editor::Content::with_text("Look here");
+        }
+        assert!(matches!(a.update(Event::EditDone), Outcome::Changed));
+        let Some(Annotation {
+            kind: Kind::FreeText { rect, pointer, .. },
+            ends,
+            ..
+        }) = a.items.first()
+        else {
+            panic!("{:?}", a.items);
+        };
+        assert_eq!(pointer.as_slice(), &[(300.0, 100.0)]);
+        // Dragged to the left, so the box sits left of where the drag ended.
+        assert_eq!(rect.x1, 150.0);
+        assert!(rect.x0 < 150.0);
+        assert_eq!(*ends, [LineEnd::OpenArrow, LineEnd::None]);
+        // Editing its text keeps it a callout.
+        assert_eq!(
+            a.items.first().map(|i| i.line_ends()[0]),
+            Some(LineEnd::OpenArrow)
+        );
     }
 
     #[test]

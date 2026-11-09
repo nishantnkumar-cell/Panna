@@ -132,6 +132,7 @@ pub enum Icon {
     FitHeight,
     PolyLine,
     InsertText,
+    Callout,
     ReplaceText,
     Filter,
     ChevronDown,
@@ -263,6 +264,7 @@ impl Icon {
             Icon::ZoomBox => include_bytes!("../icons/scan-search.svg"),
             Icon::PolyLine => include_bytes!("../icons/spline.svg"),
             Icon::InsertText => include_bytes!("../icons/text-cursor.svg"),
+            Icon::Callout => include_bytes!("../icons/message-square-quote.svg"),
             Icon::ReplaceText => include_bytes!("../icons/replace-all.svg"),
             Icon::Filter => include_bytes!("../icons/filter.svg"),
             Icon::ChevronDown => include_bytes!("../icons/chevron-down.svg"),
@@ -385,7 +387,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 131] = [
+    const ALL: [Icon; 132] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -503,6 +505,7 @@ mod tests {
         Icon::ZoomBox,
         Icon::PolyLine,
         Icon::InsertText,
+        Icon::Callout,
         Icon::ReplaceText,
         Icon::Filter,
         Icon::ReadMode,

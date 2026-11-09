@@ -105,10 +105,14 @@ pub enum Kind {
         x: f32,
         y: f32,
     },
-    /// Text drawn directly on the page.
+    /// Text drawn directly on the page. With a `pointer`, it is a callout: a framed box
+    /// with a line from it to the point first in `pointer`, bending at the second if there is
+    /// one (Acrobat's Callout tool).
     FreeText {
         rect: TextBox,
         size: f32,
+        #[serde(default)]
+        pointer: Vec<(f32, f32)>,
     },
     /// Freehand strokes.
     Ink(Vec<Vec<(f32, f32)>>),
@@ -213,6 +217,8 @@ impl Annotation {
                 [LineEnd::None, LineEnd::OpenArrow]
             }
             Kind::Line { .. } | Kind::PolyLine(_) => self.ends,
+            // A callout's line has one ending, where it points.
+            Kind::FreeText { ref pointer, .. } if !pointer.is_empty() => [self.ends[0], LineEnd::None],
             _ => [LineEnd::None; 2],
         }
     }
@@ -233,11 +239,16 @@ impl Annotation {
                 *x += dx;
                 *y += dy;
             }
-            Kind::FreeText { rect, .. }
-            | Kind::Rect(rect)
-            | Kind::Ellipse(rect)
-            | Kind::Caret { rect }
-            | Kind::Stamp { rect, .. } => shift(rect),
+            Kind::FreeText { rect, pointer, .. } => {
+                shift(rect);
+                for (x, y) in pointer {
+                    *x += dx;
+                    *y += dy;
+                }
+            }
+            Kind::Rect(rect) | Kind::Ellipse(rect) | Kind::Caret { rect } | Kind::Stamp { rect, .. } => {
+                shift(rect);
+            }
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
                     *x += dx;
@@ -291,10 +302,13 @@ impl Annotation {
             | Kind::Note { .. }
             | Kind::Caret { .. }
             | Kind::Reply { .. } => {}
-            Kind::FreeText { rect, .. }
-            | Kind::Rect(rect)
-            | Kind::Ellipse(rect)
-            | Kind::Stamp { rect, .. } => map_box(rect),
+            Kind::FreeText { rect, pointer, .. } => {
+                map_box(rect);
+                for (x, y) in pointer {
+                    (*x, *y) = (fx(*x), fy(*y));
+                }
+            }
+            Kind::Rect(rect) | Kind::Ellipse(rect) | Kind::Stamp { rect, .. } => map_box(rect),
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
                     (*x, *y) = (fx(*x), fy(*y));
@@ -350,6 +364,8 @@ impl Annotation {
         let mut resources = String::new();
         let mut blend = "/Normal";
         let mut bounds = Bounds::default();
+        // A callout's text box, inside its /Rect, for /RD.
+        let mut inner: Option<[f64; 4]> = None;
 
         let subtype = match &self.kind {
             Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
@@ -449,10 +465,65 @@ impl Annotation {
                 extra.push_str("/Name /Comment /Open false ");
                 "Text"
             }
-            Kind::FreeText { rect, size } => {
+            Kind::FreeText { rect, size, pointer } => {
                 let [x0, y0, x1, y1] = user_box(rect);
                 bounds.add(x0, y0);
                 bounds.add(x1, y1);
+                if let Some(&(tx, ty)) = pointer.first() {
+                    inner = Some([x0, y0, x1, y1]);
+                    let tip = map(tx, ty);
+                    let knee = pointer.get(1).map(|&(x, y)| map(x, y));
+                    // The line leaves the middle of the box's side facing the knee (or tip).
+                    let toward = knee.unwrap_or(tip);
+                    let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                    let joint = if toward.x < x0 {
+                        Point::new(x0, my)
+                    } else if toward.x > x1 {
+                        Point::new(x1, my)
+                    } else if toward.y < y0 {
+                        Point::new(mx, y0)
+                    } else {
+                        Point::new(mx, y1)
+                    };
+                    let mut line = vec![tip];
+                    line.extend(knee);
+                    line.push(joint);
+                    extra.push_str("/IT /FreeTextCallout /CL [");
+                    for p in &line {
+                        bounds.add(p.x, p.y);
+                        let _ = write!(extra, "{} {} ", n(p.x), n(p.y));
+                    }
+                    extra.push_str("] ");
+                    let half = width / 2.0;
+                    let _ = write!(content, "{color} RG {} w ", n(width));
+                    if let Some(fill) = &fill {
+                        let _ = write!(content, "{fill} rg ");
+                    }
+                    let op = if fill.is_some() { "B" } else { "S" };
+                    let _ = write!(
+                        content,
+                        "{} {} {} {} re {op} ",
+                        n(x0 + half),
+                        n(y0 + half),
+                        n(x1 - x0 - width),
+                        n(y1 - y0 - width)
+                    );
+                    for (i, p) in line.iter().rev().enumerate() {
+                        let op = if i == 0 { "m" } else { "l" };
+                        let _ = write!(content, "{} {} {op} ", n(p.x), n(p.y));
+                    }
+                    content.push_str("S ");
+                    let before = line.get(1).copied().unwrap_or(joint);
+                    line_ends(
+                        &mut content,
+                        &mut bounds,
+                        ends,
+                        [(before, tip), (tip, tip)],
+                        width,
+                        fill.as_deref(),
+                    );
+                    bounds.grow(width);
+                }
                 let size = f64::from(size.clamp(4.0, 144.0));
                 let lines = wrap(&self.contents, ((x1 - x0) - 4.0).max(10.0) / size);
                 resources.push_str(
@@ -775,8 +846,27 @@ impl Annotation {
         if let (Some(fill), true) = (&fill, fillable) {
             let _ = write!(dict, "/IC [{fill}] ");
         }
-        if ends != [LineEnd::None; 2] {
+        if inner.is_some() {
+            // A callout has one line ending, as a name; the box's own place is /RD.
+            if ends[0] != LineEnd::None {
+                let _ = write!(dict, "/LE /{} ", ends[0].pdf_name());
+            }
+            if let Some(fill) = &fill {
+                let _ = write!(dict, "/IC [{fill}] ");
+            }
+            let _ = write!(dict, "/BS << /W {} >> ", n(width));
+        } else if ends != [LineEnd::None; 2] {
             let _ = write!(dict, "/LE [/{} /{}] ", ends[0].pdf_name(), ends[1].pdf_name());
+        }
+        if let Some([ix0, iy0, ix1, iy1]) = inner {
+            let _ = write!(
+                dict,
+                "/RD [{} {} {} {}] ",
+                n((ix0 - x0).max(0.0)),
+                n((iy0 - y0).max(0.0)),
+                n((x1 - ix1).max(0.0)),
+                n((y1 - iy1).max(0.0))
+            );
         }
         if !self.contents.is_empty() {
             let _ = write!(dict, "/Contents {} ", text_string(&self.contents));

@@ -206,7 +206,11 @@ fn every_kind_saves_and_reopens() {
         Kind::Underline(vec![b]),
         Kind::StrikeOut(vec![b]),
         Kind::Note { x: 150.0, y: 10.0 },
-        Kind::FreeText { rect: b, size: 12.0 },
+        Kind::FreeText {
+            rect: b,
+            size: 12.0,
+            pointer: Vec::new(),
+        },
         Kind::Ink(vec![
             vec![(10.0, 80.0), (60.0, 90.0), (90.0, 70.0)],
             vec![(5.0, 5.0)],
@@ -588,4 +592,46 @@ fn fills_and_line_endings_save_and_come_back() {
             Some((None, [LineEnd::Square, LineEnd::Slash])),
         ]
     );
+}
+
+#[test]
+fn callouts_save_and_come_back() {
+    let doc = reopen(build(&objects(false)));
+    let rect = TextBox {
+        x0: 100.0,
+        y0: 20.0,
+        x1: 180.0,
+        y1: 40.0,
+    };
+    let mut callout = annotation(Kind::FreeText {
+        rect,
+        size: 10.0,
+        pointer: vec![(20.0, 80.0)],
+    });
+    callout.width = 1.0;
+    callout.ends = [LineEnd::ClosedArrow, LineEnd::None];
+    callout.fill = Some(Color([1.0, 1.0, 0.0]));
+    let saved = doc.with_annotations(&[callout]).unwrap();
+    let doc = reopen(saved);
+    let listed = doc.info().unwrap().comments;
+    let comment = &listed[0];
+    assert_eq!(comment.kind.label(), "Callout");
+    let back = comment.editable.as_ref().unwrap();
+    let Kind::FreeText { rect: r, pointer, .. } = &back.kind else {
+        panic!("came back as {:?}", back.kind);
+    };
+    // The box is the text box alone, not the whole callout.
+    assert!(
+        (r.x0 - rect.x0).abs() < 0.01 && (r.y1 - rect.y1).abs() < 0.01 && (r.x1 - rect.x1).abs() < 0.01,
+        "{r:?}"
+    );
+    assert_eq!(pointer.len(), 1);
+    assert!((pointer[0].0 - 20.0).abs() < 0.01 && (pointer[0].1 - 80.0).abs() < 0.01);
+    assert_eq!(back.ends, [LineEnd::ClosedArrow, LineEnd::None]);
+    assert_eq!(back.fill, Some(Color([1.0, 1.0, 0.0])));
+    // The box is filled yellow, and the line runs from the tip to the middle of its side.
+    let inside = pixel(&doc, 170, 25);
+    assert!(inside[0] > 200 && inside[2] < 60, "{inside:?}");
+    let line = pixel(&doc, 60, 55);
+    assert!(line[0] > 200 && line[1] + 30 < line[0], "{line:?}");
 }

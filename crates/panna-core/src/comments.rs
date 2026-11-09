@@ -27,6 +27,8 @@ pub enum CommentKind {
     StrikeOut,
     Note,
     TextBox,
+    /// A text box with a line pointing at something.
+    Callout,
     Ink,
     Rect,
     Ellipse,
@@ -73,6 +75,7 @@ impl CommentKind {
             Self::StrikeOut => "Strikethrough",
             Self::Note => "Sticky note",
             Self::TextBox => "Text box",
+            Self::Callout => "Callout",
             Self::Ink => "Drawing",
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
@@ -222,10 +225,17 @@ impl From<&Annotation> for Comment {
                 add(x + NOTE_SIZE, y + NOTE_SIZE);
                 CommentKind::Note
             }
-            Kind::FreeText { rect, .. } => {
+            Kind::FreeText { rect, pointer, .. } => {
                 add(rect.x0, rect.y0);
                 add(rect.x1, rect.y1);
-                CommentKind::TextBox
+                for &(x, y) in pointer {
+                    add(x, y);
+                }
+                if pointer.is_empty() {
+                    CommentKind::TextBox
+                } else {
+                    CommentKind::Callout
+                }
             }
             Kind::Ink(strokes) => {
                 for &(x, y) in strokes.iter().flatten() {
@@ -340,6 +350,9 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
         };
         if kind == CommentKind::Polygon && is_cloudy(&annot) {
             kind = CommentKind::Cloud;
+        }
+        if kind == CommentKind::TextBox && is_callout(&annot) {
+            kind = CommentKind::Callout;
         }
         let reply_to = annot
             .get_ref(b"IRT")
@@ -463,13 +476,22 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             contents: contents.clone(),
             author: author.clone(),
             dashed: dashed(&annot),
-            fill: matches!(subtype, "Square" | "Circle" | "Polygon" | "Line" | "PolyLine")
-                .then(|| color_in(&annot, b"IC"))
-                .flatten(),
-            ends: if matches!(subtype, "Line" | "PolyLine") {
-                line_ends(&annot)
-            } else {
-                Default::default()
+            fill: matches!(
+                subtype,
+                "Square" | "Circle" | "Polygon" | "Line" | "PolyLine" | "FreeText"
+            )
+            .then(|| color_in(&annot, b"IC"))
+            .flatten(),
+            ends: match subtype {
+                "Line" | "PolyLine" => line_ends(&annot),
+                // A callout's one ending is a name, not a pair.
+                "FreeText" => [
+                    annot
+                        .get::<Name<'_>>(b"LE")
+                        .map_or(LineEnd::None, |n| LineEnd::from_name(n.as_str())),
+                    LineEnd::None,
+                ],
+                _ => Default::default(),
             },
         });
         out.push(Comment {
@@ -522,13 +544,52 @@ fn editable(
                 y: at.y0 + pad,
             }
         }
-        "FreeText" => Kind::FreeText {
-            rect: at,
-            size: annot
+        "FreeText" => {
+            let size = annot
                 .get::<hayro::hayro_syntax::object::String<'_>>(b"DA")
                 .and_then(|da| font_size(da.as_bytes()))
-                .unwrap_or(12.0),
-        },
+                .unwrap_or(12.0);
+            let callout = is_callout(annot)
+                .then(|| annot.get::<Array<'_>>(b"CL"))
+                .flatten()
+                .map(|cl| cl.iter::<f64>().take(6).collect::<Vec<f64>>())
+                .filter(|cl| cl.len() >= 4);
+            match callout {
+                Some(cl) => {
+                    // The box is /Rect less /RD; the line runs from the tip, bending at the
+                    // knee when there are three points, to the box.
+                    let r = annot.get::<Rect>(b"Rect").unwrap_or(Rect::ZERO);
+                    let d: Vec<f64> = annot
+                        .get::<Array<'_>>(b"RD")
+                        .map(|rd| rd.iter::<f64>().take(4).map(|v| v.max(0.0)).collect())
+                        .unwrap_or_default();
+                    let &[l, b, rt, t] = d.as_slice() else {
+                        return Some(Kind::FreeText {
+                            rect: at,
+                            size,
+                            pointer: tip(&cl, view_box),
+                        });
+                    };
+                    let (x0, y0) = (r.x0.min(r.x1) + l, r.y0.min(r.y1) + b);
+                    let (x1, y1) = (r.x0.max(r.x1) - rt, r.y0.max(r.y1) - t);
+                    let rect = if x1 > x0 && y1 > y0 {
+                        view_box(&[(x0, y0), (x1, y1)]).unwrap_or(at)
+                    } else {
+                        at
+                    };
+                    Kind::FreeText {
+                        rect,
+                        size,
+                        pointer: tip(&cl, view_box),
+                    }
+                }
+                None => Kind::FreeText {
+                    rect: at,
+                    size,
+                    pointer: Vec::new(),
+                },
+            }
+        }
         "Square" | "Circle" => {
             let pad = annot
                 .get::<Array<'_>>(b"RD")
@@ -687,6 +748,25 @@ fn line_ends(annot: &Dict<'_>) -> [LineEnd; 2] {
         }
     }
     ends
+}
+
+/// Whether a FreeText annotation is a callout.
+fn is_callout(annot: &Dict<'_>) -> bool {
+    annot
+        .get::<Name<'_>>(b"IT")
+        .is_some_and(|it| it.as_str() == "FreeTextCallout")
+}
+
+/// A callout's tip, and its knee if it has one, from /CL, in view space.
+fn tip(cl: &[f64], view_box: &ViewBox<'_>) -> Vec<(f32, f32)> {
+    let (points, _) = cl.as_chunks::<2>();
+    // Two points: tip and box; three: tip, knee and box.
+    let keep = if points.len() >= 3 { 2 } else { 1 };
+    points
+        .iter()
+        .take(keep)
+        .filter_map(|&[x, y]| view_box(&[(x, y)]).map(|b| (b.x0, b.y0)))
+        .collect()
 }
 
 /// Whether the border is dashed, from /BS or the older /Border array's dash part.

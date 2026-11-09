@@ -43,7 +43,7 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 |---|---|---|
 | Highlight, underline, strikethrough text | V1 | Done; select text with the tool chosen, across pages |
 | Sticky notes | V1 | Done |
-| Free text / text box comments | V1 | Done; Helvetica, wrapped to the box |
+| Free text / text box comments | V1 | Done; Helvetica, wrapped to the box. Callouts done (Comment › Callout): drag from what the callout points at to where its text goes; the framed box and its line are saved as a FreeText callout (/IT /FreeTextCallout, /CL, /RD), with a line ending where it points (open arrow by default) and an optional fill, and saved callouts come back editable |
 | Freehand drawing (ink) | V1 | Done |
 | Shapes: rectangle, ellipse, line, arrow, polygon, polygon line, cloud | V1 | Done: click each corner of a polygon, polygon line (open, saved as a PolyLine) or cloud, then double-click, press Enter or click the first corner to finish; Escape drops it. The eraser rubs out parts of drawings, saved or new, splitting strokes where it passes |
 | Insert and replace text (editing marks) | Done | As Acrobat's Insert Text and Replace Text: Insert text puts a caret where you click with the words to add; Replace text crosses out the selected words and adds a caret with the new ones, as one undo step. Saved as standard Caret and StrikeOut comments |
