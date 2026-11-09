@@ -282,6 +282,10 @@ enum Message {
     },
     /// Space held down picks the Hand tool for as long as it's held.
     SpaceHand(bool),
+    /// What the form preparer asked for.
+    PrepareOutcome(prepare::Outcome),
+    /// Shift, Ctrl, Alt or Cmd went down or up.
+    Modifiers(iced::keyboard::Modifiers),
     /// Back and forward through the views shown, as Acrobat's Previous View and Next View.
     PrevView,
     NextView,
@@ -496,6 +500,8 @@ enum Message {
 
 struct App {
     next_doc_id: u64,
+    /// The modifier keys held down now.
+    modifiers: iced::keyboard::Modifiers,
     doc: Option<OpenDoc>,
     /// The other open documents, in tab order with the shown one left out.
     parked: Vec<Parked>,
@@ -1126,6 +1132,7 @@ impl App {
             active_tab: 0,
             to_open: Vec::new(),
             next_doc_id: 0,
+            modifiers: iced::keyboard::Modifiers::default(),
             doc: None,
             status: Status::Idle,
             zoom: 1.0,
@@ -1267,6 +1274,9 @@ impl App {
             })
         } else {
             event::listen_with(|event, status, _window| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(keys)) => {
+                    Some(Message::Modifiers(keys))
+                }
                 iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
                 event => window_event(event),
             })
@@ -1554,6 +1564,10 @@ impl App {
                 operation::focus(page_box_id()).chain(operation::select_all(page_box_id()))
             }
             Message::Accelerator { key, shift } => self.accelerator(key, shift),
+            Message::Modifiers(keys) => {
+                self.modifiers = keys;
+                Task::none()
+            }
             Message::SpaceHand(down) => {
                 if matches!(self.screen, Screen::Present { .. }) {
                     return if down {
@@ -2097,7 +2111,13 @@ impl App {
             }
             Message::PagePress(page) if self.preparer.on => {
                 if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
-                    self.preparer.press(page, self.page_map(page).to_page(position));
+                    let adding = self.modifiers.shift() || self.modifiers.command();
+                    self.preparer.press(
+                        page,
+                        self.page_map(page).to_page(position),
+                        self.form.fields(),
+                        adding,
+                    );
                 }
                 Task::none()
             }
@@ -2508,31 +2528,36 @@ impl App {
                         self.annotate.update(annotate::Event::Toggle);
                     }
                 }
-                match outcome {
-                    prepare::Outcome::Nothing => Task::none(),
-                    prepare::Outcome::Edit { add, remove } => {
-                        let show = add.first().map_or(self.current_page(), |f| f.page);
-                        self.edit_pages(PageEdit::FormFields { add, remove }, show, false)
-                    }
-                    prepare::Outcome::Detect => {
-                        let Some(doc) = &self.doc else { return Task::none() };
-                        let (tx, rx) = futures_channel::oneshot::channel();
-                        doc.worker.detect_fields(move |result| {
-                            let _ = tx.send(result);
-                        });
-                        self.notice = Some("Looking for fields…".into());
-                        let id = doc.id;
-                        Task::perform(rx, move |result| Message::FieldsDetected {
-                            doc: id,
-                            result: match result {
-                                Ok(Ok(fields)) => Ok(fields),
-                                Ok(Err(e)) => Err(format!("Fields couldn't be looked for: {e}")),
-                                Err(_) => Err("Fields couldn't be looked for.".into()),
-                            },
-                        })
-                    }
-                }
+                self.update(Message::PrepareOutcome(outcome))
             }
+            Message::PrepareOutcome(outcome) => match outcome {
+                prepare::Outcome::Nothing => Task::none(),
+                prepare::Outcome::Move(moved) => {
+                    let show = moved.first().map_or(self.current_page(), |m| m.0);
+                    self.edit_pages(PageEdit::MoveWidgets(moved), show, false)
+                }
+                prepare::Outcome::Edit { add, remove } => {
+                    let show = add.first().map_or(self.current_page(), |f| f.page);
+                    self.edit_pages(PageEdit::FormFields { add, remove }, show, false)
+                }
+                prepare::Outcome::Detect => {
+                    let Some(doc) = &self.doc else { return Task::none() };
+                    let (tx, rx) = futures_channel::oneshot::channel();
+                    doc.worker.detect_fields(move |result| {
+                        let _ = tx.send(result);
+                    });
+                    self.notice = Some("Looking for fields…".into());
+                    let id = doc.id;
+                    Task::perform(rx, move |result| Message::FieldsDetected {
+                        doc: id,
+                        result: match result {
+                            Ok(Ok(fields)) => Ok(fields),
+                            Ok(Err(e)) => Err(format!("Fields couldn't be looked for: {e}")),
+                            Err(_) => Err("Fields couldn't be looked for.".into()),
+                        },
+                    })
+                }
+            },
             Message::EditPictures(event) => {
                 if self.saving || self.doc.is_none() {
                     return Task::none();
@@ -3139,7 +3164,10 @@ impl App {
                     return self.after_pictures(outcome);
                 }
                 if self.preparer.on {
-                    self.preparer.release(self.form.fields());
+                    let outcome = self.preparer.release(self.form.fields());
+                    if !matches!(outcome, prepare::Outcome::Nothing) {
+                        return self.update(Message::PrepareOutcome(outcome));
+                    }
                     return self.preparer.focus().map_or_else(Task::none, operation::focus);
                 }
                 if self.snapshot.is_some_and(|s| s.dragging) {

@@ -123,6 +123,8 @@ pub enum PageEdit {
         add: Vec<crate::NewField>,
         remove: Vec<crate::ObjRef>,
     },
+    /// Moves or resizes form field widgets: (page, widget, new place).
+    MoveWidgets(Vec<(usize, crate::ObjRef, crate::TextBox)>),
     /// Removes hidden information.
     Clean(crate::Cleanup),
     /// Gives the document new password protection, or removes it.

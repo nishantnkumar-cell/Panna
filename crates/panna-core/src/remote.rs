@@ -291,6 +291,7 @@ pub(crate) fn perform<'a>(
             PageEdit::Clean(clean) => revision(doc, doc.cleaned(clean)),
             PageEdit::Flatten { comments, fields } => revision(doc, doc.flattened(comments, fields)),
             PageEdit::FormFields { add, remove } => revision(doc, doc.with_form_fields(&add, &remove)),
+            PageEdit::MoveWidgets(moved) => revision(doc, doc.with_widgets_moved(&moved)),
             PageEdit::Pictures { page, changes } => revision(doc, doc.with_pictures_changed(page, &changes)),
             PageEdit::Redact { areas, scrub, look } => revision(doc, doc.redacted_as(&areas, &scrub, &look)),
             PageEdit::Add { page, additions } => revision(doc, doc.with_additions(page, &additions)),

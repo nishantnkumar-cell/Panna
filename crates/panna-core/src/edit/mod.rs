@@ -653,6 +653,9 @@ pub enum NewFieldKind {
     Dropdown(Vec<String>),
     /// A list box showing these choices, one of which can be picked.
     List(Vec<String>),
+    /// A text field for a date written in this pattern, such as `dd/mm/yyyy` (Acrobat's
+    /// Date Field: a text field with a date format).
+    Date(String),
     /// A group of radio buttons, one per choice, on the field's page; only one can be on.
     /// The field's own `rect` isn't used.
     Radio(Vec<RadioButton>),
@@ -690,6 +693,29 @@ pub(crate) fn form_fields(
     }
     if let Some(first) = extras.first_mut() {
         first.drop_fields.extend_from_slice(drop);
+    }
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+/// Every page of `doc`, with these form field widgets (page, widget) put in new places, in
+/// the same space as [`crate::TextBox`].
+pub(crate) fn move_widgets(
+    doc: Input<'_>,
+    count: usize,
+    moved: &[(usize, ObjRef, crate::TextBox)],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for (page, widget, rect) in moved {
+        let extra = extras.get_mut(*page).ok_or(SaveError::NoSuchPage(*page))?;
+        extra
+            .moved
+            .push((*widget, [rect.x0, rect.y0, rect.x1, rect.y1].map(f64::from)));
     }
     rebuild_from(
         &[doc],

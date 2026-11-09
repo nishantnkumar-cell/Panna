@@ -837,6 +837,22 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The document with these form field widgets (page, widget, new place in the same space
+    /// as page text) moved or resized, as a new file. Their appearances stretch to fit.
+    pub fn with_widgets_moved(
+        &self,
+        moved: &[(usize, crate::ObjRef, crate::TextBox)],
+    ) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::move_widgets(
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                self.page_count(),
+                moved,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The pictures each page draws (not those inside forms), each as the box it covers in
     /// the same space as page text.
     pub fn pictures(&self, page: usize) -> Vec<crate::TextBox> {

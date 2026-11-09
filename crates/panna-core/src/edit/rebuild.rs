@@ -282,6 +282,8 @@ pub(crate) struct Extra {
     /// Widgets to take off the page, and fields to take out of the form.
     pub drop_annots: Vec<ObjRef>,
     pub drop_fields: Vec<ObjRef>,
+    /// Annotations (form field widgets) to put in a new place, in the same space as `links`.
+    pub moved: Vec<(ObjRef, [f64; 4])>,
     /// Pictures the page draws to move, replace or take out, by their place in
     /// [`page_pictures`].
     pub pictures: Vec<(usize, super::PictureChange)>,
@@ -715,6 +717,7 @@ pub(crate) fn rebuild(
                     || !extra.links.is_empty()
                     || !extra.fields.is_empty()
                     || !extra.drop_annots.is_empty()
+                    || !extra.moved.is_empty()
                     || redacting
                     || !scrub.is_empty();
                 let mut gone = if redacting && !extra.text_only {
@@ -765,7 +768,23 @@ pub(crate) fn rebuild(
                         // PDF/A wants every comment and field printed, none hidden.
                         let printed = (flags | 4) & !(1 | 2 | 32);
                         let reflag = clean.archive && subtype != "Popup" && flags != printed;
-                        if (clean.scripts && has_actions) || reflag {
+                        // A moved widget's new /Rect, in user space.
+                        let moved =
+                            extra
+                                .moved
+                                .iter()
+                                .find(|(m, _)| *m == r)
+                                .map(|&(_, [x0, top, x1, bottom])| {
+                                    let (matrix, _, height) = shown_space(shown, rotate);
+                                    let [a, b, c, d, e, f] = matrix;
+                                    let user = |x: f64, y: f64| {
+                                        (a * x + c * (height - y) + e, b * x + d * (height - y) + f)
+                                    };
+                                    let (ux0, uy0) = user(x0, top);
+                                    let (ux1, uy1) = user(x1, bottom);
+                                    [ux0.min(ux1), uy0.min(uy1), ux0.max(ux1), uy0.max(uy1)]
+                                });
+                        if (clean.scripts && has_actions) || reflag || moved.is_some() {
                             // A copy without its scripts, under the number everything that
                             // refers to it will use.
                             if let Some(num) = w.claim(doc, r) {
@@ -774,6 +793,7 @@ pub(crate) fn rebuild(
                                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
                                     if (clean.scripts && (key == b"AA" || (key == b"A" && script)))
                                         || (reflag && key == b"F")
+                                        || (moved.is_some() && key == b"Rect")
                                     {
                                         continue;
                                     }
@@ -786,6 +806,12 @@ pub(crate) fn rebuild(
                                 }
                                 if reflag {
                                     body.extend_from_slice(format!("/F {printed}\n").as_bytes());
+                                }
+                                if let Some([x0, y0, x1, y1]) = moved {
+                                    // The appearance is stretched to fit the new box.
+                                    body.extend_from_slice(
+                                        format!("/Rect [{x0:.3} {y0:.3} {x1:.3} {y1:.3}]\n").as_bytes(),
+                                    );
                                 }
                                 body.extend_from_slice(b">>");
                                 w.set(num, body);
