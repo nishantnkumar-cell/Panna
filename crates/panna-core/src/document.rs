@@ -513,10 +513,21 @@ impl Document {
             return Err(crate::SaveError::NoSuchPage(page));
         }
         let mut plan: Vec<crate::PageSource> = (0..count)
-            .map(|index| crate::PageSource::Page { doc: 0, index, turns: 0 })
+            .map(|index| crate::PageSource::Page {
+                doc: 0,
+                index,
+                turns: 0,
+            })
             .collect();
         // Taken from the document as if it were another, so everything on it is copied anew.
-        plan.insert(page + 1, crate::PageSource::Page { doc: 1, index: page, turns: 0 });
+        plan.insert(
+            page + 1,
+            crate::PageSource::Page {
+                doc: 1,
+                index: page,
+                turns: 0,
+            },
+        );
         self.rearranged(&plan, &[self])
     }
 
@@ -596,7 +607,11 @@ impl Document {
             .filter(|(_, m)| m.iter().any(|v| *v >= 0.5))
             .collect();
         catch_unwind(AssertUnwindSafe(|| {
-            crate::edit::crop_each((&self.pdf, &self.bytes, self.password.as_str()), self.page_count(), &crops)
+            crate::edit::crop_each(
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                self.page_count(),
+                &crops,
+            )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }

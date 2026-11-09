@@ -623,7 +623,11 @@ fn white_margins_are_trimmed_to_what_is_drawn() {
         bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     bytes.extend_from_slice(
-        format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes(),
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
     );
     let doc = open(bytes, None);
     let [top, right, bottom, left] = doc.white_margins(0).unwrap();
@@ -632,7 +636,11 @@ fn white_margins_are_trimmed_to_what_is_drawn() {
     assert_eq!(doc.white_margins(1), None);
     let out = open(doc.white_trimmed(&[0, 1]).unwrap(), None);
     let pages = out.info().unwrap().pages;
-    assert!(near(pages[0].width, 100.0) && near(pages[0].height, 200.0), "{:?}", pages[0]);
+    assert!(
+        near(pages[0].width, 100.0) && near(pages[0].height, 200.0),
+        "{:?}",
+        pages[0]
+    );
     assert_eq!((pages[1].width, pages[1].height), (300.0, 400.0));
 }
 
@@ -659,7 +667,11 @@ fn a_duplicated_page_gets_its_own_copy_of_its_comments() {
         bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     bytes.extend_from_slice(
-        format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes(),
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
     );
     let doc = open(bytes, None);
     let out = open(doc.with_page_duplicated(0).unwrap(), None);

@@ -927,22 +927,25 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                             }
                             Err(e) => Err(e),
                         },
-                        PageEdit::InsertPicture { at, width, height, rgba } => {
-                            match crate::edit::rgba_to_pdf(width, height, &rgba) {
-                                Ok(bytes) => revised(
-                                    &current,
-                                    ask!(
-                                        Op::InsertFile {
-                                            at,
-                                            bytes,
-                                            name: "Clipboard".into()
-                                        },
-                                        Revised
-                                    ),
+                        PageEdit::InsertPicture {
+                            at,
+                            width,
+                            height,
+                            rgba,
+                        } => match crate::edit::rgba_to_pdf(width, height, &rgba) {
+                            Ok(bytes) => revised(
+                                &current,
+                                ask!(
+                                    Op::InsertFile {
+                                        at,
+                                        bytes,
+                                        name: "Clipboard".into()
+                                    },
+                                    Revised
                                 ),
-                                Err(_) => Err(SaveError::Damaged),
-                            }
-                        }
+                            ),
+                            Err(_) => Err(SaveError::Damaged),
+                        },
                         PageEdit::ReplaceFromFile {
                             first,
                             count,

@@ -3557,7 +3557,16 @@ impl App {
                     return Task::none();
                 }
                 let rgba = std::sync::Arc::unwrap_or_clone(rgba);
-                self.edit_pages(PageEdit::InsertPicture { at, width, height, rgba }, at, false)
+                self.edit_pages(
+                    PageEdit::InsertPicture {
+                        at,
+                        width,
+                        height,
+                        rgba,
+                    },
+                    at,
+                    false,
+                )
             }
             Message::ClipboardPicture(Ok((width, height, rgba))) => {
                 self.new_pdf = Some(NewPdf::Picture { width, height, rgba });

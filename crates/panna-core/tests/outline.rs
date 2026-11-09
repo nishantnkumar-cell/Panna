@@ -181,7 +181,10 @@ fn bookmark_colour_style_and_open_state_are_read_and_saved() {
         (Some([0, 0, 255]), true, true, true)
     );
     let child = items.get(1).unwrap();
-    assert_eq!((child.color, child.bold, child.italic, child.closed), (None, false, false, false));
+    assert_eq!(
+        (child.color, child.bold, child.italic, child.closed),
+        (None, false, false, false)
+    );
 
     // Restyled: the parent plain and open, the child bold red.
     items[0].bold = false;
@@ -192,8 +195,17 @@ fn bookmark_colour_style_and_open_state_are_read_and_saved() {
     items[1].color = Some([204, 0, 0]);
     let bytes = doc.with_bookmarks(&items).unwrap();
     let saved = reopen(&doc, bytes);
-    let looks: Vec<_> = saved.iter().map(|i| (i.color, i.bold, i.italic, i.closed)).collect();
-    assert_eq!(looks, [(None, false, false, false), (Some([204, 0, 0]), true, false, false)]);
+    let looks: Vec<_> = saved
+        .iter()
+        .map(|i| (i.color, i.bold, i.italic, i.closed))
+        .collect();
+    assert_eq!(
+        looks,
+        [
+            (None, false, false, false),
+            (Some([204, 0, 0]), true, false, false)
+        ]
+    );
 }
 
 #[test]

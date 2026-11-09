@@ -126,16 +126,16 @@ fn page_appearances<'a>(page: &Dict<'a>) -> Vec<Stream<'a>> {
     annots
         .iter::<Dict<'_>>()
         .take(10_000)
-        .filter_map(|annot| {
-            match annot.get::<Dict<'_>>(b"AP")?.get::<Object<'_>>(b"N")? {
+        .filter_map(
+            |annot| match annot.get::<Dict<'_>>(b"AP")?.get::<Object<'_>>(b"N")? {
                 Object::Stream(stream) => Some(stream),
                 Object::Dict(states) => annot
                     .get::<Name<'_>>(b"AS")
                     .and_then(|state| states.get::<Stream<'_>>(state.as_ref()))
                     .or_else(|| states.get::<Stream<'_>>(b"Off")),
                 _ => None,
-            }
-        })
+            },
+        )
         .collect()
 }
 

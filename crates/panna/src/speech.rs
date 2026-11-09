@@ -277,7 +277,9 @@ impl Reader {
 
     /// Pauses saying, or goes on from about where it was paused.
     pub fn toggle_pause(&mut self) -> Result<Option<Task>, String> {
-        let Some(reading) = &mut self.reading else { return Ok(None) };
+        let Some(reading) = &mut self.reading else {
+            return Ok(None);
+        };
         if let Some(at) = reading.paused.take() {
             let rest: String = reading.text.get(at..).unwrap_or_default().iter().collect();
             let text = std::mem::take(&mut reading.text);
@@ -411,7 +413,11 @@ impl Reader {
             None => "Reading the selected text aloud".into(),
         };
         let pause = if reading.paused.is_some() {
-            icons::button(Icon::Play, "Go on reading", Some(Message::ReadAloud(Event::Pause)))
+            icons::button(
+                Icon::Play,
+                "Go on reading",
+                Some(Message::ReadAloud(Event::Pause)),
+            )
         } else {
             icons::button(
                 Icon::Pause,
@@ -498,7 +504,9 @@ mod tests {
 
     #[test]
     fn a_paused_reading_goes_on_from_the_start_of_its_sentence() {
-        let text: Vec<char> = "One two. Three four five six seven.\nEight nine.".chars().collect();
+        let text: Vec<char> = "One two. Three four five six seven.\nEight nine."
+            .chars()
+            .collect();
         // Twelve characters a second: a second in is inside the second sentence.
         assert_eq!(resume_at(&text, 0, Duration::from_secs(1)), 9);
         assert_eq!(resume_at(&text, 0, Duration::ZERO), 0);

@@ -412,7 +412,11 @@ pub(crate) fn crop(
 }
 
 /// Every page of `doc`, with each page listed cropped by its own margins.
-pub(crate) fn crop_each(doc: Input<'_>, count: usize, crops: &[(usize, Margins)]) -> Result<Vec<u8>, SaveError> {
+pub(crate) fn crop_each(
+    doc: Input<'_>,
+    count: usize,
+    crops: &[(usize, Margins)],
+) -> Result<Vec<u8>, SaveError> {
     let mut extras = vec![rebuild::Extra::default(); count];
     for &(page, margins) in crops {
         extras.get_mut(page).ok_or(SaveError::NoSuchPage(page))?.crop = Some(margins);

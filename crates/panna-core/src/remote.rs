@@ -280,9 +280,7 @@ pub(crate) fn perform<'a>(
             PageEdit::Undo
             | PageEdit::InsertFile { .. }
             | PageEdit::InsertPicture { .. }
-            | PageEdit::ReplaceFromFile { .. } => {
-                Err(SaveError::Damaged)
-            }
+            | PageEdit::ReplaceFromFile { .. } => Err(SaveError::Damaged),
             PageEdit::Plan(plan) => revision(doc, doc.rearranged(&plan, &[])),
             PageEdit::Crop { pages, margins } => revision(doc, doc.cropped(&pages, margins)),
             PageEdit::TrimWhite(pages) => revision(doc, doc.white_trimmed(&pages)),

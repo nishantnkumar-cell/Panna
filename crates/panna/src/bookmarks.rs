@@ -427,7 +427,10 @@ impl Editor {
             icons::button(
                 Icon::ExpandAll,
                 "Expand all bookmarks",
-                on(Event::ExpandAll, outline.iter().enumerate().any(|(i, _)| self.closed(outline, i)))
+                on(
+                    Event::ExpandAll,
+                    outline.iter().enumerate().any(|(i, _)| self.closed(outline, i))
+                )
             ),
             icons::button(
                 Icon::CollapseAll,
@@ -454,7 +457,9 @@ impl Editor {
                 .style(text::secondary);
             return column![tools, container(note).padding(PAD)].into();
         }
-        let styling = self.styling.then(|| self.appearance(selected.and_then(|i| outline.get(i)), busy));
+        let styling = self
+            .styling
+            .then(|| self.appearance(selected.and_then(|i| outline.get(i)), busy));
         let searching = find.active();
         // Bookmarks under a closed one are hidden.
         let mut hidden_until = 0;
@@ -479,7 +484,11 @@ impl Editor {
                     .padding(1)
                     .style(button::text)
                     .on_press(Message::Bookmarks(Event::Toggle(i))),
-                    if closed { "Show the bookmarks under it" } else { "Hide the bookmarks under it" },
+                    if closed {
+                        "Show the bookmarks under it"
+                    } else {
+                        "Hide the bookmarks under it"
+                    },
                 )
             } else {
                 space().width(20).into()
@@ -502,11 +511,22 @@ impl Editor {
             // Like Word's Headings tab, sections that contain search results are highlighted.
             let found = searching && found_in(i);
             let font = Font {
-                weight: if item.bold { font::Weight::Bold } else { font::Weight::Normal },
-                style: if item.italic { font::Style::Italic } else { font::Style::Normal },
+                weight: if item.bold {
+                    font::Weight::Bold
+                } else {
+                    font::Weight::Normal
+                },
+                style: if item.italic {
+                    font::Style::Italic
+                } else {
+                    font::Style::Normal
+                },
                 ..Font::default()
             };
-            let mut label = text(title).size(13).font(font).wrapping(text::Wrapping::WordOrGlyph);
+            let mut label = text(title)
+                .size(13)
+                .font(font)
+                .wrapping(text::Wrapping::WordOrGlyph);
             if let Some([r, g, b]) = item.color {
                 label = label.color(iced::Color::from_rgb8(r, g, b));
             }
@@ -700,12 +720,18 @@ mod tests {
         editor.update(Event::ExpandAll, &outline, 0);
         assert!((0..4).all(|i| !editor.closed(&outline, i)));
         editor.update(Event::CollapseAll, &outline, 0);
-        assert_eq!((0..4).map(|i| editor.closed(&outline, i)).collect::<Vec<_>>(), [true, true, false, false]);
+        assert_eq!(
+            (0..4).map(|i| editor.closed(&outline, i)).collect::<Vec<_>>(),
+            [true, true, false, false]
+        );
         // The next change saves the open state as shown.
         editor.update(Event::Select(3), &outline, 0);
         match editor.update(Event::Style(Style::Bold), &outline, 0) {
             Outcome::Save(list, _) => {
-                assert_eq!(list.iter().map(|b| b.closed).collect::<Vec<_>>(), [true, true, false, false]);
+                assert_eq!(
+                    list.iter().map(|b| b.closed).collect::<Vec<_>>(),
+                    [true, true, false, false]
+                );
                 assert!(list[3].bold && !list[3].italic);
             }
             _ => panic!("nothing saved"),
@@ -716,7 +742,10 @@ mod tests {
     fn colour_and_style_change_the_selected_bookmark() {
         let outline = list(&[0, 0]);
         let mut editor = Editor::default();
-        assert!(matches!(editor.update(Event::Color(Some([204, 0, 0])), &outline, 0), Outcome::None));
+        assert!(matches!(
+            editor.update(Event::Color(Some([204, 0, 0])), &outline, 0),
+            Outcome::None
+        ));
         editor.update(Event::Select(1), &outline, 0);
         match editor.update(Event::Color(Some([204, 0, 0])), &outline, 0) {
             Outcome::Save(list, select) => {
@@ -726,6 +755,9 @@ mod tests {
             _ => panic!("nothing saved"),
         }
         // Choosing what it already has changes nothing.
-        assert!(matches!(editor.update(Event::Style(Style::Plain), &outline, 0), Outcome::None));
+        assert!(matches!(
+            editor.update(Event::Style(Style::Plain), &outline, 0),
+            Outcome::None
+        ));
     }
 }
