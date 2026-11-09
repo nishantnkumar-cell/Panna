@@ -86,6 +86,9 @@ pub enum PageEdit {
     HeaderFooter {
         pages: Vec<usize>,
         marks: crate::HeaderFooter,
+        /// In place of the headers and footers already there.
+        #[serde(default)]
+        replace: bool,
     },
     /// Replaces the bookmarks with these, in reading order.
     Bookmarks(Vec<crate::OutlineItem>),
@@ -97,7 +100,12 @@ pub enum PageEdit {
     Watermark {
         pages: Vec<usize>,
         mark: crate::Watermark,
+        /// In place of the watermarks and backgrounds already there.
+        #[serde(default)]
+        replace: bool,
     },
+    /// Takes out the headers and footers, or watermarks and backgrounds, on the pages.
+    RemoveMarks { header_footer: bool, watermark: bool },
     /// Adds text, pictures or links to a page.
     Add {
         page: usize,

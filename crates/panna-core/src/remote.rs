@@ -285,7 +285,15 @@ pub(crate) fn perform<'a>(
             PageEdit::Crop { pages, margins } => revision(doc, doc.cropped(&pages, margins)),
             PageEdit::TrimWhite(pages) => revision(doc, doc.white_trimmed(&pages)),
             PageEdit::Duplicate(page) => revision(doc, doc.with_page_duplicated(page)),
-            PageEdit::HeaderFooter { pages, marks } => revision(doc, doc.with_header_footer(&pages, &marks)),
+            PageEdit::HeaderFooter {
+                pages,
+                marks,
+                replace,
+            } => revision(doc, doc.with_header_footer(&pages, &marks, replace)),
+            PageEdit::RemoveMarks {
+                header_footer,
+                watermark,
+            } => revision(doc, doc.without_marks(header_footer, watermark)),
             PageEdit::Protect(protection) => protected(doc, doc.protected(protection.as_ref())),
             PageEdit::Strengthen => protected(doc, doc.strengthened()),
             PageEdit::Clean(clean) => revision(doc, doc.cleaned(clean)),
@@ -299,7 +307,9 @@ pub(crate) fn perform<'a>(
             PageEdit::Bookmarks(items) => revision(doc, doc.with_bookmarks(&items)),
             PageEdit::InitialView(view) => revision(doc, doc.with_initial_view(&view)),
             PageEdit::PageLabels(ranges) => revision(doc, doc.with_page_labels(&ranges)),
-            PageEdit::Watermark { pages, mark } => revision(doc, doc.with_watermark(&pages, &mark)),
+            PageEdit::Watermark { pages, mark, replace } => {
+                revision(doc, doc.with_watermark(&pages, &mark, replace))
+            }
         }),
     }
 }

@@ -82,6 +82,100 @@ pub fn fill(template: &str, number: u64, total: usize, date: &str) -> String {
     out
 }
 
+/// Acrobat's names for page marks (the /Private entry of a form's /PieceInfo
+/// /ADBE_CompoundType), which let them be found again to update or remove.
+pub(crate) const HEADER: &str = "Header";
+pub(crate) const FOOTER: &str = "Footer";
+pub(crate) const WATERMARK: &str = "Watermark";
+pub(crate) const BACKGROUND: &str = "Background";
+
+/// The headers and footers, and watermarks and backgrounds, already on a document's pages,
+/// Panna's or Acrobat's, with the settings Panna used for them when it made them.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExistingMarks {
+    pub header_footer: bool,
+    pub watermark: bool,
+    pub header_settings: Option<HeaderFooter>,
+    /// Without any picture, which isn't kept with the settings.
+    pub watermark_settings: Option<Watermark>,
+}
+
+/// Most pages looked through for marks, and form XObjects per page.
+const MAX_SCAN_PAGES: usize = 5_000;
+const MAX_SCAN_XOBJECTS: usize = 200;
+/// The largest settings read back.
+const MAX_SETTINGS: usize = 16 * 1024;
+
+/// The /Private mark name of a form XObject's dictionary, if it is a page mark.
+pub(crate) fn private_name(dict: &hayro::hayro_syntax::object::Dict<'_>) -> Option<String> {
+    use hayro::hayro_syntax::object::{Dict, Name};
+    dict.get::<Dict<'_>>(b"PieceInfo")?
+        .get::<Dict<'_>>(b"ADBE_CompoundType")?
+        .get::<Name<'_>>(b"Private")
+        .map(|n| n.as_str().to_owned())
+}
+
+/// Finds the page marks in `pdf`.
+pub(crate) fn existing(pdf: &hayro::hayro_syntax::Pdf) -> ExistingMarks {
+    use hayro::hayro_syntax::object::{Dict, Stream};
+    let mut out = ExistingMarks::default();
+    for page in pdf.pages().iter().take(MAX_SCAN_PAGES) {
+        let Some(xobjects) = page
+            .raw()
+            .get::<Dict<'_>>(b"Resources")
+            .and_then(|r| r.get::<Dict<'_>>(b"XObject"))
+        else {
+            continue;
+        };
+        for key in xobjects.keys().take(MAX_SCAN_XOBJECTS) {
+            let Some(form) = xobjects.get::<Stream<'_>>(key.as_ref()) else {
+                continue;
+            };
+            let dict = form.dict();
+            let Some(name) = private_name(dict) else {
+                continue;
+            };
+            let settings = dict
+                .get::<hayro::hayro_syntax::object::String<'_>>(b"PannaSettings")
+                .map(|s| s.as_bytes().to_vec())
+                .filter(|b| b.len() <= MAX_SETTINGS);
+            match name.as_str() {
+                HEADER | FOOTER => {
+                    out.header_footer = true;
+                    if out.header_settings.is_none() {
+                        out.header_settings = settings.and_then(|b| postcard::from_bytes(&b).ok());
+                    }
+                }
+                WATERMARK | BACKGROUND => {
+                    out.watermark = true;
+                    if out.watermark_settings.is_none() {
+                        out.watermark_settings = settings.and_then(|b| postcard::from_bytes(&b).ok());
+                    }
+                }
+                _ => {}
+            }
+        }
+        if out.header_settings.is_some() && out.watermark_settings.is_some() {
+            break;
+        }
+    }
+    out
+}
+
+/// The settings kept with a header and footer, to fill the dialog in again.
+pub(crate) fn header_settings(marks: &HeaderFooter) -> Vec<u8> {
+    postcard::to_allocvec(marks).unwrap_or_default()
+}
+
+/// The settings kept with a watermark, without its picture.
+pub(crate) fn watermark_settings(mark: &Watermark) -> Vec<u8> {
+    let kept = Watermark {
+        picture: None,
+        ..mark.clone()
+    };
+    postcard::to_allocvec(&kept).unwrap_or_default()
+}
+
 /// Header and footer text ready to draw on one page.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Lines {
@@ -315,6 +409,21 @@ impl Drawing {
                 a = n(a)
             ),
             None => RESOURCES.to_owned(),
+        }
+    }
+
+    /// Its mark name, as Acrobat names headers and footers, watermarks and backgrounds;
+    /// `None` for other drawings.
+    pub(crate) fn private(&self) -> Option<&'static str> {
+        match self {
+            Drawing::Lines(_) => Some(HEADER),
+            Drawing::Watermark { .. } | Drawing::PictureMark { .. } => Some(WATERMARK),
+            Drawing::Background(_) => Some(BACKGROUND),
+            Drawing::Both(a, b) => match (a.private(), b.private()) {
+                (Some(BACKGROUND), Some(other)) | (Some(other), _) => Some(other),
+                (None, other) => other,
+            },
+            _ => None,
         }
     }
 

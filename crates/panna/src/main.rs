@@ -3740,17 +3740,31 @@ impl App {
                     pages::WatermarkEvent::PictureLoaded(Ok(picture)) => state.picture = Some(picture),
                     pages::WatermarkEvent::PictureLoaded(Err(e)) => self.notice = Some(e),
                     pages::WatermarkEvent::Cancel => self.watermarking = None,
-                    pages::WatermarkEvent::Go => {
-                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                        let Ok((pages, mark)) = pages::watermark_settings(state, count) else {
-                            return Task::none();
-                        };
+                    pages::WatermarkEvent::Replace(v) => state.replace = v,
+                    pages::WatermarkEvent::Remove => {
                         self.watermarking = None;
                         if self.pages_busy || self.saving {
                             return Task::none();
                         }
                         let current = self.current_page();
-                        return self.edit_pages(PageEdit::Watermark { pages, mark }, current, false);
+                        let edit = PageEdit::RemoveMarks {
+                            header_footer: false,
+                            watermark: true,
+                        };
+                        return self.edit_pages(edit, current, false);
+                    }
+                    pages::WatermarkEvent::Go => {
+                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                        let Ok((pages, mark)) = pages::watermark_settings(state, count) else {
+                            return Task::none();
+                        };
+                        let replace = state.existing && state.replace;
+                        self.watermarking = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(PageEdit::Watermark { pages, mark, replace }, current, false);
                     }
                 }
                 Task::none()
@@ -3771,17 +3785,39 @@ impl App {
                     pages::MarkEvent::First(v) => state.first = clean(v, 9),
                     pages::MarkEvent::Range(v) => state.range = clean(v, 200),
                     pages::MarkEvent::Cancel => self.marking = None,
-                    pages::MarkEvent::Go => {
-                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                        let Ok((pages, marks)) = pages::mark_settings(state, count) else {
-                            return Task::none();
-                        };
+                    pages::MarkEvent::Replace(v) => state.replace = v,
+                    pages::MarkEvent::Remove => {
                         self.marking = None;
                         if self.pages_busy || self.saving {
                             return Task::none();
                         }
                         let current = self.current_page();
-                        return self.edit_pages(PageEdit::HeaderFooter { pages, marks }, current, false);
+                        let edit = PageEdit::RemoveMarks {
+                            header_footer: true,
+                            watermark: false,
+                        };
+                        return self.edit_pages(edit, current, false);
+                    }
+                    pages::MarkEvent::Go => {
+                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                        let Ok((pages, marks)) = pages::mark_settings(state, count) else {
+                            return Task::none();
+                        };
+                        let replace = state.existing && state.replace;
+                        self.marking = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(
+                            PageEdit::HeaderFooter {
+                                pages,
+                                marks,
+                                replace,
+                            },
+                            current,
+                            false,
+                        );
                     }
                 }
                 Task::none()
@@ -4475,12 +4511,22 @@ impl App {
             }
             pages::Op::Watermark => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                self.watermarking = Some(pages::Watermarking::new(count));
+                let marks = self
+                    .doc
+                    .as_ref()
+                    .map(|d| d.info.marks.clone())
+                    .unwrap_or_default();
+                self.watermarking = Some(pages::Watermarking::for_document(count, &marks));
                 operation::focus(pages::watermark_input_id())
             }
             pages::Op::HeaderFooter => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                self.marking = Some(pages::Marking::new(count));
+                let marks = self
+                    .doc
+                    .as_ref()
+                    .map(|d| d.info.marks.clone())
+                    .unwrap_or_default();
+                self.marking = Some(pages::Marking::for_document(count, &marks));
                 operation::focus(pages::mark_input_id())
                     .chain(operation::move_cursor_to_end(pages::mark_input_id()))
             }
@@ -5798,6 +5844,7 @@ impl App {
                 protected: false,
                 weak_protection: false,
                 attachments: Vec::new(),
+                marks: Default::default(),
                 layers: Vec::new(),
                 signatures: Vec::new(),
                 initial_view: panna_core::InitialView::default(),

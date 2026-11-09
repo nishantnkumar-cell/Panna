@@ -50,6 +50,8 @@ pub struct DocumentInfo {
     pub initial_view: crate::InitialView,
     /// How the pages are labelled, by start page; empty when they're just numbered.
     pub page_labels: Vec<crate::LabelRange>,
+    /// Headers and footers, and watermarks and backgrounds, already on the pages.
+    pub marks: crate::ExistingMarks,
 }
 
 /// An RGBA8 bitmap (straight alpha, row-major, no padding).
@@ -438,7 +440,10 @@ impl Document {
             let layers =
                 catch_unwind(AssertUnwindSafe(|| crate::layers::read(&self.pdf))).unwrap_or_default();
             let signatures = self.signatures();
+            let marks =
+                catch_unwind(AssertUnwindSafe(|| crate::edit::existing_marks(&self.pdf))).unwrap_or_default();
             DocumentInfo {
+                marks,
                 signatures,
                 initial_view: crate::InitialView::read(&self.pdf),
                 page_labels: crate::labels::read(&self.pdf),
@@ -618,10 +623,12 @@ impl Document {
 
     /// The document with header and footer text drawn on the pages at `pages`, numbered in
     /// that order, as a new file.
+    /// With `replace`, they take the place of the headers and footers already there.
     pub fn with_header_footer(
         &self,
         pages: &[usize],
         marks: &crate::HeaderFooter,
+        replace: bool,
     ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::header_footer(
@@ -629,6 +636,7 @@ impl Document {
                 self.page_count(),
                 pages,
                 marks,
+                replace,
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?
@@ -1155,11 +1163,13 @@ impl Document {
         .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
-    /// The document with `mark` drawn on the pages at `pages`, as a new file.
+    /// The document with `mark` drawn on the pages at `pages`, as a new file. With
+    /// `replace`, it takes the place of the watermarks and backgrounds already there.
     pub fn with_watermark(
         &self,
         pages: &[usize],
         mark: &crate::Watermark,
+        replace: bool,
     ) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| {
             crate::edit::watermark(
@@ -1167,6 +1177,22 @@ impl Document {
                 self.page_count(),
                 pages,
                 mark,
+                replace,
+            )
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document without the headers and footers (with `header_footer`), or watermarks
+    /// and backgrounds (with `watermark`), already on its pages, Panna's or Acrobat's, as a
+    /// new file.
+    pub fn without_marks(&self, header_footer: bool, watermark: bool) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::remove_marks(
+                (&self.pdf, &self.bytes, self.password.as_str()),
+                self.page_count(),
+                header_footer,
+                watermark,
             )
         }))
         .map_err(|_| crate::SaveError::EngineCrashed)?

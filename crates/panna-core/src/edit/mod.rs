@@ -41,7 +41,7 @@ pub use picture::StampImage;
 
 pub use convert::{MAX_BLANK_PAGES, MAX_PICTURES, blank_pdf, pictures_to_pdf, rgba_to_pdf};
 pub use crypt::Protection;
-pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
+pub use marks::{ExistingMarks, HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
 pub(crate) use sign::prepare as prepare_signature;
 pub use sign::{Corner, SignOptions, Visible};
@@ -455,15 +455,61 @@ pub(crate) fn crop_each(
     )
 }
 
-/// Every page of `doc`, with `marks` drawn on the pages at `pages`, numbered in that order.
+/// The page marks found in `pdf`.
+pub(crate) fn existing_marks(pdf: &Pdf) -> ExistingMarks {
+    marks::existing(pdf)
+}
+
+/// Every page with the headers and footers (with `header_footer`), and watermarks and
+/// backgrounds (with `watermark`), already on them taken out.
+fn dropping(count: usize, header_footer: bool, watermark: bool) -> Vec<rebuild::Extra> {
+    let mut names = Vec::new();
+    if header_footer {
+        names.extend([marks::HEADER, marks::FOOTER]);
+    }
+    if watermark {
+        names.extend([marks::WATERMARK, marks::BACKGROUND]);
+    }
+    (0..count)
+        .map(|_| rebuild::Extra {
+            drop_marks: names.clone(),
+            ..rebuild::Extra::default()
+        })
+        .collect()
+}
+
+/// Every page of `doc`, with the headers and footers, or watermarks and backgrounds,
+/// already on its pages taken out.
+pub(crate) fn remove_marks(
+    doc: Input<'_>,
+    count: usize,
+    header_footer: bool,
+    watermark: bool,
+) -> Result<Vec<u8>, SaveError> {
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &dropping(count, header_footer, watermark),
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+/// Every page of `doc`, with `marks` drawn on the pages at `pages`, numbered in that order;
+/// with `replace`, in place of the headers and footers already there.
 pub(crate) fn header_footer(
     doc: Input<'_>,
     count: usize,
     pages: &[usize],
     marks: &HeaderFooter,
+    replace: bool,
 ) -> Result<Vec<u8>, SaveError> {
     let date = marks::today();
-    let mut extras = vec![rebuild::Extra::default(); count];
+    let mut extras = dropping(count, replace, false);
+    let settings = marks::header_settings(marks);
+    for extra in &mut extras {
+        extra.mark_settings.push((marks::HEADER, settings.clone()));
+    }
     for (i, &page) in pages.iter().enumerate() {
         if let Some(extra) = extras.get_mut(page) {
             let number = u64::from(marks.first) + i as u64;
@@ -565,15 +611,22 @@ pub(crate) fn flatten(
     )
 }
 
-/// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order.
+/// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order;
+/// with `replace`, in place of the watermarks and backgrounds already there.
 pub(crate) fn watermark(
     doc: Input<'_>,
     count: usize,
     pages: &[usize],
     mark: &Watermark,
+    replace: bool,
 ) -> Result<Vec<u8>, SaveError> {
     let date = marks::today();
-    let mut extras = vec![rebuild::Extra::default(); count];
+    let mut extras = dropping(count, false, replace);
+    let settings = marks::watermark_settings(mark);
+    for extra in &mut extras {
+        extra.mark_settings.push((marks::WATERMARK, settings.clone()));
+        extra.mark_settings.push((marks::BACKGROUND, settings.clone()));
+    }
     for (i, &page) in pages.iter().enumerate() {
         if let Some(extra) = extras.get_mut(page) {
             let (under, over) = mark.for_page(1 + i as u64, pages.len(), &date);
@@ -1190,7 +1243,7 @@ fn rewrite(data: &[u8], set: &field::Entries) -> Result<Vec<u8>, SaveError> {
 }
 
 /// A PDF date string in UTC, like `D:20261017093000Z`.
-fn pdf_date(now: SystemTime) -> String {
+pub(crate) fn pdf_date(now: SystemTime) -> String {
     let secs = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;

@@ -45,11 +45,11 @@ pub use document::{
     Document, DocumentInfo, Leftovers, OpenError, PageSize, RedactLook, RenderError, RenderedPage,
 };
 pub use edit::{
-    Addition, Annotation, AttachedFile, Changes, Cleanup, Color, Corner, HeaderFooter, Kind, LINE_HEIGHT,
-    LineEnd, MAX_ATTACHMENT_BYTES, MAX_BLANK_PAGES, MAX_PICTURES, Margins, NOTE_SIZE, NewField, NewFieldKind,
-    PageSource, PictureChange, Protection, RadioButton, STAMPS, SaveError, SignOptions, StampImage, Visible,
-    Watermark, blank_pdf, fill_header_footer, pictures_to_pdf, rgba_to_pdf, stamp_label, text_width, today,
-    wrap,
+    Addition, Annotation, AttachedFile, Changes, Cleanup, Color, Corner, ExistingMarks, HeaderFooter, Kind,
+    LINE_HEIGHT, LineEnd, MAX_ATTACHMENT_BYTES, MAX_BLANK_PAGES, MAX_PICTURES, Margins, NOTE_SIZE, NewField,
+    NewFieldKind, PageSource, PictureChange, Protection, RadioButton, STAMPS, SaveError, SignOptions,
+    StampImage, Visible, Watermark, blank_pdf, fill_header_footer, pictures_to_pdf, rgba_to_pdf, stamp_label,
+    text_width, today, wrap,
 };
 pub use export::{Export, ExportFormat};
 pub use formats::Format;

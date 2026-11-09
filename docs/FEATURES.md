@@ -82,8 +82,8 @@ Priority key: **V1** = first release (view, annotate, fill forms) · **Later** =
 | Extract pages, split document | Later | Done: pick pages such as 1-3, 5, 8- and save them as one PDF or each as its own PDF |
 | Merge / combine files | Later | Done: insert another PDF's pages after the current page |
 | Crop pages | Later | Done: trim margins in millimetres from the edges as shown, on this page or all pages, or Remove white margins to trim each page to what's drawn on it, as in Acrobat |
-| Headers, footers, page numbers, Bates numbering | Later | Done: left, centre and right text at the top and bottom, with {page}, {pages}, {page:6} for Bates numbers and {date}, on chosen pages. Drawn into the pages, so changing them later is Undo or adding new ones |
-| Watermarks and backgrounds | Later | Done: text watermark (colour, size or fit to page, angle, opacity, over or behind the content) and a page colour, on chosen pages. Picture watermarks too (PNG, JPEG or TIFF, such as a logo), sized as a share of the page width and written once however many pages show them |
+| Headers, footers, page numbers, Bates numbering | Later | Done: left, centre and right text at the top and bottom, with {page}, {pages}, {page:6} for Bates numbers and {date}, on chosen pages. Drawn into the pages as marked content Acrobat also recognises. Opening the dialog again on a marked document fills it in with the settings used (for Panna's own), and Update replaces the headers and footers already there (Panna's or Acrobat's) instead of adding a second set; Remove all takes them off |
+| Watermarks and backgrounds | Later | Done: text watermark (colour, size or fit to page, angle, opacity, over or behind the content) and a page colour, on chosen pages. Picture watermarks too (PNG, JPEG or TIFF, such as a logo), sized as a share of the page width and written once however many pages show them. As with headers, the dialog fills in again on a watermarked document, Update replaces the watermark and page colour already there (Panna's or Acrobat's), and Remove all takes them off |
 
 ## 5. Editing content
 

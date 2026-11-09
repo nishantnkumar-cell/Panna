@@ -282,6 +282,10 @@ pub(crate) struct Extra {
     /// Widgets to take off the page, and fields to take out of the form.
     pub drop_annots: Vec<ObjRef>,
     pub drop_fields: Vec<ObjRef>,
+    /// Page marks to take out, by their mark names (see [`super::marks::private_name`]).
+    pub drop_marks: Vec<&'static str>,
+    /// Settings kept with the page marks drawn, by mark name, to fill dialogs in again.
+    pub mark_settings: Vec<(&'static str, Vec<u8>)>,
     /// Annotations (form field widgets) to put in a new place, in the same space as `links`.
     pub moved: Vec<(ObjRef, [f64; 4])>,
     /// Pictures the page draws to move, replace or take out, by their place in
@@ -478,12 +482,16 @@ fn shown_space([x0, y0, x1, y1]: [f64; 4], rotate: i64) -> ([f64; 6], f64, f64) 
 
 /// A page's resources (`owner`'s value, if it has any) as a new dictionary that also names
 /// each of `forms` (a name and an object number).
+/// A page's resources with `forms` added to its XObjects, and the page marks named in
+/// `drop` swapped for an empty form (`blank`, written once), so the page draws nothing there.
 fn with_xobjects<'a>(
     w: &mut Writer,
     sources: &[Source<'a>],
     doc: usize,
     resources: Option<(ObjRef, &'a [u8])>,
     forms: &[(String, u32)],
+    drop: &[&str],
+    blank: &mut Option<u32>,
 ) -> Result<Vec<u8>, SaveError> {
     let pdf: &'a Pdf = sources.get(doc).ok_or(SaveError::Damaged)?.pdf;
     // A dictionary written in place, or the object it refers to, with the object it's in.
@@ -507,6 +515,14 @@ fn with_xobjects<'a>(
         }
     }
     let ours = |key: &[u8]| forms.iter().any(|(name, _)| name.as_bytes() == key);
+    // A page mark to take out, by the XObject entry's value.
+    let dropped = |value: &[u8]| {
+        !drop.is_empty()
+            && lex::reference(value)
+                .and_then(|r| pdf.xref().get::<hayro::hayro_syntax::object::Stream<'a>>(id(r)))
+                .and_then(|form| super::marks::private_name(form.dict()))
+                .is_some_and(|name| drop.contains(&name.as_str()))
+    };
     let copy =
         |w: &mut Writer, out: &mut Vec<u8>, owner: ObjRef, data: &[u8], skip: &dyn Fn(&[u8]) -> bool| {
             for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
@@ -529,7 +545,34 @@ fn with_xobjects<'a>(
             .find(|(k, _)| *k == b"XObject")
             .and_then(|(_, v)| resolve(owner, data.get(v.clone())?))
         {
-            copy(w, &mut xobjects, sub_owner, sub, &ours)?;
+            let marks: Vec<Vec<u8>> = lex::dict_entries(sub)
+                .ok_or(SaveError::Damaged)?
+                .into_iter()
+                .filter(|(_, v)| sub.get(v.clone()).is_some_and(dropped))
+                .map(|(k, _)| k.to_vec())
+                .collect();
+            copy(w, &mut xobjects, sub_owner, sub, &|k| {
+                ours(k) || marks.iter().any(|m| m.as_slice() == k)
+            })?;
+            if !marks.is_empty() {
+                let empty = match *blank {
+                    Some(num) => num,
+                    None => {
+                        let num = w.alloc();
+                        w.set(
+                            num,
+                            flate_stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] ", b""),
+                        );
+                        *blank = Some(num);
+                        num
+                    }
+                };
+                for key in marks {
+                    xobjects.extend_from_slice(b" /");
+                    xobjects.extend_from_slice(&key);
+                    xobjects.extend_from_slice(format!(" {empty} 0 R").as_bytes());
+                }
+            }
         }
     }
     out.extend_from_slice(b" /XObject <<");
@@ -606,6 +649,9 @@ pub(crate) fn rebuild(
     }
     // Pictures already written, by StampImage::key.
     let mut pictures_written: HashMap<usize, u32> = HashMap::new();
+    // When page marks are drawn, and the empty form put in place of marks taken out.
+    let stamp = super::pdf_date(std::time::SystemTime::now());
+    let mut blank_form: Option<u32> = None;
     let mut w = Writer {
         objects: Vec::new(),
         maps: vec![HashMap::new(); sources.len()],
@@ -829,7 +875,8 @@ pub(crate) fn rebuild(
                     || !extra.over.is_empty()
                     || !flattened.is_empty()
                     || redacting
-                    || editing_pictures;
+                    || editing_pictures
+                    || !extra.drop_marks.is_empty();
                 for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {
                     if key == b"Parent" || INHERITED.contains(&key) {
                         continue;
@@ -1001,12 +1048,32 @@ pub(crate) fn rebuild(
                                     None => drawing.resources(),
                                 },
                             };
+                            // Marks are named as Acrobat names them, so they can be found again
+                            // to update or remove, with the settings used to fill dialogs in.
+                            let piece = match drawing.private() {
+                                Some(private) => {
+                                    let settings = extra
+                                        .mark_settings
+                                        .iter()
+                                        .find(|(name, _)| *name == private)
+                                        .map(|(_, bytes)| {
+                                            let hex: String =
+                                                bytes.iter().map(|b| format!("{b:02X}")).collect();
+                                            format!("/PannaSettings <{hex}> ")
+                                        })
+                                        .unwrap_or_default();
+                                    format!(
+                                        "/PieceInfo << /ADBE_CompoundType << /LastModified ({stamp}) /Private /{private} >> >> {settings}"
+                                    )
+                                }
+                                None => String::new(),
+                            };
                             let form = w.alloc();
                             w.set(
                                 form,
                                 stream(
                                     &format!(
-                                        "/Type /XObject /Subtype /Form /BBox [0 0 {} {}] /Matrix [{}] /Resources {} ",
+                                        "/Type /XObject /Subtype /Form /BBox [0 0 {} {}] /Matrix [{}] /Resources {} {piece}",
                                         n(width),
                                         n(height),
                                         matrix.map(n).join(" "),
@@ -1157,7 +1224,15 @@ pub(crate) fn rebuild(
                     body.extend_from_slice(format!("/Contents [{before} 0 R ").as_bytes());
                     body.extend_from_slice(inner);
                     body.extend_from_slice(format!(" {after} 0 R]\n/Resources ").as_bytes());
-                    body.extend(with_xobjects(&mut w, sources, doc, resources, &forms)?);
+                    body.extend(with_xobjects(
+                        &mut w,
+                        sources,
+                        doc,
+                        resources,
+                        &forms,
+                        &extra.drop_marks,
+                        &mut blank_form,
+                    )?);
                     body.push(b'\n');
                 }
                 body.extend_from_slice(format!("/Parent {pages_num} 0 R\n/Rotate {rotate}\n>>").as_bytes());
@@ -1867,8 +1942,18 @@ fn redact_into<'a>(
                 doc,
                 Some((form_ref, raw)),
                 &inner_overrides,
+                &[],
+                &mut None,
             )?),
-            None => body.extend(with_xobjects(w, sources, doc, None, &inner_overrides)?),
+            None => body.extend(with_xobjects(
+                w,
+                sources,
+                doc,
+                None,
+                &inner_overrides,
+                &[],
+                &mut None,
+            )?),
         }
         let packed = super::pack::deflate(&inner);
         body.extend_from_slice(
