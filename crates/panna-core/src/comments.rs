@@ -5,7 +5,7 @@
 
 use hayro::hayro_interpret::TransformExt;
 use hayro::hayro_syntax::Pdf;
-use hayro::hayro_syntax::object::{Array, Dict, Name, Rect};
+use hayro::hayro_syntax::object::{Array, Dict, Name, Object, Rect};
 use hayro::hayro_syntax::page::Page;
 
 use crate::TextBox;
@@ -462,6 +462,7 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             width: width(&annot),
             contents: contents.clone(),
             author: author.clone(),
+            dashed: dashed(&annot),
         });
         out.push(Comment {
             id,
@@ -661,6 +662,16 @@ fn color(annot: &Dict<'_>) -> Color {
             (1.0 - y) * (1.0 - k),
         ]),
         _ => Color::BLACK,
+    }
+}
+
+/// Whether the border is dashed, from /BS or the older /Border array's dash part.
+fn dashed(annot: &Dict<'_>) -> bool {
+    match annot.get::<Dict<'_>>(b"BS") {
+        Some(bs) => bs.get::<Name<'_>>(b"S").is_some_and(|s| s.as_str() == "D"),
+        None => annot
+            .get::<Array<'_>>(b"Border")
+            .is_some_and(|b| matches!(b.iter::<Object<'_>>().nth(3), Some(Object::Array(_)))),
     }
 }
 

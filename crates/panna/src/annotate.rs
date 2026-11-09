@@ -3,7 +3,7 @@
 
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{
-    Column, Row, button, column, container, row, slider, space, text, text_editor, text_input,
+    Column, Row, button, column, container, pick_list, row, slider, space, text, text_editor, text_input,
     vertical_slider,
 };
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
@@ -209,6 +209,21 @@ impl Tool {
         )
     }
 
+    /// Tools that draw lines, so their thickness and dashing can be chosen.
+    pub fn strokes(self) -> bool {
+        matches!(
+            self,
+            Tool::Pen
+                | Tool::Rect
+                | Tool::Ellipse
+                | Tool::Arrow
+                | Tool::Line
+                | Tool::PolyLine
+                | Tool::Polygon
+                | Tool::Cloud
+        )
+    }
+
     fn index(self) -> usize {
         Tool::ALL.iter().position(|t| *t == self).unwrap_or(0)
     }
@@ -221,6 +236,41 @@ impl Tool {
             _ => SWATCHES[3],
         }
     }
+}
+
+/// The line thicknesses offered, in points, as in Acrobat's properties bar.
+pub const THICKNESSES: [Thickness; 8] = [
+    Thickness(0.5),
+    Thickness(1.0),
+    Thickness(2.0),
+    Thickness(3.0),
+    Thickness(4.0),
+    Thickness(6.0),
+    Thickness(8.0),
+    Thickness(12.0),
+];
+
+/// A line thickness in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Thickness(pub f32);
+
+impl std::fmt::Display for Thickness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} pt", self.0)
+    }
+}
+
+/// Whether a comment of this kind is drawn with lines whose thickness and dashing show.
+fn stroked(kind: &Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Ink(_)
+            | Kind::Rect(_)
+            | Kind::Ellipse(_)
+            | Kind::Line { .. }
+            | Kind::Polygon { .. }
+            | Kind::PolyLine(_)
+    )
 }
 
 /// Yellow, green, blue, red, purple, black.
@@ -260,6 +310,10 @@ pub enum Event {
     Opacity(f32),
     /// The opacity slider was let go.
     OpacityDone,
+    /// The line thickness, in points.
+    Width(f32),
+    /// Turns dashed lines on or off.
+    Dashed,
     /// Deletes the selected comment.
     DeletePicked,
     Undo,
@@ -361,6 +415,8 @@ pub struct Annotate {
     pub tool: Tool,
     colors: [Option<Color>; Tool::ALL.len()],
     opacities: [Option<f32>; Tool::ALL.len()],
+    widths: [Option<f32>; Tool::ALL.len()],
+    dashes: [bool; Tool::ALL.len()],
     /// Unsaved annotations, oldest first.
     pub items: Vec<Annotation>,
     /// Saved comments taken out, not yet saved.
@@ -429,6 +485,26 @@ impl Annotate {
             .copied()
             .flatten()
             .unwrap_or(1.0)
+    }
+
+    /// The current line thickness: the selected comment's, or the tool's.
+    pub fn width(&self) -> f32 {
+        if let Some(a) = self.picked_annotation() {
+            return a.width;
+        }
+        self.widths
+            .get(self.tool.index())
+            .copied()
+            .flatten()
+            .unwrap_or(STROKE_WIDTH)
+    }
+
+    /// Whether lines are dashed: the selected comment's, or the tool's.
+    pub fn dashed(&self) -> bool {
+        if let Some(a) = self.picked_annotation() {
+            return a.dashed;
+        }
+        self.dashes.get(self.tool.index()).copied().unwrap_or(false)
     }
 
     /// Forgets unsaved annotations once they are saved (or discarded, or a new file opens),
@@ -697,6 +773,31 @@ impl Annotate {
                     self.edit(first, |a| a.opacity = value);
                 } else if let Some(slot) = self.opacities.get_mut(self.tool.index()) {
                     *slot = Some(value);
+                }
+            }
+            Event::Width(value) => {
+                let value = value.clamp(0.25, 50.0);
+                if self.picked.is_some() {
+                    if self
+                        .picked_annotation()
+                        .is_some_and(|a| stroked(&a.kind) && a.width != value)
+                        && self.edit(true, |a| a.width = value)
+                    {
+                        return Outcome::Changed;
+                    }
+                } else if let Some(slot) = self.widths.get_mut(self.tool.index()) {
+                    *slot = Some(value);
+                }
+            }
+            Event::Dashed => {
+                if self.picked.is_some() {
+                    if self.picked_annotation().is_some_and(|a| stroked(&a.kind))
+                        && self.edit(true, |a| a.dashed = !a.dashed)
+                    {
+                        return Outcome::Changed;
+                    }
+                } else if let Some(slot) = self.dashes.get_mut(self.tool.index()) {
+                    *slot = !*slot;
                 }
             }
             Event::OpacityDone => {
@@ -1044,14 +1145,22 @@ impl Annotate {
             .flatten()
             .unwrap_or_else(|| tool.default_color());
         let opacity = self.opacities.get(tool.index()).copied().flatten().unwrap_or(1.0);
+        let width = self
+            .widths
+            .get(tool.index())
+            .copied()
+            .flatten()
+            .unwrap_or(STROKE_WIDTH);
+        let dashed = tool != Tool::Cloud && self.dashes.get(tool.index()).copied().unwrap_or(false);
         self.items.push(Annotation {
             page,
             kind,
             color,
             opacity,
-            width: STROKE_WIDTH,
+            width,
             contents,
             author: self.author.clone(),
+            dashed,
         });
     }
 
@@ -1069,6 +1178,7 @@ impl Annotate {
             width: STROKE_WIDTH,
             contents,
             author: self.author.clone(),
+            dashed: false,
         });
     }
 
@@ -1086,6 +1196,7 @@ impl Annotate {
             width: STROKE_WIDTH,
             contents: String::new(),
             author: self.author.clone(),
+            dashed: false,
         });
     }
 
@@ -1497,6 +1608,36 @@ impl Annotate {
                 tip,
             )
         });
+        // Thickness and dashing, for tools that draw lines and comments drawn with them.
+        let lines = match self.picked_annotation() {
+            Some(a) => stroked(&a.kind),
+            None => self.tool.strokes(),
+        };
+        if lines {
+            items.push(divider(vertical));
+            let width = self.width();
+            let chosen = THICKNESSES.iter().copied().find(|t| (t.0 - width).abs() < 0.01);
+            // No tooltip: it would cover the list when open. It reads "2 pt" and the like.
+            items.push(
+                pick_list(THICKNESSES, chosen, move |t: Thickness| ev(Event::Width(t.0)))
+                    .placeholder(format!("{width} pt"))
+                    .text_size(12)
+                    .padding([3, 6])
+                    .width(if vertical { 56 } else { 64 })
+                    .into(),
+            );
+            let cloud = self.picked_annotation().map_or(self.tool == Tool::Cloud, |a| {
+                matches!(a.kind, Kind::Polygon { cloud: true, .. })
+            });
+            if !cloud {
+                items.push(icons::toggle(
+                    Icon::Dashed,
+                    "Dashed lines",
+                    self.dashed(),
+                    ev(Event::Dashed),
+                ));
+            }
+        }
         items.push(divider(vertical));
         let m = icons::MOD;
         items.push(icons::button(
@@ -1846,6 +1987,8 @@ pub struct Preview<'a> {
     pub draft: &'a Draft,
     pub map: PageMap,
     pub color: Color,
+    pub width: f32,
+    pub dashed: bool,
 }
 
 impl canvas::Program<Message> for Preview<'_> {
@@ -1869,9 +2012,17 @@ impl canvas::Program<Message> for Preview<'_> {
         let (Some(first), Some(last)) = (view.first().copied(), view.last().copied()) else {
             return vec![frame.into_geometry()];
         };
-        let stroke = Stroke::default()
+        let width = self.width * self.map.zoom;
+        let dash = [width * 3.0; 2];
+        let mut stroke = Stroke::default()
             .with_color(to_iced(self.color, 1.0))
-            .with_width(STROKE_WIDTH * self.map.zoom);
+            .with_width(width);
+        if self.dashed {
+            stroke.line_dash = canvas::LineDash {
+                segments: &dash,
+                offset: 0,
+            };
+        }
         let top_left = Point::new(first.x.min(last.x), first.y.min(last.y));
         let size = Size::new((first.x - last.x).abs(), (first.y - last.y).abs());
         let path = match self.draft.tool {
@@ -1914,6 +2065,8 @@ pub fn preview<'a>(
             draft,
             map,
             color: annotate.color(),
+            width: annotate.width(),
+            dashed: annotate.dashed() && annotate.tool != Tool::Cloud,
         })
         .width(size.width)
         .height(size.height)
@@ -2372,6 +2525,7 @@ mod tests {
             width: 1.0,
             contents: String::new(),
             author: String::new(),
+            dashed: false,
         };
         let mut saved = Comment::from(&accepted);
         let saved_id = CommentId {
@@ -2425,6 +2579,31 @@ mod tests {
     }
 
     #[test]
+    fn line_thickness_and_dashes_go_to_new_and_selected_shapes() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Rect));
+        a.update(Event::Width(4.0));
+        a.update(Event::Dashed);
+        assert!((a.width(), a.dashed()) == (4.0, true));
+        rect_at(&mut a, 10.0);
+        let first = a.items.first().map(|i| (i.width, i.dashed));
+        assert_eq!(first, Some((4.0, true)));
+        // Another tool keeps its own.
+        a.update(Event::Tool(Tool::Line));
+        assert!((a.width(), a.dashed()) == (STROKE_WIDTH, false));
+        // The selected shape changes, as one undo step each.
+        a.update(Event::Tool(Tool::Select));
+        a.pick(Picked::New(0));
+        assert!(matches!(a.update(Event::Width(1.0)), Outcome::Changed));
+        assert!(matches!(a.update(Event::Dashed), Outcome::Changed));
+        let now = a.items.first().map(|i| (i.width, i.dashed));
+        assert_eq!(now, Some((1.0, false)));
+        a.update(Event::Undo);
+        let back = a.items.first().map(|i| (i.width, i.dashed));
+        assert_eq!(back, Some((1.0, true)));
+    }
+
+    #[test]
     fn recolouring_the_selected_comment() {
         let mut a = Annotate::new();
         rect_at(&mut a, 10.0);
@@ -2469,6 +2648,7 @@ mod tests {
             width: 1.0,
             contents: String::new(),
             author: String::new(),
+            dashed: false,
         };
         let mut comment = Comment::from(&shape);
         comment.id = Some(id);

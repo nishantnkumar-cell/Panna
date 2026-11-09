@@ -75,6 +75,7 @@ fn annotation(kind: Kind) -> Annotation {
         width: 4.0,
         contents: "Hello (world)".into(),
         author: "Tester".into(),
+        dashed: false,
     }
 }
 
@@ -329,6 +330,8 @@ fn saved_comments_come_back_editable() {
         arrow: true,
     });
     line.opacity = 0.5;
+    line.dashed = true;
+    line.width = 1.5;
     let polygon = vec![(20.0, 20.0), (80.0, 30.0), (60.0, 80.0)];
     let shapes = [
         annotation(Kind::Rect(rect)),
@@ -366,6 +369,7 @@ fn saved_comments_come_back_editable() {
             assert_eq!(back.width, original.width);
         }
         assert!((back.opacity - original.opacity).abs() < 0.01);
+        assert_eq!(back.dashed, original.dashed);
         match (&original.kind, &back.kind) {
             (Kind::Rect(a), Kind::Rect(b)) => {
                 assert!((a.x0 - b.x0).abs() < 0.01 && (a.y1 - b.y1).abs() < 0.01, "{b:?}");

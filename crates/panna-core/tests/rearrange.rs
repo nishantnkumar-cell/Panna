@@ -270,6 +270,7 @@ fn the_worker_changes_pages_with_undo_and_saves() {
                 width: 2.0,
                 contents: String::new(),
                 author: String::new(),
+                dashed: false,
             }],
             ..Changes::default()
         },
