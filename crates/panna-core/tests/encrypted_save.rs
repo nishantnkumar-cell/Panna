@@ -43,6 +43,7 @@ fn changes_save_into_encrypted_files() {
                     width: 4.0,
                     contents: "Hello (world)".into(),
                     author: "Tester".into(),
+                    dashed: false,
                 }],
                 fields: vec![(field, FieldValue::Text("Jane Doe".into()))],
                 ..Changes::default()
@@ -108,6 +109,7 @@ fn the_worker_keeps_the_password_for_changes_and_saves() {
         width: 4.0,
         contents: String::new(),
         author: String::new(),
+        dashed: false,
     };
     for (round, y0) in [300.0, 400.0].into_iter().enumerate() {
         let (tx, rx) = mpsc::channel();
@@ -182,6 +184,7 @@ fn bookmarks_added_to_encrypted_files_read_back() {
             depth: 0,
             page: Some(0),
             id: None,
+            ..Default::default()
         }];
         let saved = doc.with_bookmarks(&added).unwrap();
         let again = doc.reopen(saved.clone()).unwrap();

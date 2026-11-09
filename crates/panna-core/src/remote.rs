@@ -277,11 +277,14 @@ pub(crate) fn perform<'a>(
         } => Answer::Revised(replace_from_file(doc, first, count, from, bytes, &name)),
         Op::WithChanges(changes) => Answer::Revised(revision(doc, doc.with_changes(&changes))),
         Op::Edit(edit) => Answer::Revised(match edit {
-            PageEdit::Undo | PageEdit::InsertFile { .. } | PageEdit::ReplaceFromFile { .. } => {
-                Err(SaveError::Damaged)
-            }
+            PageEdit::Undo
+            | PageEdit::InsertFile { .. }
+            | PageEdit::InsertPicture { .. }
+            | PageEdit::ReplaceFromFile { .. } => Err(SaveError::Damaged),
             PageEdit::Plan(plan) => revision(doc, doc.rearranged(&plan, &[])),
             PageEdit::Crop { pages, margins } => revision(doc, doc.cropped(&pages, margins)),
+            PageEdit::TrimWhite(pages) => revision(doc, doc.white_trimmed(&pages)),
+            PageEdit::Duplicate(page) => revision(doc, doc.with_page_duplicated(page)),
             PageEdit::HeaderFooter { pages, marks } => revision(doc, doc.with_header_footer(&pages, &marks)),
             PageEdit::Protect(protection) => protected(doc, doc.protected(protection.as_ref())),
             PageEdit::Strengthen => protected(doc, doc.strengthened()),

@@ -20,6 +20,10 @@ pub enum Op {
     InsertBlank,
     /// Asks for a PDF and puts its pages after the current one.
     InsertFile,
+    /// A page of the picture on the clipboard, after the current one.
+    InsertClipboard,
+    /// A copy of the current page, after it.
+    Duplicate,
     /// Asks for a PDF and which pages of it replace which pages here.
     Replace,
     /// Asks how the pages are numbered (i, ii, iii then 1, 2, 3).
@@ -113,6 +117,12 @@ pub fn tools<'a>(count: usize, current: usize, can_undo: bool, busy: bool) -> El
             "Insert pages from another PDF after this one",
             ev(Op::InsertFile, true)
         ),
+        icons::button(
+            Icon::FromClipboard,
+            "Insert the picture on the clipboard as a page after this one",
+            ev(Op::InsertClipboard, true)
+        ),
+        icons::button(Icon::Duplicate, "Duplicate this page", ev(Op::Duplicate, true)),
         icons::button(
             Icon::PageReplace,
             "Replace pages with pages from another PDF",
@@ -363,6 +373,8 @@ pub struct Cropping {
     /// Top, right, bottom, left.
     pub margins: [String; 4],
     pub all: bool,
+    /// Trim each page to what's drawn on it instead, as Acrobat's Remove White Margins.
+    pub white: bool,
 }
 
 impl Default for Cropping {
@@ -370,6 +382,7 @@ impl Default for Cropping {
         Self {
             margins: std::array::from_fn(|_| "0".to_owned()),
             all: false,
+            white: false,
         }
     }
 }
@@ -378,6 +391,7 @@ impl Default for Cropping {
 pub enum CropEvent {
     Margin(usize, String),
     All(bool),
+    White(bool),
     Go,
     Cancel,
 }
@@ -415,9 +429,11 @@ pub fn crop_margins(state: &Cropping) -> Result<panna_core::Margins, String> {
 pub fn crop_card<'a>(state: &Cropping) -> Element<'a, Message> {
     let ev = Message::Crop;
     let parsed = crop_margins(state);
+    let white = state.white;
+    let ready = white || parsed.is_ok();
     let field = |i: usize, label: &'static str| {
         let input = text_input("0", state.margins.get(i).map_or("", String::as_str))
-            .on_input(move |v| ev(CropEvent::Margin(i, v)))
+            .on_input_maybe((!white).then_some(move |v| ev(CropEvent::Margin(i, v))))
             .on_submit(ev(CropEvent::Go))
             .width(70);
         let input = if i == 0 { input.id(crop_input_id()) } else { input };
@@ -430,6 +446,7 @@ pub fn crop_card<'a>(state: &Cropping) -> Element<'a, Message> {
         .iter()
         .all(|m| m.trim().parse::<f32>().is_ok_and(|v| v == 0.0));
     let hint: Element<'a, Message> = match &parsed {
+        _ if white => space().height(0).into(),
         Ok(_) => space().height(0).into(),
         Err(_) if untouched => space().height(0).into(),
         Err(e) => text(e.clone())
@@ -447,6 +464,10 @@ pub fn crop_card<'a>(state: &Cropping) -> Element<'a, Message> {
             row![field(0, "Top"), field(1, "Right")].spacing(16),
             row![field(2, "Bottom"), field(3, "Left")].spacing(16),
             hint,
+            checkbox(white)
+                .label("Remove white margins")
+                .text_size(13)
+                .on_toggle(move |v| ev(CropEvent::White(v))),
             radio("This page", false, all, |v| ev(CropEvent::All(v))),
             radio("All pages", true, all, |v| ev(CropEvent::All(v))),
             row![
@@ -454,7 +475,7 @@ pub fn crop_card<'a>(state: &Cropping) -> Element<'a, Message> {
                 button("Cancel")
                     .style(button::secondary)
                     .on_press(ev(CropEvent::Cancel)),
-                button("Crop").on_press_maybe(parsed.is_ok().then_some(ev(CropEvent::Go))),
+                button("Crop").on_press_maybe(ready.then_some(ev(CropEvent::Go))),
             ]
             .spacing(8),
         ]

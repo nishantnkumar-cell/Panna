@@ -79,6 +79,14 @@ pub(crate) fn check(pdf: &Pdf, limits: &Limits) -> Result<(), Refusal> {
         for content in page_contents(page.raw()) {
             total = total.saturating_add(runs.of_content(&content, resources.as_ref(), MAX_FORM_DEPTH));
         }
+        // Annotations' appearances are drawn after the content, as forms with the page's
+        // resources to fall back on.
+        for appearance in page_appearances(page.raw()) {
+            if total > MAX_FORM_RUNS {
+                break;
+            }
+            total = total.saturating_add(runs.of_form(&appearance, resources.as_ref(), MAX_FORM_DEPTH));
+        }
         if total > MAX_FORM_RUNS {
             return Err(Refusal::Forms {
                 page: index,
@@ -107,6 +115,28 @@ fn page_contents<'a>(page: &Dict<'a>) -> Vec<Stream<'a>> {
         Some(list) => list.iter::<Stream<'_>>().take(10_000).collect(),
         None => page.get::<Stream<'_>>(b"Contents").into_iter().collect(),
     }
+}
+
+/// The appearance streams the engine draws for the page's annotations: the normal
+/// appearance, or the one for the annotation's state (falling back to Off).
+fn page_appearances<'a>(page: &Dict<'a>) -> Vec<Stream<'a>> {
+    let Some(annots) = page.get::<Array<'_>>(b"Annots") else {
+        return Vec::new();
+    };
+    annots
+        .iter::<Dict<'_>>()
+        .take(10_000)
+        .filter_map(
+            |annot| match annot.get::<Dict<'_>>(b"AP")?.get::<Object<'_>>(b"N")? {
+                Object::Stream(stream) => Some(stream),
+                Object::Dict(states) => annot
+                    .get::<Name<'_>>(b"AS")
+                    .and_then(|state| states.get::<Stream<'_>>(state.as_ref()))
+                    .or_else(|| states.get::<Stream<'_>>(b"Off")),
+                _ => None,
+            },
+        )
+        .collect()
 }
 
 /// How many times forms run, counted as the engine would draw them.

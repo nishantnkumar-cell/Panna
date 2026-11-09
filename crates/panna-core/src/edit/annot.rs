@@ -95,6 +95,9 @@ pub struct Annotation {
     pub opacity: f32,
     /// Stroke width in points, for ink, shapes and lines.
     pub width: f32,
+    /// Drawn with a dashed line, for ink, shapes and lines (Acrobat's dashed style).
+    #[serde(default)]
+    pub dashed: bool,
     /// The comment text (for notes and text boxes, the text itself).
     pub contents: String,
     pub author: String,
@@ -647,7 +650,7 @@ impl Annotation {
             // Not shown on the page by itself (NoView): it belongs to the comment's thread.
             dict.push_str("/F 32 ");
         }
-        if matches!(
+        let stroked = matches!(
             self.kind,
             Kind::Ink(_)
                 | Kind::Rect(_)
@@ -655,7 +658,13 @@ impl Annotation {
                 | Kind::Line { .. }
                 | Kind::Polygon { .. }
                 | Kind::PolyLine(_)
-        ) {
+        );
+        // A cloud's bumps are its style; it isn't dashed too.
+        let dashed = self.dashed && stroked && !matches!(self.kind, Kind::Polygon { cloud: true, .. });
+        let dash = (width * 3.0).max(3.0);
+        if dashed {
+            let _ = write!(dict, "/BS << /W {} /S /D /D [{d} {d}] >> ", n(width), d = n(dash));
+        } else if stroked {
             let _ = write!(dict, "/BS << /W {} >> ", n(width));
         }
         if !self.contents.is_empty() {
@@ -667,7 +676,11 @@ impl Annotation {
         dict.push_str(&extra);
         dict.push_str(">>");
 
-        let stream_body = content.trim_end().to_owned();
+        let stream_body = if dashed {
+            format!("[{d} {d}] 0 d {}", content.trim_end(), d = n(dash))
+        } else {
+            content.trim_end().to_owned()
+        };
         let appearance = format!(
             "<< /Type /XObject /Subtype /Form /BBox {rect} /Resources << {resources}/ExtGState << /GS0 << \
              /CA {o} /ca {o} /BM {blend} >> >> >> /Length {} >>\nstream\n/GS0 gs {stream_body}\nendstream",
@@ -1010,6 +1023,7 @@ mod tests {
             width: 1.0,
             contents: String::new(),
             author: String::new(),
+            dashed: false,
         };
         a.translate(10.0, -1.0);
         assert!(matches!(
@@ -1033,6 +1047,7 @@ mod tests {
             width: 1.0,
             contents: String::new(),
             author: String::new(),
+            dashed: false,
         };
         a.resize(tb(10.0, 10.0, 20.0, 30.0), tb(10.0, 10.0, 40.0, 20.0));
         assert_eq!(a.kind, Kind::Ink(vec![vec![(10.0, 10.0), (40.0, 20.0)]]));

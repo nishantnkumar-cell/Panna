@@ -270,6 +270,7 @@ fn the_worker_changes_pages_with_undo_and_saves() {
                 width: 2.0,
                 contents: String::new(),
                 author: String::new(),
+                dashed: false,
             }],
             ..Changes::default()
         },
@@ -599,4 +600,86 @@ fn password_protection_is_added_changed_and_removed() {
     // No open password: anyone can read it, under the restrictions.
     let (bytes, _) = doc.protected(Some(&Protection::default())).unwrap();
     assert!(text(&open(bytes, None), 1).contains("Page 2"));
+}
+
+#[test]
+fn white_margins_are_trimmed_to_what_is_drawn() {
+    // A 300 × 400 page with a box from (50, 100) to (150, 300), and a blank page.
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 4 0 R >>",
+        "<< /Length 21 >>\nstream\n50 100 100 200 re f\nendstream",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    let doc = open(bytes, None);
+    let [top, right, bottom, left] = doc.white_margins(0).unwrap();
+    let near = |a: f32, b: f32| (a - b).abs() <= 1.5;
+    assert!(near(top, 100.0) && near(right, 150.0) && near(bottom, 100.0) && near(left, 50.0));
+    assert_eq!(doc.white_margins(1), None);
+    let out = open(doc.white_trimmed(&[0, 1]).unwrap(), None);
+    let pages = out.info().unwrap().pages;
+    assert!(
+        near(pages[0].width, 100.0) && near(pages[0].height, 200.0),
+        "{:?}",
+        pages[0]
+    );
+    assert_eq!((pages[1].width, pages[1].height), (300.0, 400.0));
+}
+
+#[test]
+fn a_duplicated_page_gets_its_own_copy_of_its_comments() {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 4 0 R /Annots [5 0 R] \
+         /Resources << /Font << /F1 6 0 R >> >> >>",
+        "<< /Length 39 >>\nstream\nBT /F1 24 Tf 40 300 Td (Original) Tj ET\nendstream",
+        "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (Note) /P 3 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    let doc = open(bytes, None);
+    let out = open(doc.with_page_duplicated(0).unwrap(), None);
+    assert_eq!(out.page_count(), 2);
+    assert!(text(&out, 1).contains("Original"));
+    let comments = out.comments();
+    assert_eq!(comments.iter().map(|c| c.page).collect::<Vec<_>>(), [0, 1]);
+    assert_ne!(comments[0].id, comments[1].id);
+    assert!(doc.with_page_duplicated(1).is_err());
 }

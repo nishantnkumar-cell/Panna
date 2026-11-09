@@ -11,7 +11,7 @@ use hayro::hayro_syntax::object::{Array, Dict, MaybeRef, Object, ObjectIdentifie
 use crate::document::decode_text_string;
 
 /// One bookmark. `depth` 0 is a top-level entry.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OutlineItem {
     pub title: String,
     pub depth: u16,
@@ -20,6 +20,23 @@ pub struct OutlineItem {
     /// The bookmark's object in the file; `None` for one not saved yet. Kept when bookmarks
     /// are edited, so a bookmark keeps what it had (its exact destination, its style).
     pub id: Option<crate::ObjRef>,
+    /// The title's colour (`/C`), as 8-bit red, green and blue; `None` for the reader's own.
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    /// Shown with the ones under it hidden (a negative `/Count`).
+    #[serde(default)]
+    pub closed: bool,
+}
+
+impl OutlineItem {
+    /// The `/F` style flags: 1 italic, 2 bold (ISO 32000-2, table 151).
+    pub(crate) fn flags(&self) -> i32 {
+        i32::from(self.italic) | (i32::from(self.bold) << 1)
+    }
 }
 
 const MAX_ITEMS: usize = 20_000;
@@ -122,11 +139,25 @@ fn walk<'a>(ctx: &mut Ctx<'a>, first: Option<Dict<'a>>, depth: u16) {
         let id = item
             .obj_id()
             .and_then(|id| crate::ObjRef::new(id.obj_number, id.gen_number));
+        let flags = item.get::<i32>(b"F").unwrap_or(0);
+        let color = item.get::<Array<'_>>(b"C").and_then(|c| {
+            let v: Vec<f32> = c.iter::<f32>().take(4).collect();
+            let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+            match v.as_slice() {
+                [r, g, b] => Some([byte(*r), byte(*g), byte(*b)]),
+                _ => None,
+            }
+        });
         ctx.out.push(OutlineItem {
             title,
             depth,
             page,
             id,
+            // Black is how readers show a plain title anyway.
+            color: color.filter(|c| *c != [0, 0, 0]),
+            bold: flags & 2 != 0,
+            italic: flags & 1 != 0,
+            closed: item.get::<i32>(b"Count").is_some_and(|c| c < 0),
         });
         walk(ctx, item.get::<Dict<'_>>(b"First"), depth + 1);
         node = item.get::<Dict<'_>>(b"Next");

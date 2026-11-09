@@ -12,8 +12,11 @@ use hayro::hayro_syntax::object::{Dict, ObjectIdentifier};
 use super::{SaveError, annot, lex, update};
 use crate::OutlineItem;
 
-/// Entries that place an item in the tree; everything else on an existing item is kept.
-const TREE_KEYS: &[&[u8]] = &[b"Title", b"Parent", b"Prev", b"Next", b"First", b"Last", b"Count"];
+/// Entries that place an item in the tree or style its title, written from the item;
+/// everything else on an existing item is kept.
+const TREE_KEYS: &[&[u8]] = &[
+    b"Title", b"Parent", b"Prev", b"Next", b"First", b"Last", b"Count", b"C", b"F",
+];
 /// Entries that say where an item goes, dropped when it's pointed at another page.
 const TARGET_KEYS: &[&[u8]] = &[b"Dest", b"A", b"SE"];
 
@@ -154,12 +157,18 @@ pub(crate) fn with_outline(
         if let Some(next) = node.next {
             body.push_str(&format!(" /Next {}", item_ref(next)?));
         }
-        let mut closed = false;
+        if let Some([r, g, b]) = item.color {
+            let c = |v: u8| f32::from(v) / 255.0;
+            body.push_str(&format!(" /C [{:.3} {:.3} {:.3}]", c(r), c(g), c(b)));
+        }
+        if item.flags() != 0 {
+            body.push_str(&format!(" /F {}", item.flags()));
+        }
+        let closed = item.closed;
         if kept {
             let dict = xref
                 .get::<Dict<'_>>(ident(num, generation))
                 .ok_or(SaveError::Damaged)?;
-            closed = dict.get::<i32>(b"Count").is_some_and(|c| c < 0);
             let same_page = item.id.and_then(|id| before.get(&id)) == Some(&item.page);
             let data = dict.data();
             for (key, value) in lex::dict_entries(data).ok_or(SaveError::Damaged)? {

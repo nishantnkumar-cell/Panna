@@ -563,6 +563,7 @@ mod tests {
             width: 1.0,
             contents: String::new(),
             author: String::new(),
+            dashed: false,
         };
         let c = Comment::from(&note);
         let mut view = ListView::default();

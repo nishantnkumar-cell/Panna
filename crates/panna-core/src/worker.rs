@@ -58,6 +58,13 @@ pub enum PageEdit {
     Plan(Vec<PageSource>),
     /// Every page of another file, inserted before page `at`.
     InsertFile { at: usize, path: PathBuf },
+    /// A page of a picture (a pasted one, say), 8-bit RGBA, inserted before page `at`.
+    InsertPicture {
+        at: usize,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
     /// `count` pages from `first` replaced by another file's pages from `from`.
     ReplaceFromFile {
         first: usize,
@@ -70,6 +77,11 @@ pub enum PageEdit {
         pages: Vec<usize>,
         margins: crate::Margins,
     },
+    /// Trims the white around what's drawn from these pages, as Acrobat's Remove White
+    /// Margins.
+    TrimWhite(Vec<usize>),
+    /// Puts a copy of the page after it.
+    Duplicate(usize),
     /// Draws header and footer text on these pages, numbered in this order.
     HeaderFooter {
         pages: Vec<usize>,
@@ -914,6 +926,25 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                                 revised(&current, ask!(Op::InsertFile { at, bytes, name }, Revised))
                             }
                             Err(e) => Err(e),
+                        },
+                        PageEdit::InsertPicture {
+                            at,
+                            width,
+                            height,
+                            rgba,
+                        } => match crate::edit::rgba_to_pdf(width, height, &rgba) {
+                            Ok(bytes) => revised(
+                                &current,
+                                ask!(
+                                    Op::InsertFile {
+                                        at,
+                                        bytes,
+                                        name: "Clipboard".into()
+                                    },
+                                    Revised
+                                ),
+                            ),
+                            Err(_) => Err(SaveError::Damaged),
                         },
                         PageEdit::ReplaceFromFile {
                             first,
