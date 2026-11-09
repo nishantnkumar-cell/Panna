@@ -87,10 +87,13 @@ impl fmt::Display for PanelChoice {
 pub struct LayoutChoice(pub OpenLayout);
 
 impl LayoutChoice {
-    const ALL: [LayoutChoice; 4] = [
+    const ALL: [LayoutChoice; 7] = [
         LayoutChoice(OpenLayout::Default),
+        LayoutChoice(OpenLayout::SinglePage),
         LayoutChoice(OpenLayout::Single),
+        LayoutChoice(OpenLayout::TwoPage),
         LayoutChoice(OpenLayout::Two),
+        LayoutChoice(OpenLayout::TwoPageCover),
         LayoutChoice(OpenLayout::TwoCover),
     ];
 }
@@ -99,9 +102,12 @@ impl fmt::Display for LayoutChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self.0 {
             OpenLayout::Default => "As the viewer chooses",
-            OpenLayout::Single => "Single page",
-            OpenLayout::Two => "Two pages",
-            OpenLayout::TwoCover => "Two pages, cover alone",
+            OpenLayout::SinglePage => "Single page",
+            OpenLayout::Single => "Single page, scrolling",
+            OpenLayout::TwoPage => "Two pages",
+            OpenLayout::Two => "Two pages, scrolling",
+            OpenLayout::TwoPageCover => "Two pages, cover alone",
+            OpenLayout::TwoCover => "Two pages, cover alone, scrolling",
         })
     }
 }

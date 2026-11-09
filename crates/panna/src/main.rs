@@ -321,6 +321,8 @@ enum Message {
     /// Turns the comment tools on if needed and picks a tool, from the Comment menu.
     CommentTool(annotate::Tool),
     SetSpread(Spread),
+    /// Turns continuous scrolling on, or off to show a page or spread at a time.
+    SetScrolling(bool),
     SetColors(colors::PageColors),
     /// Shows or hides the keyboard shortcuts card.
     Shortcuts(bool),
@@ -515,6 +517,9 @@ struct App {
     rotation: u8,
     scale_factor: f32,
     viewport: ViewportState,
+    /// Where a page-at-a-time view was just turned to, and when, until the view gets there:
+    /// scroll events already on their way are from before the turn.
+    turned_to: Option<(f32, std::time::Instant)>,
     page_input: String,
     settings: Settings,
     trusted: trust::Trusted,
@@ -851,6 +856,8 @@ struct OpenDoc {
     layers_shown: Vec<bool>,
     /// The page layout the file asks for, until the user picks another.
     spread: Option<Spread>,
+    /// Whether the file asks for scrolling, until the user picks.
+    scrolling: Option<bool>,
     /// Views to go back and forward to: where on which page, and the zoom.
     back: Vec<View>,
     forward: Vec<View>,
@@ -1144,6 +1151,7 @@ impl App {
                 width: 1000.0,
                 height: 800.0,
             },
+            turned_to: None,
             page_input: String::new(),
             bars: Bars::new(settings.bars, menu::HEIGHT),
             sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
@@ -1379,8 +1387,21 @@ impl App {
                             panna_core::OpenLayout::Single => Some(Spread::Single),
                             panna_core::OpenLayout::Two => Some(Spread::Two),
                             panna_core::OpenLayout::TwoCover => Some(Spread::TwoCover),
+                            panna_core::OpenLayout::SinglePage => Some(Spread::Single),
+                            panna_core::OpenLayout::TwoPage => Some(Spread::Two),
+                            panna_core::OpenLayout::TwoPageCover => Some(Spread::TwoCover),
                         };
-                        doc.layout = PageLayout::new(&info.pages, doc.spread.unwrap_or(self.settings.spread));
+                        doc.scrolling = match view.layout {
+                            panna_core::OpenLayout::Default => None,
+                            layout => Some(!layout.paged()),
+                        };
+                        let fill = page_fill(
+                            doc.scrolling.unwrap_or(self.settings.scrolling),
+                            self.viewport.height,
+                            self.zoom,
+                        );
+                        doc.layout =
+                            PageLayout::filled(&info.pages, doc.spread.unwrap_or(self.settings.spread), fill);
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
                         doc.thumb_layout = ThumbLayout::new(&info.pages);
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
@@ -1489,6 +1510,17 @@ impl App {
             }
             Message::Scrolled(viewport) => {
                 let bounds = viewport.bounds();
+                let before = self.viewport;
+                if let Some((y, at)) = self.turned_to {
+                    let arrived = (viewport.absolute_offset().y - y).abs() < 0.5;
+                    if arrived || at.elapsed() > std::time::Duration::from_millis(400) {
+                        self.turned_to = None;
+                    } else {
+                        // A scroll from before the page turned: stay on the new page.
+                        let x = viewport.absolute_offset().x;
+                        return operation::scroll_to(scroll_id(), AbsoluteOffset { x, y });
+                    }
+                }
                 self.viewport = ViewportState {
                     offset_x: viewport.absolute_offset().x,
                     offset_y: viewport.absolute_offset().y,
@@ -1496,10 +1528,39 @@ impl App {
                     height: bounds.height,
                 };
                 self.page_input.clear();
-                match self.opening.take() {
-                    Some(view) => self.open_at(view),
-                    None => self.request_visible(),
+                if let Some(view) = self.opening.take() {
+                    return self.open_at(view);
                 }
+                let Some(doc) = self.doc.as_ref().filter(|d| d.layout.paged()) else {
+                    return self.request_visible();
+                };
+                // Showing a page at a time: a new viewport height makes rows taller or
+                // shorter, and scrolling past a row's end turns to the next.
+                if (before.height - self.viewport.height).abs() > 0.5 {
+                    let page = doc
+                        .layout
+                        .page_at(before.offset_y + before.height * 0.3, self.zoom);
+                    return self.relayout_at(page);
+                }
+                let y = self.viewport.offset_y;
+                let settled = doc
+                    .layout
+                    .settle(before.offset_y, y, self.viewport.height, self.zoom);
+                if (settled - y).abs() < 0.5 {
+                    return self.request_visible();
+                }
+                self.viewport.offset_y = settled;
+                self.turned_to = Some((settled, std::time::Instant::now()));
+                Task::batch([
+                    operation::scroll_to(
+                        scroll_id(),
+                        AbsoluteOffset {
+                            x: self.viewport.offset_x,
+                            y: settled,
+                        },
+                    ),
+                    self.request_visible(),
+                ])
             }
             Message::ZoomIn => {
                 let next = ZOOM_STEPS.iter().copied().find(|z| *z > self.zoom + 0.001);
@@ -1545,6 +1606,14 @@ impl App {
             Message::NextSpread => {
                 let current = self.doc.as_ref().and_then(|d| d.spread);
                 self.update(Message::SetSpread(current.unwrap_or(self.settings.spread).next()))
+            }
+            Message::SetScrolling(on) => {
+                if let Some(doc) = &mut self.doc {
+                    doc.scrolling = None;
+                }
+                self.settings.scrolling = on;
+                self.settings.save();
+                self.relayout()
             }
             Message::SetSpread(spread) => {
                 if let Some(doc) = &mut self.doc {
@@ -1853,10 +1922,14 @@ impl App {
                         (true, sidebar::Tab::Layers) => panna_core::OpenPanel::Layers,
                         (true, _) => panna_core::OpenPanel::Pages,
                     };
-                    let layout = match doc.spread.unwrap_or(self.settings.spread) {
-                        Spread::Single => panna_core::OpenLayout::Single,
-                        Spread::Two => panna_core::OpenLayout::Two,
-                        Spread::TwoCover => panna_core::OpenLayout::TwoCover,
+                    let scrolling = doc.scrolling.unwrap_or(self.settings.scrolling);
+                    let layout = match (doc.spread.unwrap_or(self.settings.spread), scrolling) {
+                        (Spread::Single, true) => panna_core::OpenLayout::Single,
+                        (Spread::Two, true) => panna_core::OpenLayout::Two,
+                        (Spread::TwoCover, true) => panna_core::OpenLayout::TwoCover,
+                        (Spread::Single, false) => panna_core::OpenLayout::SinglePage,
+                        (Spread::Two, false) => panna_core::OpenLayout::TwoPage,
+                        (Spread::TwoCover, false) => panna_core::OpenLayout::TwoPageCover,
                     };
                     let view = panna_core::InitialView {
                         page: self.current_page(),
@@ -4262,7 +4335,12 @@ impl App {
                 };
                 // Unsaved comments and form entries are now part of the document.
                 let sizes = rotated_sizes(&info.pages, self.rotation);
-                open.layout = PageLayout::new(&sizes, open.spread.unwrap_or(self.settings.spread));
+                let fill = page_fill(
+                    open.scrolling.unwrap_or(self.settings.scrolling),
+                    self.viewport.height,
+                    self.zoom,
+                );
+                open.layout = PageLayout::filled(&sizes, open.spread.unwrap_or(self.settings.spread), fill);
                 open.pages = info.pages.iter().map(|_| Slot::default()).collect();
                 open.thumb_layout = ThumbLayout::new(&sizes);
                 open.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
@@ -5858,6 +5936,7 @@ impl App {
             texts: Vec::new(),
             layers_shown: Vec::new(),
             spread: None,
+            scrolling: None,
             back: Vec::new(),
             forward: Vec::new(),
         });
@@ -5922,6 +6001,12 @@ impl App {
             self.zoom = zoom;
             return Task::none();
         };
+        if doc.layout.paged() {
+            // Rows are as tall as the viewport at the new zoom: start the page again.
+            let page = self.current_page();
+            self.zoom = zoom;
+            return self.relayout_at(page);
+        }
         // Keep the point at the top of the viewport in place while zooming.
         let anchor = doc.layout.unzoomed_y(self.viewport.offset_y, self.zoom);
         self.zoom = zoom;
@@ -5940,11 +6025,21 @@ impl App {
     /// Regroups pages into rows after the spread changes, staying on the current page.
     fn relayout(&mut self) -> Task<Message> {
         let page = self.current_page();
+        self.relayout_at(page)
+    }
+
+    /// Regroups pages into rows and shows `page`.
+    fn relayout_at(&mut self, page: usize) -> Task<Message> {
         let Some(doc) = &mut self.doc else {
             return Task::none();
         };
         let sizes = doc.layout.sizes().to_vec();
-        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
+        let fill = page_fill(
+            doc.scrolling.unwrap_or(self.settings.scrolling),
+            self.viewport.height,
+            self.zoom,
+        );
+        doc.layout = PageLayout::filled(&sizes, doc.spread.unwrap_or(self.settings.spread), fill);
         self.go_to_page(page)
     }
 
@@ -5955,7 +6050,12 @@ impl App {
         };
         self.rotation = (self.rotation + turns) % 4;
         let sizes = rotated_sizes(&doc.info.pages, self.rotation);
-        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
+        let fill = page_fill(
+            doc.scrolling.unwrap_or(self.settings.scrolling),
+            self.viewport.height,
+            self.zoom,
+        );
+        doc.layout = PageLayout::filled(&sizes, doc.spread.unwrap_or(self.settings.spread), fill);
         doc.thumb_layout = ThumbLayout::new(&sizes);
         doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
         doc.thumbs.iter_mut().for_each(|thumb| *thumb = Thumb::default());
@@ -6707,6 +6807,11 @@ impl App {
                     plain("Reset toolbar layout", "", Some(Message::Toolbar(T::Reset))),
                 ]);
                 let spread = self.spread();
+                let scrolling = self
+                    .doc
+                    .as_ref()
+                    .and_then(|d| d.scrolling)
+                    .unwrap_or(self.settings.scrolling);
                 let colors = self.settings.colors;
                 vec![
                     check(
@@ -6734,6 +6839,15 @@ impl App {
                         ]
                         .into_iter()
                         .map(|(s, label)| check(label, "", spread == s, on(Message::SetSpread(s))))
+                        .chain([
+                            Separator,
+                            check(
+                                "Enable scrolling",
+                                "",
+                                scrolling,
+                                on(Message::SetScrolling(!scrolling)),
+                            ),
+                        ])
                         .collect(),
                     ),
                     sub(
@@ -7888,11 +8002,18 @@ impl App {
         // Fixed content width: at least the viewport (so pages stay centred), wider when zoomed in.
         let content_width = doc.layout.content_width(self.zoom, self.viewport.width);
         let mut pages = pages;
-        let rows = doc.layout.rows().iter().map(|row| {
-            iced::widget::Row::with_children(pages.by_ref().take(row.len()))
+        let rows = doc.layout.rows().iter().enumerate().map(|(r, row)| {
+            let row = iced::widget::Row::with_children(pages.by_ref().take(row.len()))
                 .spacing(PAGE_GAP)
-                .align_y(iced::alignment::Vertical::Top)
-                .into()
+                .align_y(iced::alignment::Vertical::Top);
+            if doc.layout.paged() {
+                // As tall as the viewport, so the next row starts out of sight.
+                container(row)
+                    .height(Length::Fixed(doc.layout.row_height(r) * self.zoom))
+                    .into()
+            } else {
+                row.into()
+            }
         });
         let rows: Vec<Element<'_, Message>> = rows.collect();
         let column = iced::widget::Column::with_children(rows)
@@ -7948,4 +8069,14 @@ fn annotator(settings: &Settings) -> annotate::Annotate {
         annotate.set_author(name.to_owned());
     }
     annotate
+}
+
+/// The least height of a row in points when pages show one row at a time: the viewport's
+/// height less one gap, at `zoom`; 0 when they scroll.
+fn page_fill(scrolling: bool, viewport_height: f32, zoom: f32) -> f32 {
+    if scrolling {
+        0.0
+    } else {
+        (viewport_height - PAGE_GAP).max(1.0) / zoom.max(0.01)
+    }
 }

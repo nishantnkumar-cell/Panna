@@ -59,10 +59,17 @@ pub struct PageLayout {
     tops: Vec<f32>,
     /// The widest row: its pages' total width in points, and how many pages it has.
     widest: (f32, usize),
+    /// For views that show one row at a time, the least height of a row in points, so the
+    /// next row starts below the viewport; 0 for scrolling views.
+    fill: f32,
 }
 
 impl PageLayout {
-    pub fn new(sizes: &[PageSize], spread: Spread) -> Self {
+    /// Pages in rows of `spread`. With `fill` above 0 the layout shows one row at a time:
+    /// each row takes at least `fill` points of height, so with the viewport `fill` points
+    /// tall (gap included) no other row shows.
+    pub fn filled(sizes: &[PageSize], spread: Spread, fill: f32) -> Self {
+        let fill = if fill.is_finite() { fill.max(0.0) } else { 0.0 };
         let mut rows = Vec::new();
         let mut i = 0;
         while i < sizes.len() {
@@ -82,7 +89,7 @@ impl PageLayout {
         for (r, row) in rows.iter().enumerate() {
             tops.push(y);
             let page_sizes = sizes.get(row.clone()).unwrap_or_default();
-            y += page_sizes.iter().map(|s| s.height).fold(0.0, f32::max);
+            y += page_sizes.iter().map(|s| s.height).fold(fill, f32::max);
             let width: f32 = page_sizes.iter().map(|s| s.width).sum();
             if width > widest.0 {
                 widest = (width, row.len());
@@ -98,6 +105,46 @@ impl PageLayout {
             row_of,
             tops,
             widest,
+            fill,
+        }
+    }
+
+    /// Whether this layout shows one row at a time.
+    pub fn paged(&self) -> bool {
+        self.fill > 0.0
+    }
+
+    /// The height row `row` takes, in points: its tallest page, or more when paged.
+    pub fn row_height(&self, row: usize) -> f32 {
+        match (self.tops.get(row), self.tops.get(row + 1)) {
+            (Some(top), Some(next)) => next - top,
+            _ => 0.0,
+        }
+    }
+
+    /// Where a paged view should be after scrolling from `before` to `now` with a viewport
+    /// `view` pixels tall: inside one row, or at the start of the next or the end of the
+    /// last when a scroll goes past one row's end. Scrolling views stay where they are.
+    pub fn settle(&self, before: f32, now: f32, view: f32, zoom: f32) -> f32 {
+        if !self.paged() || self.rows.is_empty() {
+            return now;
+        }
+        let row = self.row_at(now, zoom);
+        let start = |row: usize| if row == 0 { 0.0 } else { self.row_top(row, zoom) };
+        let top = start(row);
+        let bottom = (self.row_top(row + 1, zoom) - view).max(top);
+        if (top - 0.5..=bottom + 0.5).contains(&now) {
+            return now;
+        }
+        let last = self.rows.len() - 1;
+        if (now - before).abs() > view * 0.5 {
+            // A jump, such as to a page or a search result: the row it mostly shows.
+            return start(self.row_at(now + view * 0.3, zoom));
+        }
+        if now > before && row < last {
+            start(row + 1)
+        } else {
+            bottom
         }
     }
 
@@ -231,7 +278,7 @@ mod tests {
     use super::*;
 
     fn letter_spread(n: usize, spread: Spread) -> PageLayout {
-        PageLayout::new(
+        PageLayout::filled(
             &vec![
                 PageSize {
                     width: 612.0,
@@ -240,6 +287,7 @@ mod tests {
                 n
             ],
             spread,
+            0.0,
         )
     }
 
@@ -313,5 +361,38 @@ mod tests {
         let layout = letter_spread(4, Spread::TwoCover);
         assert_eq!(layout.rows(), [0..1, 1..3, 3..4]);
         assert_eq!(Spread::parse(Spread::TwoCover.as_str()), Some(Spread::TwoCover));
+    }
+
+    #[test]
+    fn paged_views_show_one_row_and_turn_at_its_end() {
+        let sizes = vec![
+            PageSize {
+                width: 612.0,
+                height: 792.0
+            };
+            3
+        ];
+        // Half size in a 1000 px viewport: each page shows alone and the wheel turns pages.
+        let view = 1000.0;
+        let layout = PageLayout::filled(&sizes, Spread::Single, (view - PAGE_GAP) / 0.5);
+        assert!(layout.paged());
+        assert_eq!(layout.page_top(1, 0.5), 1016.0);
+        assert_eq!(layout.settle(16.0, 10.0, view, 0.5), 10.0);
+        assert_eq!(layout.settle(16.0, 76.0, view, 0.5), 1016.0);
+        assert_eq!(layout.settle(1016.0, 960.0, view, 0.5), 16.0);
+        assert_eq!(layout.settle(16.0, 1500.0, view, 0.5), 1016.0);
+        assert_eq!(layout.settle(2016.0, 2100.0, view, 0.5), 2016.0);
+
+        // Twice the size: a page taller than the view scrolls within itself first.
+        let layout = PageLayout::filled(&sizes, Spread::Single, (view - PAGE_GAP) / 2.0);
+        assert_eq!(layout.page_top(1, 2.0), 1616.0);
+        assert_eq!(layout.settle(500.0, 600.0, view, 2.0), 600.0);
+        assert_eq!(layout.settle(600.0, 680.0, view, 2.0), 1616.0);
+        assert_eq!(layout.settle(1616.0, 1560.0, view, 2.0), 616.0);
+
+        // Scrolling layouts are left alone.
+        let layout = letter(3);
+        assert!(!layout.paged());
+        assert_eq!(layout.settle(600.0, 680.0, view, 2.0), 680.0);
     }
 }

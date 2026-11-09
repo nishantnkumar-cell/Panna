@@ -41,6 +41,19 @@ pub enum OpenLayout {
     Two,
     /// Two per row with the first page alone, as a book's cover.
     TwoCover,
+    /// One page at a time, without scrolling to the next (`/SinglePage`).
+    SinglePage,
+    /// Two pages at a time, without scrolling (`/TwoPageLeft`).
+    TwoPage,
+    /// Two pages at a time with the first alone, without scrolling (`/TwoPageRight`).
+    TwoPageCover,
+}
+
+impl OpenLayout {
+    /// Whether the viewer shows one page or spread at a time instead of scrolling.
+    pub fn paged(self) -> bool {
+        matches!(self, Self::SinglePage | Self::TwoPage | Self::TwoPageCover)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -82,9 +95,12 @@ impl InitialView {
             _ => {}
         }
         view.layout = match name(b"PageLayout").as_deref() {
-            Some("SinglePage" | "OneColumn") => OpenLayout::Single,
-            Some("TwoColumnLeft" | "TwoPageLeft") => OpenLayout::Two,
-            Some("TwoColumnRight" | "TwoPageRight") => OpenLayout::TwoCover,
+            Some("OneColumn") => OpenLayout::Single,
+            Some("TwoColumnLeft") => OpenLayout::Two,
+            Some("TwoColumnRight") => OpenLayout::TwoCover,
+            Some("SinglePage") => OpenLayout::SinglePage,
+            Some("TwoPageLeft") => OpenLayout::TwoPage,
+            Some("TwoPageRight") => OpenLayout::TwoPageCover,
             _ => OpenLayout::Default,
         };
         view.show_title = catalog
@@ -125,6 +141,9 @@ impl InitialView {
             OpenLayout::Single => Some("OneColumn"),
             OpenLayout::Two => Some("TwoColumnLeft"),
             OpenLayout::TwoCover => Some("TwoColumnRight"),
+            OpenLayout::SinglePage => Some("SinglePage"),
+            OpenLayout::TwoPage => Some("TwoPageLeft"),
+            OpenLayout::TwoPageCover => Some("TwoPageRight"),
         };
         if let Some(layout) = layout {
             out.push(("PageLayout", format!("/{layout}")));

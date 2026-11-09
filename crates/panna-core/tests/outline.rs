@@ -274,6 +274,19 @@ fn how_a_file_opens_is_read_and_saved() {
     assert!(String::from_utf8_lossy(&bytes).contains("/HideToolbar true"));
     assert_eq!(doc.reopen(bytes).unwrap().info().unwrap().initial_view, wanted);
 
+    // The layouts that show a page or a spread at a time, without scrolling.
+    for layout in [
+        OpenLayout::SinglePage,
+        OpenLayout::TwoPage,
+        OpenLayout::TwoPageCover,
+    ] {
+        let wanted = InitialView { layout, ..wanted };
+        let bytes = doc.with_initial_view(&wanted).unwrap();
+        let back = doc.reopen(bytes).unwrap().info().unwrap().initial_view;
+        assert_eq!(back.layout, layout);
+        assert!(back.layout.paged());
+    }
+
     // Asking for nothing in particular takes the entries away.
     let bytes = doc.with_initial_view(&InitialView::default()).unwrap();
     let again = doc.reopen(bytes).unwrap().info().unwrap().initial_view;
