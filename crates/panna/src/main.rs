@@ -6439,6 +6439,9 @@ impl App {
         // move the body in the widget tree and reset its scroll position.
         let body = column![self.tab_bar(), body].into();
         let mut layers = vec![body];
+        // Dialogs go above everything in the window, the menu bar and toolbars included, so
+        // nothing behind one can be clicked while it's open. Only open menus sit higher.
+        let mut dialogs: Vec<Element<'_, Message>> = Vec::new();
         if self.adder.on && self.doc.is_some() {
             layers.push(
                 container(self.adder.bar())
@@ -6451,7 +6454,7 @@ impl App {
             );
         }
         if let Some(card) = self.adder.card() {
-            layers.push(modal(card, Message::Add(add::Event::Cancel)));
+            dialogs.push(modal(card, Message::Add(add::Event::Cancel)));
         }
         if self.redactor.on && self.doc.is_some() {
             layers.push(
@@ -6465,7 +6468,7 @@ impl App {
             );
         }
         if let Some(card) = self.redactor.card() {
-            layers.push(modal(card, Message::Redact(redact::Event::Cancel)));
+            dialogs.push(modal(card, Message::Redact(redact::Event::Cancel)));
         }
         if self.preparer.on && self.doc.is_some() {
             layers.push(
@@ -6501,10 +6504,10 @@ impl App {
             );
         }
         if let Some(report) = &self.preflight {
-            layers.push(modal(report.card(), Message::Preflight(preflight::Event::Close)));
+            dialogs.push(modal(report.card(), Message::Preflight(preflight::Event::Close)));
         }
         if let Some(card) = self.preparer.card() {
-            layers.push(modal(card, Message::Prepare(prepare::Event::Cancel)));
+            dialogs.push(modal(card, Message::Prepare(prepare::Event::Cancel)));
         }
         if self.measure.on && self.doc.is_some() {
             layers.push(
@@ -6521,10 +6524,10 @@ impl App {
             layers.push(properties_view(&doc.info, &self.initial, self.pages_busy));
         }
         if let Some(card) = self.annotate.editor() {
-            layers.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
+            dialogs.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
         }
         if let (Some(state), Some(doc)) = (&self.extracting, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::extract_card(
                     state,
                     doc.pages.len(),
@@ -6534,55 +6537,55 @@ impl App {
             ));
         }
         if let Some(state) = &self.cropping {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
             ));
         }
         if self.all_tools {
-            layers.push(modal(
+            dialogs.push(modal(
                 tools::card(self.form.exists(), self.doc.is_some()),
                 Message::AllTools(false),
             ));
         }
         if let Some(state) = self.cleaning {
-            layers.push(modal(
+            dialogs.push(modal(
                 protect::clean_card(state),
                 Message::Clean(protect::CleanEvent::Cancel),
             ));
         }
         if let Some(state) = &self.protecting {
-            layers.push(modal(
+            dialogs.push(modal(
                 protect::card(state),
                 Message::Protect(protect::Event::Cancel),
             ));
         }
         if let Some(state) = &self.scanning {
-            layers.push(modal(scan::card(state), Message::Scan(scan::Event::Cancel)));
+            dialogs.push(modal(scan::card(state), Message::Scan(scan::Event::Cancel)));
         }
         if let Some(state) = self.shrinking {
-            layers.push(modal(shrink::card(state), Message::Shrink(shrink::Event::Cancel)));
+            dialogs.push(modal(shrink::card(state), Message::Shrink(shrink::Event::Cancel)));
         }
         if let Some(state) = &self.signing {
-            layers.push(modal(
+            dialogs.push(modal(
                 signing::card(state),
                 Message::Signing(signing::Event::Cancel),
             ));
         }
         if let Some(state) = self.flattening {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::flatten_card(state),
                 Message::Flatten(pages::FlattenEvent::Cancel),
             ));
         }
         if let Some(state) = &self.blank {
-            layers.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
+            dialogs.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
         }
         if let Some(state) = &self.batch {
-            layers.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
+            dialogs.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
         }
         if self.preferences {
-            layers.push(modal(
+            dialogs.push(modal(
                 preferences::card(preferences::View {
                     author: &self.settings.author,
                     account: &self.account,
@@ -6595,46 +6598,46 @@ impl App {
             ));
         }
         if let Some(state) = &self.labelling {
-            layers.push(modal(labels::card(state), Message::Labels(labels::Event::Cancel)));
+            dialogs.push(modal(labels::card(state), Message::Labels(labels::Event::Cancel)));
         }
         if let Some(state) = &self.replacing {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::replace_card(state),
                 Message::Replace(pages::ReplaceEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.exporting, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 export::card(state, doc.pages.len()),
                 Message::Export(export::Event::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.watermarking, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::watermark_card(state, doc.pages.len()),
                 Message::Watermark(pages::WatermarkEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.marking, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::mark_card(state, doc.pages.len()),
                 Message::Mark(pages::MarkEvent::Cancel),
             ));
         }
         if self.confirm_reset {
-            layers.push(modal(reset_view(), Message::ConfirmReset(false)));
+            dialogs.push(modal(reset_view(), Message::ConfirmReset(false)));
         }
         if let Some(uri) = &self.confirm_link {
-            layers.push(modal(link_view(uri), Message::OpenLink(LinkChoice::Cancel)));
+            dialogs.push(modal(link_view(uri), Message::OpenLink(LinkChoice::Cancel)));
         }
         if self.confirm.is_some() {
-            layers.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
+            dialogs.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
         }
         if self.strengthen.is_some() {
-            layers.push(modal(self.strengthen_view(), Message::Strengthen(None)));
+            dialogs.push(modal(self.strengthen_view(), Message::Strengthen(None)));
         }
         if let Some(notice) = &self.notice {
-            layers.push(modal(
+            dialogs.push(modal(
                 container(
                     column![
                         text(notice.as_str()),
@@ -6650,7 +6653,7 @@ impl App {
             ));
         }
         if self.shortcuts {
-            layers.push(modal(shortcuts_card(), Message::Shortcuts(false)));
+            dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
         }
         let body: Element<'_, Message> = Stack::with_children(layers).into();
 
@@ -6669,6 +6672,7 @@ impl App {
         ];
         let mut layers = vec![window.into()];
         layers.extend(bars.floating);
+        layers.extend(dialogs);
         if let Some(menu) = self.menus.open() {
             layers.extend(self.menus.panels(
                 self.menu_entries(menu),
