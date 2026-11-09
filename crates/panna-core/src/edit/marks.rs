@@ -296,6 +296,10 @@ pub(crate) enum Drawing {
         /// From one baseline to the next.
         leading: f64,
         color: Color,
+        font: super::TextFont,
+        /// How each line sits across `width` from `x`.
+        align: super::TextAlign,
+        width: f64,
     },
     /// A picture added to the page, filling `rect` (left, top, right, bottom from the
     /// top-left corner of the page as shown).
@@ -402,13 +406,22 @@ fn rgb(Color([r, g, b]): Color) -> String {
 impl Drawing {
     /// The form's resources: the fonts, and the transparency a watermark needs.
     pub(crate) fn resources(&self) -> String {
+        let mut fonts = RESOURCES.to_owned();
+        if let Drawing::Text { font, .. } = self
+            && !RESOURCES.contains(&format!("/{} ", font.resource()))
+        {
+            // Inside the font dictionary, before its closing and the resources' closing.
+            if let Some(open) = fonts.strip_suffix(" >> >>") {
+                fonts = format!("{open} {} >> >>", font.resource_entry());
+            }
+        }
         match self.opacity() {
             Some(a) => format!(
                 "{} /ExtGState << /PaGS << /Type /ExtGState /CA {a} /ca {a} >> >> >>",
-                RESOURCES.trim_end_matches(">>").trim_end(),
+                fonts.trim_end_matches(">>").trim_end(),
                 a = n(a)
             ),
-            None => RESOURCES.to_owned(),
+            None => fonts,
         }
     }
 
@@ -504,12 +517,22 @@ impl Drawing {
                 size,
                 leading,
                 color,
+                font,
+                align,
+                width,
             } => {
-                let mut out = format!("BT /PaHe {} Tf {} rg {} TL ", n(*size), rgb(*color), n(*leading));
+                let mut out = format!("BT /{} {} Tf {} rg", font.resource(), n(*size), rgb(*color));
                 // The first baseline sits an ascent below the top.
-                let _ = write!(out, "{} {} Td", n(*x), n(height - top - size * 0.77));
+                let first = height - top - size * 0.77;
                 for (i, line) in lines.iter().enumerate() {
-                    out.push_str(if i == 0 { " (" } else { " T* (" });
+                    let room = width - font.width(line) * size;
+                    let left = x + match align {
+                        super::TextAlign::Left => 0.0,
+                        super::TextAlign::Centre => room / 2.0,
+                        super::TextAlign::Right => room,
+                    };
+                    let y = first - i as f64 * leading;
+                    let _ = write!(out, " 1 0 0 1 {} {} Tm (", n(left), n(y));
                     out.push_str(&literal(&win_ansi(line)));
                     out.push_str(") Tj");
                 }

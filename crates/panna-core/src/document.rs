@@ -728,18 +728,14 @@ impl Document {
             .iter()
             .map(|a| match a {
                 crate::Addition::ReplaceText {
-                    area,
-                    text,
-                    size,
-                    color: None,
-                    leading,
-                } => crate::Addition::ReplaceText {
-                    area: *area,
-                    text: text.clone(),
-                    size: *size,
-                    color: self.text_color(page, *area),
-                    leading: *leading,
-                },
+                    area, color: None, ..
+                } => {
+                    let mut out = a.clone();
+                    if let crate::Addition::ReplaceText { color, .. } = &mut out {
+                        *color = self.text_color(page, *area);
+                    }
+                    out
+                }
                 other => other.clone(),
             })
             .collect();

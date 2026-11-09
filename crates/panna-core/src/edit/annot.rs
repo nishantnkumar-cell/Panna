@@ -1289,6 +1289,11 @@ pub fn text_width(s: &str) -> f64 {
 /// Wraps text into lines no wider than `max` (in units of the font size), keeping the
 /// author's own line breaks. Words longer than a line are split.
 pub fn wrap(text: &str, max: f64) -> Vec<String> {
+    wrap_in(text, max, &text_width)
+}
+
+/// [`wrap`] with letters measured by `text_width`, for fonts other than Helvetica.
+pub(crate) fn wrap_in(text: &str, max: f64, text_width: &dyn Fn(&str) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();

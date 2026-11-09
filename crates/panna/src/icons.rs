@@ -141,6 +141,11 @@ pub enum Icon {
     CentreDown,
     SameWidth,
     SameHeight,
+    TextLeft,
+    TextCentre,
+    TextRight,
+    Bold,
+    Italic,
     ReplaceText,
     Filter,
     ChevronDown,
@@ -281,6 +286,11 @@ impl Icon {
             Icon::CentreDown => include_bytes!("../icons/align-center-horizontal.svg"),
             Icon::SameWidth => include_bytes!("../icons/stretch-horizontal.svg"),
             Icon::SameHeight => include_bytes!("../icons/stretch-vertical.svg"),
+            Icon::TextLeft => include_bytes!("../icons/align-left.svg"),
+            Icon::TextCentre => include_bytes!("../icons/align-center.svg"),
+            Icon::TextRight => include_bytes!("../icons/align-right.svg"),
+            Icon::Bold => include_bytes!("../icons/bold.svg"),
+            Icon::Italic => include_bytes!("../icons/italic.svg"),
             Icon::ReplaceText => include_bytes!("../icons/replace-all.svg"),
             Icon::Filter => include_bytes!("../icons/filter.svg"),
             Icon::ChevronDown => include_bytes!("../icons/chevron-down.svg"),
@@ -403,7 +413,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 140] = [
+    const ALL: [Icon; 145] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -530,6 +540,11 @@ mod tests {
         Icon::CentreDown,
         Icon::SameWidth,
         Icon::SameHeight,
+        Icon::TextLeft,
+        Icon::TextCentre,
+        Icon::TextRight,
+        Icon::Bold,
+        Icon::Italic,
         Icon::ReplaceText,
         Icon::Filter,
         Icon::ReadMode,

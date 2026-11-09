@@ -66,6 +66,8 @@ fn replacing_text_keeps_what_is_behind_it() {
                 size: 12.0,
                 color: None,
                 leading: None,
+                font: None,
+                align: Default::default(),
             }],
         )
         .unwrap();
@@ -104,6 +106,8 @@ fn replace(doc: &Document, text: &str) -> Vec<u8> {
             size: 12.0,
             color: None,
             leading: None,
+            font: None,
+            align: Default::default(),
         }],
     )
     .unwrap()
@@ -182,6 +186,8 @@ fn a_paragraph_is_found_whole_and_rewrapped_to_its_width() {
                 size: found.size,
                 color: None,
                 leading: found.leading,
+                font: None,
+                align: Default::default(),
             }],
         )
         .unwrap();
@@ -200,4 +206,82 @@ fn a_paragraph_is_found_whole_and_rewrapped_to_its_width() {
     let all = text.slice(0..text.len());
     assert!(all.contains("Something else") && all.contains("A heading"));
     assert!(!all.contains("third"));
+}
+
+#[test]
+fn changed_text_takes_a_font_and_lines_up_in_its_box() {
+    use panna_core::{FontFamily, TextAlign, TextFont};
+    let doc = page();
+    let text = doc.page_text(0).unwrap();
+    let all = text.slice(0..text.len());
+    let at = all.find("Old words here").unwrap();
+    let area = text.rects(at..at + "Old words here".len())[0];
+    let font = TextFont {
+        family: FontFamily::Times,
+        bold: true,
+        italic: false,
+    };
+    let edited = doc
+        .with_additions(
+            0,
+            &[Addition::ReplaceText {
+                area,
+                text: "Short".into(),
+                size: 12.0,
+                color: None,
+                leading: None,
+                font: Some(font),
+                align: TextAlign::Right,
+            }],
+        )
+        .unwrap();
+    assert!(String::from_utf8_lossy(&edited).contains("/BaseFont /Times-Bold"));
+    let doc = doc.reopen(edited).unwrap();
+    let text = doc.page_text(0).unwrap();
+    let all = text.slice(0..text.len());
+    let at = all.find("Short").unwrap();
+    let now = text.rects(at..at + "Short".len())[0];
+    // Lined up on the right of where the old words were, in Times Bold's widths.
+    assert!((now.x1 - area.x1).abs() < 1.5, "{now:?} {area:?}");
+    assert!(
+        (now.width() - font.width("Short") as f32 * 12.0).abs() < 1.5,
+        "{now:?}"
+    );
+}
+
+#[test]
+fn added_text_can_be_centred_in_another_font() {
+    use panna_core::{Color, FontFamily, TextAlign, TextFont};
+    let doc = page();
+    let courier = TextFont {
+        family: FontFamily::Courier,
+        bold: false,
+        italic: true,
+    };
+    let edited = doc
+        .with_additions(
+            0,
+            &[Addition::Text {
+                at: (20.0, 150.0),
+                text: "Wide line here\nNarrow".into(),
+                size: 10.0,
+                color: Color::BLACK,
+                font: courier,
+                align: TextAlign::Centre,
+            }],
+        )
+        .unwrap();
+    assert!(String::from_utf8_lossy(&edited).contains("/BaseFont /Courier-Oblique"));
+    let doc = doc.reopen(edited).unwrap();
+    let text = doc.page_text(0).unwrap();
+    let all = text.slice(0..text.len());
+    let wide = text.rects(all.find("Wide").unwrap()..all.find("Wide").unwrap() + 14)[0];
+    let at = all.find("Narrow").unwrap();
+    let narrow = text.rects(at..at + 6)[0];
+    // Courier letters are 0.6 of the size wide: 14 and 6 letters, centred on each other.
+    assert!((wide.width() - 84.0).abs() < 1.0, "{wide:?}");
+    assert!(
+        ((narrow.x0 + narrow.x1) / 2.0 - (wide.x0 + wide.x1) / 2.0).abs() < 1.0,
+        "{narrow:?} {wide:?}"
+    );
 }

@@ -14,6 +14,8 @@ pub(crate) use outline::with_outline;
 mod view;
 pub(crate) use view::with_initial_view;
 mod file;
+mod fonts;
+pub use fonts::{FontFamily, TextAlign, TextFont};
 mod pack;
 mod pdfa;
 mod picture;
@@ -783,12 +785,17 @@ pub(crate) fn move_widgets(
 /// top-left corner of the page as shown (the same space as [`crate::TextBox`]).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Addition {
-    /// Lines of text in Helvetica, the first line's top-left corner at `at`.
+    /// Lines of text in `font`, the first line's top-left corner at `at`, lined up with
+    /// each other as `align` says.
     Text {
         at: (f32, f32),
         text: String,
         size: f32,
         color: Color,
+        #[serde(default)]
+        font: TextFont,
+        #[serde(default)]
+        align: TextAlign,
     },
     /// A picture filling `rect`.
     Picture { rect: crate::TextBox, image: StampImage },
@@ -798,15 +805,21 @@ pub enum Addition {
         target: crate::LinkTarget,
     },
     /// The text in `area` taken out (only the text: pictures and drawings stay) and `text`
-    /// written in its place in Helvetica, at `size`, in `color` or the colour the old text
-    /// was drawn in. With a `leading` (the distance between baselines), `area` is a
-    /// paragraph and the text is wrapped to its width.
+    /// written in its place at `size`, in `color` or the colour the old text was drawn in.
+    /// With a `leading` (the distance between baselines), `area` is a paragraph and the text
+    /// is wrapped to its width. Without a `font`, a single line keeps its own font where that
+    /// can show the new letters, and anything else is in Helvetica. Lines sit in `area` as
+    /// `align` says.
     ReplaceText {
         area: crate::TextBox,
         text: String,
         size: f32,
         color: Option<Color>,
         leading: Option<f32>,
+        #[serde(default)]
+        font: Option<TextFont>,
+        #[serde(default)]
+        align: TextAlign,
     },
 }
 
@@ -827,18 +840,26 @@ pub(crate) fn add(
                 text,
                 size,
                 color,
+                font,
+                align,
             } => {
                 let lines: Vec<String> = text.lines().map(str::to_owned).collect();
                 if lines.iter().all(|l| l.trim().is_empty()) {
                     continue;
                 }
+                let size = f64::from(size.clamp(1.0, 500.0));
+                // Lined up within the widest line.
+                let width = lines.iter().map(|l| font.width(l)).fold(0.0, f64::max) * size;
                 extra.over.push(marks::Drawing::Text {
                     x: f64::from(at.0),
                     top: f64::from(at.1),
                     lines,
-                    size: f64::from(size.clamp(1.0, 500.0)),
-                    leading: f64::from(size.clamp(1.0, 500.0) * annot::LINE_HEIGHT),
+                    size,
+                    leading: size * f64::from(annot::LINE_HEIGHT),
                     color: *color,
+                    font: *font,
+                    align: *align,
+                    width,
                 });
             }
             Addition::Picture { rect, image } => extra.over.push(marks::Drawing::Picture {
@@ -852,18 +873,25 @@ pub(crate) fn add(
                 size,
                 color,
                 leading,
+                font,
+                align,
             } => {
                 extra.redact.push(corners(area));
                 extra.text_only = true;
                 let size = f64::from(size.clamp(1.0, 500.0));
                 let paragraph = leading.map(|l| f64::from(l).clamp(size * 0.8, size * 4.0));
+                let drawn = font.unwrap_or_default();
                 let lines: Vec<String> = match paragraph {
                     // A little room, as the measured width is the longest line's.
-                    Some(_) => annot::wrap(text.trim_end(), f64::from(area.width()) * 1.02 / size),
+                    Some(_) => annot::wrap_in(text.trim_end(), f64::from(area.width()) * 1.02 / size, &|s| {
+                        drawn.width(s)
+                    }),
                     None => text.lines().map(str::to_owned).collect(),
                 };
                 let same = match lines.as_slice() {
-                    [line] if !line.trim().is_empty() => rebuild::same_font(doc.0, page, corners(area), line),
+                    [line] if !line.trim().is_empty() && font.is_none() && *align == TextAlign::Left => {
+                        rebuild::same_font(doc.0, page, corners(area), line)
+                    }
                     _ => None,
                 };
                 if let Some(line) = same {
@@ -884,6 +912,9 @@ pub(crate) fn add(
                         size,
                         leading: paragraph.unwrap_or(size * f64::from(annot::LINE_HEIGHT)),
                         color: color.unwrap_or(Color::BLACK),
+                        font: drawn,
+                        align: *align,
+                        width: f64::from(area.width()),
                     });
                 }
             }
