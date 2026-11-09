@@ -297,6 +297,9 @@ enum Message {
     FitHeight,
     /// Read mode: toolbars and panels hidden, a small bar to move and zoom.
     ToggleReadMode,
+    /// Shows the document in a second pane below the first, or takes it away.
+    ToggleSplit,
+    SplitScrolled(Viewport),
     /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
     AutoScroll,
     AutoScrollTick,
@@ -520,6 +523,9 @@ struct App {
     /// Where a page-at-a-time view was just turned to, and when, until the view gets there:
     /// scroll events already on their way are from before the turn.
     turned_to: Option<(f32, std::time::Instant)>,
+    /// The second pane's viewport, when the window is split to show two parts of the
+    /// document at once.
+    split: Option<ViewportState>,
     page_input: String,
     settings: Settings,
     trusted: trust::Trusted,
@@ -903,6 +909,10 @@ fn scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("pages")
 }
 
+fn split_scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("pages-split")
+}
+
 /// Files dropped on the window, and its size and scale changing.
 fn window_event(event: iced::Event) -> Option<Message> {
     match event {
@@ -1152,6 +1162,7 @@ impl App {
                 height: 800.0,
             },
             turned_to: None,
+            split: None,
             page_input: String::new(),
             bars: Bars::new(settings.bars, menu::HEIGHT),
             sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
@@ -1706,6 +1717,35 @@ impl App {
                 let zoom = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / row_height.max(1.0);
                 let zoom_task = self.set_zoom(zoom);
                 Task::batch([zoom_task, self.go_to_page(page)])
+            }
+            Message::ToggleSplit => {
+                if self.split.take().is_some() {
+                    return self.request_visible();
+                }
+                // The second pane starts where the first one is.
+                let at = AbsoluteOffset {
+                    x: self.viewport.offset_x,
+                    y: self.viewport.offset_y,
+                };
+                self.split = Some(ViewportState {
+                    offset_x: at.x,
+                    offset_y: at.y,
+                    ..self.viewport
+                });
+                operation::scroll_to(split_scroll_id(), at)
+            }
+            Message::SplitScrolled(viewport) => {
+                let Some(split) = &mut self.split else {
+                    return Task::none();
+                };
+                let bounds = viewport.bounds();
+                *split = ViewportState {
+                    offset_x: viewport.absolute_offset().x,
+                    offset_y: viewport.absolute_offset().y,
+                    width: bounds.width,
+                    height: bounds.height,
+                };
+                self.request_visible()
             }
             Message::ToggleReadMode => {
                 self.read_mode = !self.read_mode && self.doc.is_some();
@@ -6259,14 +6299,21 @@ impl App {
         let visible = doc
             .layout
             .visible_range(self.viewport.offset_y, self.viewport.height, self.zoom);
-        let keep_start = visible.start.saturating_sub(KEEP_MARGIN);
-        let keep_end = (visible.end + KEEP_MARGIN).min(doc.pages.len());
+        let keep = |range: &std::ops::Range<usize>| {
+            range.start.saturating_sub(KEEP_MARGIN)..(range.end + KEEP_MARGIN).min(doc.pages.len())
+        };
+        let kept = keep(&visible);
+        // The second pane's pages, when the window is split.
+        let also = self
+            .split
+            .map(|v| keep(&doc.layout.visible_range(v.offset_y, v.height, self.zoom)))
+            .unwrap_or(0..0);
         let scale = self.zoom * self.scale_factor;
         let mut tasks = Vec::new();
         let text_range = visible.clone();
 
         for (index, slot) in doc.pages.iter_mut().enumerate() {
-            if index < keep_start || index >= keep_end {
+            if !kept.contains(&index) && !also.contains(&index) {
                 *slot = Slot::default();
                 continue;
             }
@@ -6870,6 +6917,7 @@ impl App {
                     ),
                     item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
                     Separator,
+                    check("Split", "", self.split.is_some(), on(Message::ToggleSplit)),
                     check("Read mode", k("H"), self.read_mode, on(Message::ToggleReadMode)),
                     item(
                         Icon::Present,
@@ -7229,6 +7277,15 @@ impl App {
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.pages_view(doc);
+                // The same column with or without the second pane, so the first keeps its
+                // place in the widget tree, and its scroll position, when the window splits.
+                let mut panes = column![container(pages).height(Length::FillPortion(1))];
+                if self.split.is_some() {
+                    panes = panes
+                        .push(rule::horizontal(4))
+                        .push(container(self.split_view(doc)).height(Length::FillPortion(1)));
+                }
+                let pages = panes.into();
                 self.with_sidebar(doc, pages)
             }
             _ => self.welcome_view(),
@@ -7749,6 +7806,70 @@ impl App {
             }
         }
         out
+    }
+
+    /// The second pane of a split window: the same pages, scrolled on their own, to look at.
+    fn split_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {
+        let width = self.split.map_or(self.viewport.width, |v| v.width);
+        let mut pages = doc.layout.sizes().iter().zip(&doc.pages).map(|(size, slot)| {
+            let w = (size.width * self.zoom).round();
+            let h = (size.height * self.zoom).round();
+            let content: Element<'_, Message> = match &slot.image {
+                Some(handle) => image(handle.clone()).width(w).height(h).into(),
+                None => space().width(w).height(h).into(),
+            };
+            container(content)
+                .width(w)
+                .height(h)
+                .style(|_| {
+                    container::Style::default()
+                        .background(iced::Color::WHITE)
+                        .border(iced::Border {
+                            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                            width: 1.0,
+                            radius: 0.0.into(),
+                        })
+                })
+                .into()
+        });
+        let rows: Vec<Element<'_, Message>> = doc
+            .layout
+            .rows()
+            .iter()
+            .enumerate()
+            .map(|(r, row)| {
+                let row = iced::widget::Row::with_children(pages.by_ref().take(row.len()))
+                    .spacing(PAGE_GAP)
+                    .align_y(iced::alignment::Vertical::Top);
+                if doc.layout.paged() {
+                    container(row)
+                        .height(Length::Fixed(doc.layout.row_height(r) * self.zoom))
+                        .into()
+                } else {
+                    row.into()
+                }
+            })
+            .collect();
+        let column = iced::widget::Column::with_children(rows)
+            .spacing(PAGE_GAP)
+            .padding(PAGE_GAP)
+            .align_x(Center)
+            .width(Length::Fixed(doc.layout.content_width(self.zoom, width).round()));
+        container(
+            scrollable(column)
+                .id(split_scroll_id())
+                .direction(scrollable::Direction::Both {
+                    vertical: scrollable::Scrollbar::default(),
+                    horizontal: scrollable::Scrollbar::default(),
+                })
+                .on_scroll(Message::SplitScrolled)
+                .width(Fill)
+                .height(Fill),
+        )
+        .style(|theme: &iced::Theme| {
+            container::Style::default().background(theme.extended_palette().background.strong.color)
+        })
+        .into()
     }
 
     fn pages_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {
