@@ -178,6 +178,10 @@ pub struct Comment {
     pub reply_to: Option<ObjRef>,
     /// For review statuses (replies that set one): the status.
     pub state: Option<ReviewState>,
+    /// For checkmarks (replies that put one on or take it off): whether it is checked.
+    pub checked: Option<bool>,
+    /// When it was last changed, as 2026-10-19 12:00 UTC; empty when unknown or not saved.
+    pub date: String,
     /// The comment as an annotation Panna can redraw, for the kinds it can make itself. Moving
     /// or restyling a saved comment replaces it with this, changed.
     pub editable: Option<Annotation>,
@@ -275,9 +279,11 @@ impl From<&Annotation> for Comment {
                 CommentKind::Reply
             }
         };
-        let (reply_to, state) = match &a.kind {
-            Kind::Reply { to, state, .. } => (Some(*to), *state),
-            _ => (None, None),
+        let (reply_to, state, checked) = match &a.kind {
+            Kind::Reply {
+                to, state, checked, ..
+            } => (Some(*to), *state, *checked),
+            _ => (None, None, None),
         };
         let marked = match &a.kind {
             Kind::Highlight(b) | Kind::Underline(b) | Kind::StrikeOut(b) => b.clone(),
@@ -292,6 +298,8 @@ impl From<&Annotation> for Comment {
             marked,
             reply_to,
             state,
+            checked,
+            date: String::new(),
             editable: None,
             at: at.unwrap_or(TextBox {
                 x0: 0.0,
@@ -358,6 +366,14 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
                     .is_none_or(|m| decode_text_string(m.as_bytes()) == "Review")
             })
             .and_then(|s| ReviewState::parse(&decode_text_string(s.as_bytes())));
+        let checked = reply_to
+            .filter(|_| {
+                annot
+                    .get::<hayro::hayro_syntax::object::String<'_>>(b"StateModel")
+                    .is_some_and(|m| decode_text_string(m.as_bytes()) == "Marked")
+            })
+            .and_then(|_| annot.get::<hayro::hayro_syntax::object::String<'_>>(b"State"))
+            .map(|s| decode_text_string(s.as_bytes()) == "Marked");
         let text = |key: &[u8]| {
             annot
                 .get::<hayro::hayro_syntax::object::String<'_>>(key)
@@ -425,8 +441,17 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             });
         let contents = text(b"Contents");
         let author = text(b"T");
+        let date = [&b"M"[..], b"CreationDate"]
+            .into_iter()
+            .find_map(|key| crate::sig::pdf_date(&text(key)))
+            .unwrap_or_default();
         let redrawn = match reply_to {
-            Some(to) => Some(Kind::Reply { to, at, state }),
+            Some(to) => Some(Kind::Reply {
+                to,
+                at,
+                state,
+                checked,
+            }),
             None => editable(&annot, subtype, at, &marked, &view_box),
         };
         let editable = redrawn.map(|kind| Annotation {
@@ -448,6 +473,8 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             marked,
             reply_to,
             state,
+            checked,
+            date,
             editable,
         });
     }
@@ -672,9 +699,10 @@ mod tests {
             CommentKind::from_subtype("Squiggly"),
             Some(CommentKind::Underline)
         );
+        assert_eq!(CommentKind::from_subtype("Caret"), Some(CommentKind::Caret));
         assert_eq!(
-            CommentKind::from_subtype("Caret"),
-            Some(CommentKind::Other("Caret".into()))
+            CommentKind::from_subtype("FileAttachment"),
+            Some(CommentKind::Other("FileAttachment".into()))
         );
     }
 

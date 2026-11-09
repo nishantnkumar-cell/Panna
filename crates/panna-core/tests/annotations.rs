@@ -475,27 +475,34 @@ fn replies_and_statuses_join_the_comment_thread() {
     let doc = reopen(build(&objects(true)));
     let note = doc.info().unwrap().comments.remove(0);
     let parent = note.id.unwrap().annot;
-    let reply = |contents: &str, state| {
+    let reply = |contents: &str, state, checked| {
         let mut a = annotation(Kind::Reply {
             to: parent,
             at: note.at,
             state,
+            checked,
         });
         a.contents = contents.into();
         a
     };
     let saved = doc
         .with_annotations(&[
-            reply("Agreed", None),
-            reply("Accepted set by Tester", Some(ReviewState::Accepted)),
+            reply("Agreed", None, None),
+            reply("Accepted set by Tester", Some(ReviewState::Accepted), None),
+            reply("", None, Some(true)),
         ])
         .unwrap();
     let text = String::from_utf8_lossy(&saved).into_owned();
     assert!(text.contains("/IRT 5 0 R"), "{text}");
     assert!(text.contains("/State (Accepted) /StateModel (Review)"), "{text}");
+    assert!(text.contains("/State (Marked) /StateModel (Marked)"), "{text}");
     let doc = reopen(saved);
     let listed = doc.info().unwrap().comments;
-    assert_eq!(listed.len(), 3);
+    assert_eq!(listed.len(), 4);
+    // A checkmark is not a review status, and every saved reply carries its date.
+    assert_eq!((listed[3].state, listed[3].checked), (None, Some(true)));
+    assert_eq!(listed[1].checked, None);
+    assert!(listed[1].date.starts_with("20"), "{}", listed[1].date);
     assert_eq!(
         (
             listed[1].kind.clone(),

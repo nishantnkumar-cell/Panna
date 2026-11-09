@@ -67,12 +67,15 @@ pub enum Kind {
         name: String,
         image: Option<StampImage>,
     },
-    /// A reply to a saved comment, or with `state`, a review status set on it. It has no look
-    /// of its own: viewers show it in the comment's thread. `at` is the comment's place.
+    /// A reply to a saved comment, or with `state`, a review status set on it, or with
+    /// `checked`, a checkmark put on or taken off it. It has no look of its own: viewers show
+    /// it in the comment's thread. `at` is the comment's place.
     Reply {
         to: ObjRef,
         at: TextBox,
         state: Option<ReviewState>,
+        #[serde(default)]
+        checked: Option<bool>,
     },
 }
 
@@ -599,7 +602,12 @@ impl Annotation {
                 let _ = write!(extra, "/Name {} ", super::field::name(name));
                 "Stamp"
             }
-            Kind::Reply { to, at, state } => {
+            Kind::Reply {
+                to,
+                at,
+                state,
+                checked,
+            } => {
                 let [x0, y0, x1, y1] = user_box(at);
                 bounds.add(x0, y0);
                 bounds.add(x1, y1);
@@ -610,6 +618,10 @@ impl Annotation {
                 );
                 if let Some(state) = state {
                     let _ = write!(extra, "/State ({}) /StateModel (Review) ", state.name());
+                } else if let Some(checked) = checked {
+                    // Acrobat's checkmarks: a private mark, kept as a reply in the thread.
+                    let state = if *checked { "Marked" } else { "Unmarked" };
+                    let _ = write!(extra, "/State ({state}) /StateModel (Marked) ");
                 }
                 "Text"
             }

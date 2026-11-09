@@ -97,11 +97,13 @@ pub enum Event {
     Scrolled(Viewport),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Sidebar {
     pub open: bool,
     pub side: Side,
     pub tab: Tab,
+    /// The Comments tab's sort and filters.
+    pub comment_list: crate::comments::ListView,
     offset: f32,
     height: f32,
 }
@@ -112,6 +114,7 @@ impl Sidebar {
             open,
             side,
             tab,
+            comment_list: crate::comments::ListView::default(),
             offset: 0.0,
             height: 800.0,
         }
@@ -336,7 +339,13 @@ impl Sidebar {
                 data.pages_busy,
             ),
             Tab::Results => data.find.results(data.texts),
-            Tab::Comments => crate::comments::panel(data.comments, data.unsaved, data.removed, data.texts),
+            Tab::Comments => crate::comments::panel(
+                data.comments,
+                data.unsaved,
+                data.removed,
+                data.texts,
+                &self.comment_list,
+            ),
         };
         container(column![header, content])
             .width(WIDTH)

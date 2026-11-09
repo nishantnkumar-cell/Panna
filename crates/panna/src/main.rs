@@ -331,6 +331,7 @@ enum Message {
     /// Scroll to a comment, from the comments list.
     /// Scrolls to a comment, and selects it when it can be changed.
     ShowComment(usize, TextBox, Option<annotate::Picked>),
+    CommentList(comments::ListEvent),
     ThumbRendered {
         doc: u64,
         index: usize,
@@ -966,6 +967,7 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
         ("S, X, Q, K".into(), "Sticky note, text box, cloud, stamp"),
         ("U, Shift+U".into(), "Highlight; next text markup"),
         ("D, Shift+D".into(), "Drawing tool; next drawing tool"),
+        ("Shift+K".into(), "Checkmark on the selected comment"),
     ];
     let line = |(k, what): (String, &'a str)| -> Element<'a, Message> {
         row![text(k).size(13).width(200), text(what).size(13)]
@@ -973,7 +975,7 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
             .into()
     };
     let mut left: Vec<Element<'a, Message>> = keys.into_iter().map(line).collect();
-    let right = left.split_off(17);
+    let right = left.split_off(18);
     container(
         column![
             text("Keyboard shortcuts").size(16),
@@ -1962,6 +1964,10 @@ impl App {
                 Screen::Present { .. } => self.present_page(index),
                 _ => self.go_to_page(index),
             },
+            Message::CommentList(event) => {
+                self.sidebar.comment_list.update(event);
+                Task::none()
+            }
             Message::ShowComment(page, at, picked) => {
                 // Selecting a comment in the list selects it on the page too, ready to move
                 // or restyle.
@@ -5855,6 +5861,8 @@ impl App {
             ('x', false) => comment(self, Tool::TextBox),
             ('q', false) => comment(self, Tool::Cloud),
             ('k' | 'j', false) => comment(self, Tool::Stamp),
+            // Acrobat's Shift+K: a checkmark on the selected comment.
+            ('k', true) => self.update(Message::Annotate(annotate::Event::CheckPicked)),
             ('u', false) => comment(self, self.last_markup),
             ('u', true) => {
                 let current = if self.annotate.open {

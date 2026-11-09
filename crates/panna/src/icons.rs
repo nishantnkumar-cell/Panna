@@ -133,6 +133,7 @@ pub enum Icon {
     PolyLine,
     InsertText,
     ReplaceText,
+    Filter,
 }
 
 impl Icon {
@@ -256,6 +257,7 @@ impl Icon {
             Icon::PolyLine => include_bytes!("../icons/spline.svg"),
             Icon::InsertText => include_bytes!("../icons/text-cursor.svg"),
             Icon::ReplaceText => include_bytes!("../icons/replace-all.svg"),
+            Icon::Filter => include_bytes!("../icons/filter.svg"),
             Icon::ReadMode => include_bytes!("../icons/book-open-text.svg"),
             Icon::ReadModeExit => include_bytes!("../icons/book-x.svg"),
             Icon::PrevView => include_bytes!("../icons/arrow-big-left.svg"),
@@ -369,7 +371,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 123] = [
+    const ALL: [Icon; 124] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -488,6 +490,7 @@ mod tests {
         Icon::PolyLine,
         Icon::InsertText,
         Icon::ReplaceText,
+        Icon::Filter,
         Icon::ReadMode,
         Icon::ReadModeExit,
         Icon::PrevView,

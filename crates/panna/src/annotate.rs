@@ -279,6 +279,10 @@ pub enum Event {
     Reply(Thread),
     /// Sets a saved comment's review status.
     SetStatus(Thread, ReviewState),
+    /// Puts a checkmark on a saved comment, or takes it off.
+    ToggleCheck(Thread),
+    /// Toggles the checkmark on the selected saved comment, as Acrobat's Shift+K.
+    CheckPicked,
     /// Places the standard stamp at this index of [`STAMPS`].
     Stamp(usize),
     /// Typing a custom stamp's text.
@@ -868,6 +872,25 @@ impl Annotate {
                 self.push_reply(thread, Some(state), text);
                 return Outcome::Changed;
             }
+            Event::ToggleCheck(thread) => {
+                let checked = !self.checked(thread.comment);
+                self.record();
+                self.push_check(thread, checked);
+                return Outcome::Changed;
+            }
+            Event::CheckPicked => {
+                let Some(Picked::Saved(id)) = self.picked else {
+                    return Outcome::Nothing;
+                };
+                let Some(at) = self.picked_annotation().map(|a| Comment::from(a).at) else {
+                    return Outcome::Nothing;
+                };
+                return self.update(Event::ToggleCheck(Thread {
+                    page: id.page,
+                    comment: id.annot,
+                    at,
+                }));
+            }
             Event::CancelShape => {
                 if self.draft.as_ref().is_some_and(|d| d.tool.by_corners()) {
                     self.draft = None;
@@ -1039,6 +1062,7 @@ impl Annotate {
                 to: thread.comment,
                 at: thread.at,
                 state,
+                checked: None,
             },
             color: SWATCHES[0],
             opacity: 1.0,
@@ -1046,6 +1070,43 @@ impl Annotate {
             contents,
             author: self.author.clone(),
         });
+    }
+
+    fn push_check(&mut self, thread: Thread, checked: bool) {
+        self.items.push(Annotation {
+            page: thread.page,
+            kind: Kind::Reply {
+                to: thread.comment,
+                at: thread.at,
+                state: None,
+                checked: Some(checked),
+            },
+            color: SWATCHES[0],
+            opacity: 1.0,
+            width: STROKE_WIDTH,
+            contents: String::new(),
+            author: self.author.clone(),
+        });
+    }
+
+    /// Whether a saved comment has a checkmark: the latest one put on or taken off, saved or not.
+    pub fn checked(&self, comment: ObjRef) -> bool {
+        let check_of = |a: &Annotation| match a.kind {
+            Kind::Reply { to, checked, .. } if to == comment => checked,
+            _ => None,
+        };
+        self.items
+            .iter()
+            .rev()
+            .find_map(check_of)
+            .or_else(|| {
+                self.saved
+                    .iter()
+                    .rev()
+                    .filter(|(id, _)| !self.removed.contains(id))
+                    .find_map(|(_, a)| check_of(a))
+            })
+            .unwrap_or(false)
     }
 
     /// A saved comment's review status: the latest one set, saved or not.
@@ -2304,6 +2365,7 @@ mod tests {
                 to: parent.annot,
                 at,
                 state: Some(ReviewState::Accepted),
+                checked: None,
             },
             color: SWATCHES[0],
             opacity: 1.0,
@@ -2344,6 +2406,15 @@ mod tests {
             a.update(Event::SetStatus(thread, ReviewState::Rejected)),
             Outcome::Nothing
         ));
+
+        // Checkmarks toggle, and don't change the review status.
+        assert!(!a.checked(parent.annot));
+        a.update(Event::ToggleCheck(thread));
+        assert!(a.checked(parent.annot));
+        a.update(Event::ToggleCheck(thread));
+        assert!(!a.checked(parent.annot));
+        assert_eq!(a.status(parent.annot), ReviewState::Rejected);
+        a.items.truncate(2);
 
         // Deleting the comment takes its whole thread with it, as one undo step.
         a.update(Event::Remove(parent));
