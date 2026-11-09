@@ -144,7 +144,11 @@ fn thread<'a>(
     }
     entries.push((c, depth.min(DEEPEST)));
     let Some(id) = c.id else { return };
-    for reply in on_page.iter().filter(|r| r.reply_to == Some(id.annot)) {
+    // Checkmarks are the reader's own marks, not part of the conversation.
+    for reply in on_page
+        .iter()
+        .filter(|r| r.reply_to == Some(id.annot) && r.checked.is_none())
+    {
         thread(reply, depth + 1, on_page, entries, listed);
     }
 }
@@ -364,6 +368,8 @@ mod tests {
                 generation: 0,
             }),
             state: None,
+            checked: None,
+            date: String::new(),
             editable: None,
         }
     }

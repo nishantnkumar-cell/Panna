@@ -52,6 +52,13 @@ pub enum Kind {
         points: Vec<(f32, f32)>,
         cloud: bool,
     },
+    /// An open line through these points (Acrobat's Polygon Line).
+    PolyLine(Vec<(f32, f32)>),
+    /// Text to insert at a point, marked by a caret (^) under the line of text. `rect` is
+    /// the caret's box.
+    Caret {
+        rect: TextBox,
+    },
     /// A rubber stamp: a word such as APPROVED in a rounded frame, or with `image`, a
     /// picture such as a signature or logo filling the box. `name` is its PDF name, one of
     /// [`STAMPS`], the stamp's own text, or the picture's name.
@@ -60,12 +67,15 @@ pub enum Kind {
         name: String,
         image: Option<StampImage>,
     },
-    /// A reply to a saved comment, or with `state`, a review status set on it. It has no look
-    /// of its own: viewers show it in the comment's thread. `at` is the comment's place.
+    /// A reply to a saved comment, or with `state`, a review status set on it, or with
+    /// `checked`, a checkmark put on or taken off it. It has no look of its own: viewers show
+    /// it in the comment's thread. `at` is the comment's place.
     Reply {
         to: ObjRef,
         at: TextBox,
         state: Option<ReviewState>,
+        #[serde(default)]
+        checked: Option<bool>,
     },
 }
 
@@ -131,6 +141,7 @@ impl Annotation {
             Kind::FreeText { rect, .. }
             | Kind::Rect(rect)
             | Kind::Ellipse(rect)
+            | Kind::Caret { rect }
             | Kind::Stamp { rect, .. } => shift(rect),
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
@@ -138,7 +149,7 @@ impl Annotation {
                     *y += dy;
                 }
             }
-            Kind::Polygon { points, .. } => {
+            Kind::Polygon { points, .. } | Kind::PolyLine(points) => {
                 for (x, y) in points {
                     *x += dx;
                     *y += dy;
@@ -183,6 +194,7 @@ impl Annotation {
             | Kind::Underline(_)
             | Kind::StrikeOut(_)
             | Kind::Note { .. }
+            | Kind::Caret { .. }
             | Kind::Reply { .. } => {}
             Kind::FreeText { rect, .. }
             | Kind::Rect(rect)
@@ -193,7 +205,7 @@ impl Annotation {
                     (*x, *y) = (fx(*x), fy(*y));
                 }
             }
-            Kind::Polygon { points, .. } => {
+            Kind::Polygon { points, .. } | Kind::PolyLine(points) => {
                 for (x, y) in points {
                     (*x, *y) = (fx(*x), fy(*y));
                 }
@@ -477,6 +489,51 @@ impl Annotation {
                 bounds.grow(width);
                 "Polygon"
             }
+            Kind::PolyLine(points) => {
+                let corners: Vec<Point> = points.iter().map(|(x, y)| map(*x, *y)).collect();
+                extra.push_str("/Vertices [");
+                for p in &corners {
+                    bounds.add(p.x, p.y);
+                    let _ = write!(extra, "{} {} ", n(p.x), n(p.y));
+                }
+                extra.push_str("] ");
+                let _ = write!(content, "{color} RG {} w 1 J 1 j ", n(width));
+                for (i, p) in corners.iter().enumerate() {
+                    let op = if i == 0 { "m" } else { "l" };
+                    let _ = write!(content, "{} {} {op} ", n(p.x), n(p.y));
+                }
+                content.push_str("S ");
+                bounds.grow(width);
+                "PolyLine"
+            }
+            Kind::Caret { rect } => {
+                let [x0, y0, x1, y1] = user_box(rect);
+                bounds.add(x0, y0);
+                bounds.add(x1, y1);
+                // A filled caret: a point at the top centre, curving out to the bottom corners.
+                let (w, h) = (x1 - x0, y1 - y0);
+                let mid = x0 + w / 2.0;
+                let _ = write!(
+                    content,
+                    "{color} rg {} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c f ",
+                    n(mid),
+                    n(y1),
+                    n(mid),
+                    n(y0 + h * 0.4),
+                    n(x1 - w * 0.2),
+                    n(y0),
+                    n(x1),
+                    n(y0),
+                    n(x0 + w * 0.2),
+                    n(y0),
+                    n(mid),
+                    n(y0 + h * 0.4),
+                    n(mid),
+                    n(y1),
+                );
+                extra.push_str("/Sy /P /Subj (Inserted Text) ");
+                "Caret"
+            }
             Kind::Stamp {
                 rect,
                 name,
@@ -545,7 +602,12 @@ impl Annotation {
                 let _ = write!(extra, "/Name {} ", super::field::name(name));
                 "Stamp"
             }
-            Kind::Reply { to, at, state } => {
+            Kind::Reply {
+                to,
+                at,
+                state,
+                checked,
+            } => {
                 let [x0, y0, x1, y1] = user_box(at);
                 bounds.add(x0, y0);
                 bounds.add(x1, y1);
@@ -556,11 +618,18 @@ impl Annotation {
                 );
                 if let Some(state) = state {
                     let _ = write!(extra, "/State ({}) /StateModel (Review) ", state.name());
+                } else if let Some(checked) = checked {
+                    // Acrobat's checkmarks: a private mark, kept as a reply in the thread.
+                    let state = if *checked { "Marked" } else { "Unmarked" };
+                    let _ = write!(extra, "/State ({state}) /StateModel (Marked) ");
                 }
                 "Text"
             }
         };
-        if !matches!(self.kind, Kind::Ink(_) | Kind::Line { .. } | Kind::Polygon { .. }) {
+        if !matches!(
+            self.kind,
+            Kind::Ink(_) | Kind::Line { .. } | Kind::Polygon { .. } | Kind::PolyLine(_)
+        ) {
             bounds.grow(1.0);
         }
         let [x0, y0, x1, y1] = bounds.rect();
@@ -580,7 +649,12 @@ impl Annotation {
         }
         if matches!(
             self.kind,
-            Kind::Ink(_) | Kind::Rect(_) | Kind::Ellipse(_) | Kind::Line { .. } | Kind::Polygon { .. }
+            Kind::Ink(_)
+                | Kind::Rect(_)
+                | Kind::Ellipse(_)
+                | Kind::Line { .. }
+                | Kind::Polygon { .. }
+                | Kind::PolyLine(_)
         ) {
             let _ = write!(dict, "/BS << /W {} >> ", n(width));
         }

@@ -189,7 +189,7 @@ fn text(dict: &Dict<'_>, key: &[u8]) -> String {
 }
 
 /// A PDF date such as D:20261019120000Z as 2026-10-19 12:00.
-fn pdf_date(s: &str) -> Option<String> {
+pub(crate) fn pdf_date(s: &str) -> Option<String> {
     let d = s.strip_prefix("D:").unwrap_or(s);
     let digits: String = d.chars().take_while(char::is_ascii_digit).collect();
     let part = |at: usize, len: usize| digits.get(at..at + len);

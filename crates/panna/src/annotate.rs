@@ -23,13 +23,20 @@ pub enum Tool {
     Highlight,
     Underline,
     StrikeOut,
+    /// Acrobat's Replace text: crosses out the selected words and adds the new ones.
+    Replace,
+    /// Acrobat's Insert text: a caret where the words go, with them as its comment.
+    InsertText,
     Note,
     TextBox,
     Pen,
+    /// Rubs out parts of freehand drawings.
+    Eraser,
     Rect,
     Ellipse,
     Arrow,
     Line,
+    PolyLine,
     Polygon,
     Cloud,
     Stamp,
@@ -37,18 +44,22 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 15] = [
+    pub const ALL: [Tool; 19] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
         Tool::StrikeOut,
+        Tool::Replace,
+        Tool::InsertText,
         Tool::Note,
         Tool::TextBox,
         Tool::Pen,
+        Tool::Eraser,
         Tool::Rect,
         Tool::Ellipse,
         Tool::Arrow,
         Tool::Line,
+        Tool::PolyLine,
         Tool::Polygon,
         Tool::Cloud,
         Tool::Stamp,
@@ -61,6 +72,10 @@ impl Tool {
             Tool::Highlight => Icon::Highlighter,
             Tool::Underline => Icon::Underline,
             Tool::StrikeOut => Icon::Strikethrough,
+            Tool::Replace => Icon::ReplaceText,
+            Tool::InsertText => Icon::InsertText,
+            Tool::Eraser => Icon::Eraser,
+            Tool::PolyLine => Icon::PolyLine,
             Tool::Note => Icon::StickyNote,
             Tool::TextBox => Icon::TextBox,
             Tool::Pen => Icon::Pen,
@@ -81,6 +96,10 @@ impl Tool {
             Tool::Highlight => "Highlight text",
             Tool::Underline => "Underline text",
             Tool::StrikeOut => "Strike through text",
+            Tool::Replace => "Replace text: select the words, then type the new ones",
+            Tool::InsertText => "Insert text: click where the words go, then type them",
+            Tool::Eraser => "Erase parts of freehand drawings",
+            Tool::PolyLine => "Draw a polygon line: click each point, double-click or Enter to finish",
             Tool::Note => "Add a sticky note",
             Tool::TextBox => "Add a text box",
             Tool::Pen => "Draw freehand",
@@ -95,7 +114,10 @@ impl Tool {
                 "Fill & Sign: add your signature, initials, the date or a check mark where you click"
             }
         };
-        format!("{what} ({})", self.key().to_ascii_uppercase())
+        match self.key() {
+            Some(key) => format!("{what} ({key})"),
+            None => what.to_owned(),
+        }
     }
 
     /// The tool's name in the Comment menu.
@@ -105,6 +127,10 @@ impl Tool {
             Tool::Highlight => "Highlight",
             Tool::Underline => "Underline",
             Tool::StrikeOut => "Strike out",
+            Tool::Replace => "Replace text",
+            Tool::InsertText => "Insert text",
+            Tool::Eraser => "Eraser",
+            Tool::PolyLine => "Polygon line",
             Tool::Note => "Sticky note",
             Tool::TextBox => "Text box",
             Tool::Pen => "Draw",
@@ -119,43 +145,67 @@ impl Tool {
         }
     }
 
-    /// The single key that picks this tool while the comment tools are open.
-    pub fn key(self) -> char {
+    /// The key that picks this tool, as in Acrobat's single-key accelerators: U, S, X, Q and K
+    /// pick a tool, and Shift+U and Shift+D step through the text markups and the drawing
+    /// tools. Fill & Sign has none in Acrobat either.
+    pub fn key(self) -> Option<&'static str> {
         match self {
-            Tool::Select => 'v',
-            Tool::Highlight => 'h',
-            Tool::Underline => 'u',
-            Tool::StrikeOut => 'k',
-            Tool::Note => 'n',
-            Tool::TextBox => 't',
-            Tool::Pen => 'p',
-            Tool::Rect => 'r',
-            Tool::Ellipse => 'e',
-            Tool::Arrow => 'a',
-            Tool::Line => 'l',
-            Tool::Polygon => 'g',
-            Tool::Cloud => 'c',
-            Tool::Stamp => 's',
-            Tool::Sign => 'f',
+            Tool::Select => Some("V"),
+            Tool::Highlight => Some("U"),
+            Tool::Underline | Tool::StrikeOut => Some("Shift+U"),
+            Tool::Note => Some("S"),
+            Tool::TextBox => Some("X"),
+            Tool::Pen
+            | Tool::Eraser
+            | Tool::Rect
+            | Tool::Ellipse
+            | Tool::Arrow
+            | Tool::Line
+            | Tool::PolyLine
+            | Tool::Polygon => Some("Shift+D"),
+            Tool::Replace | Tool::InsertText => None,
+            Tool::Cloud => Some("Q"),
+            Tool::Stamp => Some("K"),
+            Tool::Sign => None,
         }
     }
 
-    pub fn from_key(key: &str) -> Option<Tool> {
-        Tool::ALL
-            .into_iter()
-            .find(|t| key.len() == 1 && key.starts_with(t.key()))
+    /// The text markups Shift+U steps through, in Acrobat's order.
+    pub const MARKUPS: [Tool; 3] = [Tool::Highlight, Tool::Underline, Tool::StrikeOut];
+    /// The drawing tools Shift+D steps through, in Acrobat's order.
+    pub const DRAWING: [Tool; 9] = [
+        Tool::Cloud,
+        Tool::Arrow,
+        Tool::Line,
+        Tool::Rect,
+        Tool::Ellipse,
+        Tool::PolyLine,
+        Tool::Polygon,
+        Tool::Pen,
+        Tool::Eraser,
+    ];
+
+    /// The tool after `self` in `group`, or the group's first.
+    pub fn next_in(self, group: &[Tool]) -> Tool {
+        let next = group.iter().position(|t| *t == self).map_or(0, |i| i + 1);
+        group.get(next).or_else(|| group.first()).copied().unwrap_or(self)
     }
 
     /// Tools that place one corner per click instead of drawing with a drag.
     pub fn by_corners(self) -> bool {
-        matches!(self, Tool::Polygon | Tool::Cloud)
+        matches!(self, Tool::Polygon | Tool::Cloud | Tool::PolyLine)
+    }
+
+    /// Corners a finished shape needs at least.
+    fn min_corners(self) -> usize {
+        if self == Tool::PolyLine { 2 } else { 3 }
     }
 
     /// Tools that work on selected text, so dragging selects text as the Select tool does.
     pub fn marks_text(self) -> bool {
         matches!(
             self,
-            Tool::Select | Tool::Highlight | Tool::Underline | Tool::StrikeOut
+            Tool::Select | Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Replace
         )
     }
 
@@ -167,7 +217,7 @@ impl Tool {
         match self {
             Tool::Select | Tool::Highlight | Tool::Note => SWATCHES[0],
             Tool::TextBox | Tool::Sign => SWATCHES[5],
-            Tool::Pen => SWATCHES[2],
+            Tool::Pen | Tool::Replace | Tool::InsertText => SWATCHES[2],
             _ => SWATCHES[3],
         }
     }
@@ -229,6 +279,10 @@ pub enum Event {
     Reply(Thread),
     /// Sets a saved comment's review status.
     SetStatus(Thread, ReviewState),
+    /// Puts a checkmark on a saved comment, or takes it off.
+    ToggleCheck(Thread),
+    /// Toggles the checkmark on the selected saved comment, as Acrobat's Shift+K.
+    CheckPicked,
     /// Places the standard stamp at this index of [`STAMPS`].
     Stamp(usize),
     /// Typing a custom stamp's text.
@@ -297,6 +351,8 @@ pub struct Editing {
     target: Option<Picked>,
     /// Set when writing a reply: the comment replied to.
     reply: Option<Thread>,
+    /// For Replace text: the words crossed out, by page.
+    replacing: Vec<(usize, Vec<TextBox>)>,
 }
 
 #[derive(Default)]
@@ -530,6 +586,7 @@ impl Annotate {
             content: text_editor::Content::with_text(&a.contents),
             target: Some(picked),
             reply: None,
+            replacing: Vec::new(),
         });
         true
     }
@@ -721,6 +778,34 @@ impl Annotate {
                         }
                         return Outcome::Changed;
                     }
+                    if text.trim().is_empty() && matches!(editing.tool, Tool::Replace | Tool::InsertText) {
+                        return Outcome::Nothing;
+                    }
+                    if editing.tool == Tool::Replace {
+                        // One step: the old words crossed out, and a caret after them carrying
+                        // the new ones, as Acrobat's Replace text does.
+                        self.record();
+                        for (page, boxes) in editing.replacing {
+                            self.push(page, Kind::StrikeOut(boxes), Tool::Replace, text.clone());
+                        }
+                        self.push(
+                            editing.page,
+                            Kind::Caret { rect: editing.at },
+                            Tool::Replace,
+                            text,
+                        );
+                        return Outcome::Changed;
+                    }
+                    if editing.tool == Tool::InsertText {
+                        self.record();
+                        self.push(
+                            editing.page,
+                            Kind::Caret { rect: editing.at },
+                            Tool::InsertText,
+                            text,
+                        );
+                        return Outcome::Changed;
+                    }
                     let kind = if editing.tool == Tool::Note {
                         Kind::Note {
                             x: editing.at.x0,
@@ -770,6 +855,7 @@ impl Annotate {
                     content: text_editor::Content::new(),
                     target: None,
                     reply: Some(thread),
+                    replacing: Vec::new(),
                 });
             }
             Event::SetStatus(thread, state) => {
@@ -785,6 +871,25 @@ impl Annotate {
                 self.record();
                 self.push_reply(thread, Some(state), text);
                 return Outcome::Changed;
+            }
+            Event::ToggleCheck(thread) => {
+                let checked = !self.checked(thread.comment);
+                self.record();
+                self.push_check(thread, checked);
+                return Outcome::Changed;
+            }
+            Event::CheckPicked => {
+                let Some(Picked::Saved(id)) = self.picked else {
+                    return Outcome::Nothing;
+                };
+                let Some(at) = self.picked_annotation().map(|a| Comment::from(a).at) else {
+                    return Outcome::Nothing;
+                };
+                return self.update(Event::ToggleCheck(Thread {
+                    page: id.page,
+                    comment: id.annot,
+                    at,
+                }));
             }
             Event::CancelShape => {
                 if self.draft.as_ref().is_some_and(|d| d.tool.by_corners()) {
@@ -957,6 +1062,7 @@ impl Annotate {
                 to: thread.comment,
                 at: thread.at,
                 state,
+                checked: None,
             },
             color: SWATCHES[0],
             opacity: 1.0,
@@ -964,6 +1070,43 @@ impl Annotate {
             contents,
             author: self.author.clone(),
         });
+    }
+
+    fn push_check(&mut self, thread: Thread, checked: bool) {
+        self.items.push(Annotation {
+            page: thread.page,
+            kind: Kind::Reply {
+                to: thread.comment,
+                at: thread.at,
+                state: None,
+                checked: Some(checked),
+            },
+            color: SWATCHES[0],
+            opacity: 1.0,
+            width: STROKE_WIDTH,
+            contents: String::new(),
+            author: self.author.clone(),
+        });
+    }
+
+    /// Whether a saved comment has a checkmark: the latest one put on or taken off, saved or not.
+    pub fn checked(&self, comment: ObjRef) -> bool {
+        let check_of = |a: &Annotation| match a.kind {
+            Kind::Reply { to, checked, .. } if to == comment => checked,
+            _ => None,
+        };
+        self.items
+            .iter()
+            .rev()
+            .find_map(check_of)
+            .or_else(|| {
+                self.saved
+                    .iter()
+                    .rev()
+                    .filter(|(id, _)| !self.removed.contains(id))
+                    .find_map(|(_, a)| check_of(a))
+            })
+            .unwrap_or(false)
     }
 
     /// A saved comment's review status: the latest one set, saved or not.
@@ -989,9 +1132,32 @@ impl Annotate {
     /// Marks selected text with the current markup tool: one annotation per page.
     pub fn mark_text(&mut self, per_page: Vec<(usize, Vec<TextBox>)>) -> Outcome {
         let tool = self.tool;
-        if !matches!(tool, Tool::Highlight | Tool::Underline | Tool::StrikeOut)
-            || per_page.iter().all(|(_, b)| b.is_empty())
+        if !matches!(
+            tool,
+            Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Replace
+        ) || per_page.iter().all(|(_, b)| b.is_empty())
         {
+            return Outcome::Nothing;
+        }
+        if tool == Tool::Replace {
+            // Ask for the new words; the crossing out and the caret are added with them.
+            let replacing: Vec<(usize, Vec<TextBox>)> =
+                per_page.into_iter().filter(|(_, b)| !b.is_empty()).collect();
+            let Some((page, last)) = replacing
+                .last()
+                .and_then(|(page, boxes)| Some((*page, *boxes.last()?)))
+            else {
+                return Outcome::Nothing;
+            };
+            self.editing = Some(Editing {
+                page,
+                tool,
+                at: caret_box(last.x1, last.y1, last.height()),
+                content: text_editor::Content::new(),
+                target: None,
+                reply: None,
+                replacing,
+            });
             return Outcome::Nothing;
         }
         // One undo step, even when the selection spans pages.
@@ -1004,6 +1170,55 @@ impl Annotate {
                 _ => Kind::StrikeOut(boxes),
             };
             self.push(page, kind, tool, String::new());
+        }
+        Outcome::Changed
+    }
+
+    /// Rubs out the parts of freehand drawings on `page` that the eraser passed over, saved
+    /// ones included, as one undo step. A drawing rubbed out entirely is removed.
+    fn erase(&mut self, page: usize, path: &[(f32, f32)]) -> Outcome {
+        let mut changed_new: Vec<(usize, Strokes)> = Vec::new();
+        for (i, a) in self.items.iter().enumerate() {
+            if let (true, Kind::Ink(strokes)) = (a.page == page, &a.kind)
+                && let Some(left) = erase_strokes(strokes, path)
+            {
+                changed_new.push((i, left));
+            }
+        }
+        let mut changed_saved: Vec<(CommentId, Annotation)> = Vec::new();
+        for (id, a) in &self.saved {
+            if self.removed.contains(id) || a.page != page {
+                continue;
+            }
+            if let Kind::Ink(strokes) = &a.kind
+                && let Some(left) = erase_strokes(strokes, path)
+            {
+                let mut copy = a.clone();
+                copy.kind = Kind::Ink(left);
+                changed_saved.push((*id, copy));
+            }
+        }
+        if changed_new.is_empty() && changed_saved.is_empty() {
+            return Outcome::Nothing;
+        }
+        self.record();
+        self.unpick();
+        for (i, left) in &changed_new {
+            if let Some(a) = self.items.get_mut(*i) {
+                a.kind = Kind::Ink(left.clone());
+            }
+        }
+        // Drawings with nothing left go, highest index first so the others stay put.
+        for (i, left) in changed_new.iter().rev() {
+            if left.is_empty() && *i < self.items.len() {
+                self.items.remove(*i);
+            }
+        }
+        for (id, copy) in changed_saved {
+            self.removed.push(id);
+            if matches!(&copy.kind, Kind::Ink(s) if !s.is_empty()) {
+                self.items.push(copy);
+            }
         }
         Outcome::Changed
     }
@@ -1036,8 +1251,10 @@ impl Annotate {
                     p.is_some_and(|p| (p.0 - at.0).hypot(p.1 - at.1) < CLICK_SLOP * 2.0)
                 };
                 let fixed = draft.points.len() - 1;
-                let closes = fixed >= 3
-                    && (near(draft.points.first()) || near(draft.points.get(fixed.saturating_sub(1))));
+                let min = draft.tool.min_corners();
+                // A polygon line ends on a double-click; it doesn't close on its first point.
+                let at_first = draft.tool != Tool::PolyLine && near(draft.points.first());
+                let closes = fixed >= min && (at_first || near(draft.points.get(fixed.saturating_sub(1))));
                 if closes {
                     return self.finish_shape();
                 }
@@ -1078,19 +1295,24 @@ impl Annotate {
                 points.push(*p);
             }
         }
-        if points.len() > 3
+        if draft.tool != Tool::PolyLine
+            && points.len() > 3
             && let (Some(first), Some(last)) = (points.first(), points.last())
             && (first.0 - last.0).hypot(first.1 - last.1) < CLICK_SLOP * 2.0
         {
             points.pop();
         }
-        if points.len() < 3 {
+        if points.len() < draft.tool.min_corners() {
             return Outcome::Nothing;
         }
         self.record();
-        let kind = Kind::Polygon {
-            points,
-            cloud: draft.tool == Tool::Cloud,
+        let kind = if draft.tool == Tool::PolyLine {
+            Kind::PolyLine(points)
+        } else {
+            Kind::Polygon {
+                points,
+                cloud: draft.tool == Tool::Cloud,
+            }
         };
         self.push(draft.page, kind, draft.tool, String::new());
         Outcome::Changed
@@ -1111,7 +1333,7 @@ impl Annotate {
             if let Some(last) = draft.points.last_mut() {
                 *last = at;
             }
-        } else if draft.tool == Tool::Pen {
+        } else if matches!(draft.tool, Tool::Pen | Tool::Eraser) {
             let far = draft
                 .points
                 .last()
@@ -1177,10 +1399,24 @@ impl Annotate {
                     content: text_editor::Content::new(),
                     target: None,
                     reply: None,
+                    replacing: Vec::new(),
                 });
                 return Outcome::Nothing;
             }
             Tool::Pen => Kind::Ink(vec![draft.points]),
+            Tool::Eraser => return self.erase(draft.page, &draft.points),
+            Tool::InsertText => {
+                self.editing = Some(Editing {
+                    page: draft.page,
+                    tool: Tool::InsertText,
+                    at: caret_box(end.0, end.1, CARET_SIZE),
+                    content: text_editor::Content::new(),
+                    target: None,
+                    reply: None,
+                    replacing: Vec::new(),
+                });
+                return Outcome::Nothing;
+            }
             Tool::Stamp | Tool::Sign => {
                 self.sign.pad = None;
                 self.stamping = Some(Stamping {
@@ -1212,7 +1448,9 @@ impl Annotate {
             | Tool::Highlight
             | Tool::Underline
             | Tool::StrikeOut
+            | Tool::Replace
             | Tool::Polygon
+            | Tool::PolyLine
             | Tool::Cloud => {
                 return Outcome::Nothing;
             }
@@ -1290,6 +1528,8 @@ impl Annotate {
             (Tool::Note, true) => "Edit note",
             (Tool::TextBox, false) => "Text box",
             (Tool::TextBox, true) => "Edit text box",
+            (Tool::Replace, _) => "Replace with",
+            (Tool::InsertText, _) => "Insert text",
             _ => "Comment",
         };
         let done = match (editing.target.is_some(), editing.reply.is_some()) {
@@ -1449,6 +1689,67 @@ fn fit_text_box(at: TextBox, text: &str) -> TextBox {
     }
 }
 
+/// Size of a caret placed with a click, in points.
+const CARET_SIZE: f32 = 10.0;
+/// How far the eraser reaches either side of the pointer, in points.
+const ERASER_RADIUS: f32 = 5.0;
+
+/// The box of a caret whose tip is at (x, y), sized for text `height` points tall.
+fn caret_box(x: f32, y: f32, height: f32) -> TextBox {
+    let size = (height * 0.6).clamp(5.0, 24.0);
+    TextBox {
+        x0: x - size / 2.0,
+        y0: y,
+        x1: x + size / 2.0,
+        y1: y + size,
+    }
+}
+
+/// Ink strokes, each a list of points.
+type Strokes = Vec<Vec<(f32, f32)>>;
+
+/// Splits strokes where they pass within the eraser's reach of `path`; `None` when nothing
+/// was touched.
+fn erase_strokes(strokes: &[Vec<(f32, f32)>], path: &[(f32, f32)]) -> Option<Strokes> {
+    // Distance from p to the segment a–b.
+    let gap = |p: &(f32, f32), a: &(f32, f32), b: &(f32, f32)| {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len = dx * dx + dy * dy;
+        let t = if len > 0.0 {
+            (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
+    };
+    let near = |p: &(f32, f32)| match path {
+        [only] => gap(p, only, only) <= ERASER_RADIUS,
+        _ => path.windows(2).any(|w| match w {
+            [a, b] => gap(p, a, b) <= ERASER_RADIUS,
+            _ => false,
+        }),
+    };
+    let mut touched = false;
+    let mut out = Vec::new();
+    for stroke in strokes {
+        let mut piece: Vec<(f32, f32)> = Vec::new();
+        for p in stroke {
+            if near(p) {
+                touched = true;
+                if !piece.is_empty() {
+                    out.push(std::mem::take(&mut piece));
+                }
+            } else {
+                piece.push(*p);
+            }
+        }
+        if !piece.is_empty() {
+            out.push(piece);
+        }
+    }
+    touched.then_some(out)
+}
+
 /// Kinds that can be stretched by their corners: not notes (icon-sized) or text markup.
 fn can_resize(a: &Annotation) -> bool {
     matches!(
@@ -1459,6 +1760,7 @@ fn can_resize(a: &Annotation) -> bool {
             | Kind::Ink(_)
             | Kind::Line { .. }
             | Kind::Polygon { .. }
+            | Kind::PolyLine(_)
             | Kind::Stamp { .. }
     )
 }
@@ -1573,12 +1875,12 @@ impl canvas::Program<Message> for Preview<'_> {
         let top_left = Point::new(first.x.min(last.x), first.y.min(last.y));
         let size = Size::new((first.x - last.x).abs(), (first.y - last.y).abs());
         let path = match self.draft.tool {
-            Tool::Pen | Tool::Polygon | Tool::Cloud => Path::new(|b| {
+            Tool::Pen | Tool::Eraser | Tool::Polygon | Tool::PolyLine | Tool::Cloud => Path::new(|b| {
                 b.move_to(first);
                 for p in &view {
                     b.line_to(*p);
                 }
-                if self.draft.tool.by_corners() && view.len() > 2 {
+                if matches!(self.draft.tool, Tool::Polygon | Tool::Cloud) && view.len() > 2 {
                     b.close();
                 }
             }),
@@ -1638,13 +1940,15 @@ mod tests {
     }
 
     #[test]
-    fn every_tool_has_its_own_key() {
-        let mut keys: Vec<char> = Tool::ALL.iter().map(|t| t.key()).collect();
-        keys.sort_unstable();
-        keys.dedup();
-        assert_eq!(keys.len(), Tool::ALL.len());
-        assert_eq!(Tool::from_key("r"), Some(Tool::Rect));
-        assert_eq!(Tool::from_key("rr"), None);
+    fn shift_keys_step_through_groups() {
+        assert_eq!(Tool::Highlight.next_in(&Tool::MARKUPS), Tool::Underline);
+        assert_eq!(Tool::StrikeOut.next_in(&Tool::MARKUPS), Tool::Highlight);
+        assert_eq!(Tool::Note.next_in(&Tool::DRAWING), Tool::Cloud);
+        assert_eq!(Tool::Pen.next_in(&Tool::DRAWING), Tool::Eraser);
+        assert_eq!(Tool::Eraser.next_in(&Tool::DRAWING), Tool::Cloud);
+        for tool in Tool::DRAWING {
+            assert!(tool.key().is_some());
+        }
     }
 
     #[test]
@@ -1910,6 +2214,91 @@ mod tests {
     }
 
     #[test]
+    fn a_polygon_line_stays_open() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::PolyLine));
+        a.press(0, (10.0, 10.0));
+        a.press(0, (60.0, 10.0));
+        // Clicking near the first point adds a point rather than closing the line.
+        a.press(0, (11.0, 11.0));
+        assert!(matches!(a.update(Event::FinishShape), Outcome::Changed));
+        assert!(matches!(a.items.first().map(|i| &i.kind), Some(Kind::PolyLine(p)) if p.len() == 3));
+        // Two points are enough for a line.
+        a.press(0, (1.0, 1.0));
+        a.press(0, (40.0, 1.0));
+        a.press(0, (40.0, 1.0));
+        assert!(matches!(a.items.get(1).map(|i| &i.kind), Some(Kind::PolyLine(p)) if p.len() == 2));
+    }
+
+    #[test]
+    fn the_eraser_splits_and_removes_drawings() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Pen));
+        a.press(0, (0.0, 0.0));
+        for x in 1..=40 {
+            a.drag(0, (x as f32, 0.0));
+        }
+        a.release();
+        a.update(Event::Tool(Tool::Eraser));
+        a.press(0, (20.0, -10.0));
+        a.drag(0, (20.0, 10.0));
+        assert!(matches!(a.release(), Outcome::Changed));
+        assert!(matches!(a.items.first().map(|i| &i.kind), Some(Kind::Ink(s)) if s.len() == 2));
+        // Rubbing over everything takes the drawing away; undo brings it back.
+        a.press(0, (0.0, 0.0));
+        for x in 1..=40 {
+            a.drag(0, (x as f32, 0.0));
+        }
+        assert!(matches!(a.release(), Outcome::Changed));
+        assert!(a.items.is_empty());
+        a.update(Event::Undo);
+        assert_eq!(a.items.len(), 1);
+        // Missing every drawing changes nothing.
+        a.press(0, (200.0, 200.0));
+        assert!(matches!(a.release(), Outcome::Nothing));
+    }
+
+    #[test]
+    fn replacing_text_crosses_out_and_adds_a_caret() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Replace));
+        let word = TextBox {
+            x0: 10.0,
+            y0: 10.0,
+            x1: 50.0,
+            y1: 22.0,
+        };
+        assert!(matches!(a.mark_text(vec![(0, vec![word])]), Outcome::Nothing));
+        assert!(a.editing.is_some());
+        a.update(Event::Edit(text_editor::Action::Edit(text_editor::Edit::Paste(
+            std::sync::Arc::new("new words".into()),
+        ))));
+        assert!(matches!(a.update(Event::EditDone), Outcome::Changed));
+        assert!(matches!(
+            a.items.first().map(|i| &i.kind),
+            Some(Kind::StrikeOut(_))
+        ));
+        assert!(matches!(
+            a.items.get(1).map(|i| &i.kind),
+            Some(Kind::Caret { .. })
+        ));
+        assert!(a.items.iter().all(|i| i.contents == "new words"));
+        // One undo takes both away.
+        a.update(Event::Undo);
+        assert!(a.items.is_empty());
+    }
+
+    #[test]
+    fn inserting_text_needs_words() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::InsertText));
+        a.press(0, (30.0, 40.0));
+        assert!(matches!(a.release(), Outcome::Nothing));
+        assert!(matches!(a.update(Event::EditDone), Outcome::Nothing));
+        assert!(a.items.is_empty());
+    }
+
+    #[test]
     fn a_cloud_takes_a_corner_per_click() {
         let mut a = Annotate::new();
         a.update(Event::Tool(Tool::Cloud));
@@ -1976,6 +2365,7 @@ mod tests {
                 to: parent.annot,
                 at,
                 state: Some(ReviewState::Accepted),
+                checked: None,
             },
             color: SWATCHES[0],
             opacity: 1.0,
@@ -2016,6 +2406,15 @@ mod tests {
             a.update(Event::SetStatus(thread, ReviewState::Rejected)),
             Outcome::Nothing
         ));
+
+        // Checkmarks toggle, and don't change the review status.
+        assert!(!a.checked(parent.annot));
+        a.update(Event::ToggleCheck(thread));
+        assert!(a.checked(parent.annot));
+        a.update(Event::ToggleCheck(thread));
+        assert!(!a.checked(parent.annot));
+        assert_eq!(a.status(parent.annot), ReviewState::Rejected);
+        a.items.truncate(2);
 
         // Deleting the comment takes its whole thread with it, as one undo step.
         a.update(Event::Remove(parent));

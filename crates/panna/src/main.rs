@@ -33,6 +33,7 @@ mod preflight;
 mod prepare;
 mod print;
 mod protect;
+mod ranges;
 mod redact;
 mod scan;
 mod selection;
@@ -182,6 +183,8 @@ enum Message {
     Present,
     /// Next or previous page while presenting; ignored otherwise.
     Advance(bool),
+    /// A frame while presenting, to turn pages on a timer.
+    PresentTick(std::time::Instant),
     /// A page tool from the Pages tab.
     Pages(pages::Op),
     /// The PDF to insert pages from, once chosen.
@@ -190,6 +193,7 @@ enum Message {
     Extract(pages::ExtractEvent),
     /// The Crop pages card.
     Crop(pages::CropEvent),
+    PageRange(ranges::Event),
     /// The Headers and footers card.
     Mark(pages::MarkEvent),
     /// The Watermark card.
@@ -267,8 +271,37 @@ enum Message {
     PageInput(String),
     /// Puts the cursor in the page number box.
     FocusPageBox,
-    /// A comment tool's key was pressed.
-    ToolKey(annotate::Tool),
+    /// A single letter was pressed: Acrobat's single-key accelerators pick tools with it.
+    Accelerator {
+        key: char,
+        shift: bool,
+    },
+    /// Space held down picks the Hand tool for as long as it's held.
+    SpaceHand(bool),
+    /// Back and forward through the views shown, as Acrobat's Previous View and Next View.
+    PrevView,
+    NextView,
+    /// Up and Down arrows scroll a little (and turn pages while presenting).
+    ArrowScroll(bool),
+    /// Enter finishes a polygon, or else moves a screen on (Shift+Enter, back).
+    EnterKey(bool),
+    /// Fits the page's height to the window.
+    FitHeight,
+    /// Read mode: toolbars and panels hidden, a small bar to move and zoom.
+    ToggleReadMode,
+    /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
+    AutoScroll,
+    AutoScrollTick,
+    /// Starts reading aloud, or stops it.
+    ReadAloudToggle,
+    /// Opens the navigation pane.
+    ShowSidebar,
+    /// Opens or closes the tools card.
+    ToggleAllTools,
+    /// Selects all the text in the document.
+    SelectAll,
+    /// Adds a bookmark for this page, named after the selected text if there is any.
+    AddBookmark,
     PageSubmit,
     Toolbar(toolbar::Event),
     /// Opening, closing and moving around the menus.
@@ -298,6 +331,7 @@ enum Message {
     /// Scroll to a comment, from the comments list.
     /// Scrolls to a comment, and selects it when it can be changed.
     ShowComment(usize, TextBox, Option<annotate::Picked>),
+    CommentList(comments::ListEvent),
     ThumbRendered {
         doc: u64,
         index: usize,
@@ -489,6 +523,17 @@ struct App {
     snapshot: Option<Snapshot>,
     /// The hand tool is on: dragging a page scrolls the view.
     hand: bool,
+    /// Space is held: the hand is on until it's let go, then the tools go back as they were.
+    space_held: Option<bool>,
+    /// Read mode is on.
+    read_mode: bool,
+    /// When the page being presented came up, for turning pages on a timer.
+    presented_at: Option<std::time::Instant>,
+    /// Automatic scrolling is on.
+    auto_scroll: bool,
+    /// The text markup and drawing tools U and D pick: the last of each used.
+    last_markup: annotate::Tool,
+    last_drawing: annotate::Tool,
     /// Where the pointer was in the window, and the scroll position, when the hand grabbed.
     panning: Option<(Point, f32, f32)>,
     /// The pointer in the window, followed while the hand tool is on.
@@ -519,6 +564,8 @@ struct App {
     extracting: Option<pages::Extracting>,
     /// Choosing how much to crop.
     cropping: Option<pages::Cropping>,
+    /// The Rotate pages or Delete pages card.
+    page_range: Option<ranges::PageRange>,
     /// Choosing headers and footers.
     marking: Option<pages::Marking>,
     /// Choosing a watermark or page colour.
@@ -775,7 +822,23 @@ struct OpenDoc {
     layers_shown: Vec<bool>,
     /// The page layout the file asks for, until the user picks another.
     spread: Option<Spread>,
+    /// Views to go back and forward to: where on which page, and the zoom.
+    back: Vec<View>,
+    forward: Vec<View>,
 }
+
+/// A place in a document: the page, how far down it, and the zoom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct View {
+    at: (usize, f32),
+    zoom: f32,
+}
+
+/// Pages whose text Select All loads, at most.
+const MAX_SELECT_ALL_PAGES: usize = 2_000;
+
+/// Views remembered for Previous View, at most.
+const MAX_VIEWS: usize = 100;
 
 #[derive(Default)]
 pub(crate) struct Thumb {
@@ -859,34 +922,52 @@ fn properties_view<'a>(
 /// The keyboard shortcuts, in two columns.
 fn shortcuts_card<'a>() -> Element<'a, Message> {
     let m = icons::MOD;
-    let keys: [(String, &str); 24] = [
+    let keys: [(String, &str); 35] = [
         (format!("{m}O"), "Open"),
         (format!("{m}S"), "Save"),
         (format!("{m}Shift+S"), "Save as"),
         (format!("{m}P"), "Print"),
-        (format!("{m}W"), "Close the document"),
+        (format!("{m}W, {m}F4"), "Close the document"),
         (format!("{m}Tab"), "Next tab"),
         (format!("{m}D"), "Document properties"),
-        (format!("{m}F, F3"), "Find, find next"),
+        (format!("{m}F, F3, Shift+F3"), "Find, next, previous"),
         (format!("{m}Z, {m}Y"), "Undo, redo"),
         (format!("{m}C"), "Copy"),
-        (format!("{m}, (comma)"), "Preferences"),
+        (format!("{m}K"), "Preferences"),
         ("F10, Alt+letter".into(), "Open a menu"),
         (format!("{m}+, {m}−"), "Zoom in, zoom out"),
         (format!("{m}1, {m}2, {m}0"), "Actual size, fit width, fit page"),
         ("Page Up, Page Down".into(), "Previous, next page"),
+        ("Left, Right".into(), "Previous, next page"),
+        ("Enter, Shift+Enter".into(), "Next, previous screen"),
         ("Home, End".into(), "First, last page"),
-        (format!("{m}Shift+N"), "Go to page"),
-        (format!("{m}Shift+T"), "Page layout"),
-        (format!("{m}Shift+D"), "Page colours"),
-        (format!("{m}Shift+−, {m}Shift++"), "Rotate the view"),
-        ("F4".into(), "Sidebar"),
-        ("F11".into(), "Full screen"),
-        (format!("{m}L"), "Present"),
         (
-            format!("{m}Shift+C"),
-            "Comment tools (then a letter picks a tool)",
+            if cfg!(target_os = "macos") {
+                format!("{m}←, {m}→")
+            } else {
+                "Alt+←, Alt+→".into()
+            },
+            "Previous, next view",
         ),
+        (format!("{m}Shift+N"), "Go to page"),
+        (format!("{m}Shift+−, {m}Shift++"), "Rotate the view"),
+        (
+            format!("{m}Shift+T, {m}Shift+I"),
+            "Insert a blank page, insert a file",
+        ),
+        (format!("{m}Shift+D, {m}Shift+R"), "Delete pages, rotate pages"),
+        (format!("{m}B"), "Add a bookmark"),
+        ("F4, Shift+F4".into(), "Navigation pane, all tools"),
+        (format!("{m}H"), "Read mode"),
+        (format!("{m}L, F11"), "Full screen: pages only, or with the tools"),
+        (format!("{m}Shift+H"), "Scroll automatically"),
+        (format!("{m}Shift+Y"), "Read aloud, or stop"),
+        (format!("{m}Shift+C"), "Comment tools"),
+        ("Space (hold), H, Z, V".into(), "Hand, zoom box, select"),
+        ("S, X, Q, K".into(), "Sticky note, text box, cloud, stamp"),
+        ("U, Shift+U".into(), "Highlight; next text markup"),
+        ("D, Shift+D".into(), "Drawing tool; next drawing tool"),
+        ("Shift+K".into(), "Checkmark on the selected comment"),
     ];
     let line = |(k, what): (String, &'a str)| -> Element<'a, Message> {
         row![text(k).size(13).width(200), text(what).size(13)]
@@ -894,7 +975,7 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
             .into()
     };
     let mut left: Vec<Element<'a, Message>> = keys.into_iter().map(line).collect();
-    let right = left.split_off(12);
+    let right = left.split_off(18);
     container(
         column![
             text("Keyboard shortcuts").size(16),
@@ -1014,6 +1095,7 @@ fn password_id() -> iced::widget::Id {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
+        let redact_look = settings.redact.clone();
         let unit = settings.unit;
         let annotate = annotator(&settings);
         let mut app = Self {
@@ -1060,6 +1142,7 @@ impl App {
             printing: false,
             extracting: None,
             cropping: None,
+            page_range: None,
             marking: None,
             watermarking: None,
             exporting: None,
@@ -1093,13 +1176,19 @@ impl App {
             notice: None,
             snapping: false,
             hand: false,
+            space_held: None,
+            read_mode: false,
+            presented_at: None,
+            auto_scroll: false,
+            last_markup: annotate::Tool::Highlight,
+            last_drawing: annotate::Tool::Pen,
             panning: None,
             cursor: Point::ORIGIN,
             zoom_box: false,
             snapshot: None,
             measure: measure::Measure::default(),
             adder: add::Adder::default(),
-            redactor: redact::Redactor::default(),
+            redactor: redact::Redactor::with_look(redact_look),
             preparer: prepare::Preparer::default(),
             picture_editor: pictures::PictureEditor::default(),
             reader: speech::Reader::default(),
@@ -1159,6 +1248,12 @@ impl App {
             })
         };
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
+        if self.auto_scroll {
+            subs.push(window::frames().map(|_| Message::AutoScrollTick));
+        }
+        if matches!(self.screen, Screen::Present { .. }) && self.settings.present_seconds > 0 {
+            subs.push(window::frames().map(Message::PresentTick));
+        }
         #[cfg(target_os = "macos")]
         subs.push(finder::subscription());
         if self.hand {
@@ -1434,11 +1529,135 @@ impl App {
             Message::FocusPageBox => {
                 operation::focus(page_box_id()).chain(operation::select_all(page_box_id()))
             }
-            Message::ToolKey(tool) => {
-                if self.annotate.open {
-                    return self.update(Message::Annotate(annotate::Event::Tool(tool)));
+            Message::Accelerator { key, shift } => self.accelerator(key, shift),
+            Message::SpaceHand(down) => {
+                if matches!(self.screen, Screen::Present { .. }) {
+                    return if down {
+                        self.update(Message::Advance(true))
+                    } else {
+                        Task::none()
+                    };
+                }
+                if down && self.space_held.is_none() && self.doc.is_some() {
+                    self.space_held = Some(self.hand);
+                    self.hand = true;
+                } else if !down && let Some(was) = self.space_held.take() {
+                    self.hand = was;
+                    self.panning = None;
                 }
                 Task::none()
+            }
+            Message::PrevView | Message::NextView => {
+                let back = matches!(message, Message::PrevView);
+                let here = self.here();
+                let Some(doc) = &mut self.doc else {
+                    return Task::none();
+                };
+                let (from, to) = if back {
+                    (&mut doc.back, &mut doc.forward)
+                } else {
+                    (&mut doc.forward, &mut doc.back)
+                };
+                let Some(view) = from.pop() else {
+                    return Task::none();
+                };
+                if let Some(here) = here {
+                    to.push(here);
+                }
+                self.show_view(view)
+            }
+            Message::ArrowScroll(down) => {
+                if matches!(self.screen, Screen::Present { .. }) {
+                    return self.update(Message::Advance(down));
+                }
+                let step = if down { 40.0 } else { -40.0 };
+                operation::scroll_by(scroll_id(), AbsoluteOffset { x: 0.0, y: step })
+            }
+            Message::EnterKey(shift) => {
+                if matches!(self.screen, Screen::Present { .. }) {
+                    return self.update(Message::Advance(!shift));
+                }
+                if !shift && self.annotate.busy() {
+                    return self.update(Message::Annotate(annotate::Event::FinishShape));
+                }
+                // A screen at a time, keeping a little of the last one in view.
+                let step = (self.viewport.height - 40.0).max(40.0);
+                operation::scroll_by(
+                    scroll_id(),
+                    AbsoluteOffset {
+                        x: 0.0,
+                        y: if shift { -step } else { step },
+                    },
+                )
+            }
+            Message::FitHeight => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = self.current_page();
+                let Some((_, _, row_height)) = doc.layout.row_size(page) else {
+                    return Task::none();
+                };
+                let zoom = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / row_height.max(1.0);
+                let zoom_task = self.set_zoom(zoom);
+                Task::batch([zoom_task, self.go_to_page(page)])
+            }
+            Message::ToggleReadMode => {
+                self.read_mode = !self.read_mode && self.doc.is_some();
+                Task::none()
+            }
+            Message::AutoScroll => {
+                self.auto_scroll = !self.auto_scroll && self.doc.is_some();
+                Task::none()
+            }
+            Message::AutoScrollTick => {
+                if !self.auto_scroll || self.doc.is_none() {
+                    self.auto_scroll = false;
+                    return Task::none();
+                }
+                operation::scroll_by(scroll_id(), AbsoluteOffset { x: 0.0, y: 1.5 })
+            }
+            Message::ReadAloudToggle => {
+                let event = if self.reader.active() {
+                    speech::Event::Stop
+                } else {
+                    speech::Event::Page
+                };
+                self.update(Message::ReadAloud(event))
+            }
+            Message::ShowSidebar => {
+                self.read_mode = false;
+                if !self.sidebar.open {
+                    return self.update(Message::Sidebar(sidebar::Event::Toggle));
+                }
+                Task::none()
+            }
+            Message::ToggleAllTools => self.update(Message::AllTools(!self.all_tools)),
+            Message::SelectAll => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let pages = doc.pages.len();
+                if pages == 0 {
+                    return Task::none();
+                }
+                self.selection = Some(Selection {
+                    anchor: selection::Caret { page: 0, index: 0 },
+                    focus: selection::Caret {
+                        page: pages - 1,
+                        index: usize::MAX,
+                    },
+                });
+                // Every page's text, so copying gets all of it; very long documents are
+                // capped to keep memory in check.
+                self.request_text(0..pages.min(MAX_SELECT_ALL_PAGES))
+            }
+            Message::AddBookmark => {
+                if self.doc.is_none() {
+                    return Task::none();
+                }
+                let title = self.selected_text().unwrap_or_default();
+                self.read_mode = false;
+                self.sidebar.open = true;
+                self.sidebar.tab = sidebar::Tab::Bookmarks;
+                self.save_sidebar();
+                self.update(Message::Bookmarks(bookmarks::Event::AddTitled(title)))
             }
             Message::PageInput(value) => {
                 // A page number, or a label such as "iv" when the pages have labels.
@@ -1542,10 +1761,27 @@ impl App {
             },
             Message::Advance(forward) => match self.screen {
                 Screen::Present { page, .. } => {
-                    self.present_page(if forward { page + 1 } else { page.saturating_sub(1) })
+                    let last = self.doc.as_ref().map_or(0, |d| d.pages.len().saturating_sub(1));
+                    // Loop after the last page, as Acrobat's Full Screen preference does.
+                    let next = match (forward, page >= last, page == 0) {
+                        (true, true, _) if self.settings.present_loop => 0,
+                        (false, _, true) if self.settings.present_loop => last,
+                        (true, _, _) => page + 1,
+                        (false, _, _) => page.saturating_sub(1),
+                    };
+                    self.present_page(next)
                 }
                 _ => Task::none(),
             },
+            Message::PresentTick(now) => {
+                let seconds = self.settings.present_seconds;
+                match self.presented_at {
+                    Some(at) if seconds > 0 && now.duration_since(at).as_secs() >= u64::from(seconds) => {
+                        self.update(Message::Advance(true))
+                    }
+                    _ => Task::none(),
+                }
+            }
             Message::PasswordInput(value) => {
                 if let Status::Password { input, .. } = &mut self.status {
                     // Replacing it wipes the previous copy.
@@ -1605,6 +1841,11 @@ impl App {
                 if matches!(self.screen, Screen::Present { .. }) {
                     return self.stop_presenting();
                 }
+                // Escape stops automatic scrolling and leaves read mode first, as in Acrobat.
+                if self.auto_scroll {
+                    self.auto_scroll = false;
+                    return Task::none();
+                }
                 if self.confirm_link.is_some() {
                     self.confirm_link = None;
                 } else if self.snapping || self.hand || self.zoom_box {
@@ -1643,6 +1884,8 @@ impl App {
                     self.extracting = None;
                 } else if self.cropping.is_some() {
                     self.cropping = None;
+                } else if self.page_range.is_some() {
+                    self.page_range = None;
                 } else if self.marking.is_some() {
                     self.marking = None;
                 } else if self.watermarking.is_some() {
@@ -1722,6 +1965,10 @@ impl App {
                 Screen::Present { .. } => self.present_page(index),
                 _ => self.go_to_page(index),
             },
+            Message::CommentList(event) => {
+                self.sidebar.comment_list.update(event);
+                Task::none()
+            }
             Message::ShowComment(page, at, picked) => {
                 // Selecting a comment in the list selects it on the page too, ready to move
                 // or restyle.
@@ -2632,7 +2879,15 @@ impl App {
                     }
                     redact::Outcome::Apply(areas, scrub) => {
                         let show = areas.first().map_or(0, |(page, _)| *page);
-                        return self.edit_pages(PageEdit::Redact { areas, scrub }, show, false);
+                        let look = self.redactor.look.clone();
+                        return self.edit_pages(PageEdit::Redact { areas, scrub, look }, show, false);
+                    }
+                    redact::Outcome::FindPattern(pattern) => {
+                        return self.find_event(find::Event::Pattern(Some(pattern)));
+                    }
+                    redact::Outcome::SaveLook => {
+                        self.settings.redact = self.redactor.look.clone();
+                        self.settings.save();
                     }
                 }
                 if self.redactor.on {
@@ -2927,11 +3182,21 @@ impl App {
                 self.page_tool(pages::Op::Undo)
             }
             Message::Annotate(event) => {
+                if let annotate::Event::Tool(tool) = event {
+                    if annotate::Tool::MARKUPS.contains(&tool) {
+                        self.last_markup = tool;
+                    } else if annotate::Tool::DRAWING.contains(&tool) {
+                        self.last_drawing = tool;
+                    }
+                }
                 // Choosing a markup tool with text selected marks it straight away.
                 let marks_now = matches!(
                     event,
                     annotate::Event::Tool(
-                        annotate::Tool::Highlight | annotate::Tool::Underline | annotate::Tool::StrikeOut
+                        annotate::Tool::Highlight
+                            | annotate::Tool::Underline
+                            | annotate::Tool::StrikeOut
+                            | annotate::Tool::Replace
                     )
                 ) && self.selection.is_some_and(|s| !s.is_empty());
                 let opening = matches!(event, annotate::Event::Toggle);
@@ -3222,6 +3487,9 @@ impl App {
                         self.settings.unit = unit;
                         self.measure.unit = unit;
                     }
+                    preferences::Event::SingleKeys(on) => self.settings.single_keys = on,
+                    preferences::Event::PresentLoop(on) => self.settings.present_loop = on,
+                    preferences::Event::PresentSeconds(s) => self.settings.present_seconds = s,
                     preferences::Event::DefaultApp => {
                         self.default_app_note = Some(preferences::make_default());
                     }
@@ -3442,6 +3710,32 @@ impl App {
                         }
                         let current = self.current_page();
                         return self.edit_pages(PageEdit::HeaderFooter { pages, marks }, current, false);
+                    }
+                }
+                Task::none()
+            }
+            Message::PageRange(event) => {
+                let Some(state) = &mut self.page_range else {
+                    return Task::none();
+                };
+                match event {
+                    ranges::Event::Pages(v) => {
+                        state.pages = v.chars().filter(|c| !c.is_control()).take(200).collect();
+                    }
+                    ranges::Event::Turns(t) => state.turns = t,
+                    ranges::Event::Parity(p) => state.parity = p,
+                    ranges::Event::Orientation(o) => state.orientation = o,
+                    ranges::Event::Cancel => self.page_range = None,
+                    ranges::Event::Go => {
+                        let Some(doc) = &self.doc else { return Task::none() };
+                        let Ok((plan, show)) = state.plan(&doc.info.pages) else {
+                            return Task::none();
+                        };
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        self.page_range = None;
+                        return self.edit_pages(PageEdit::Plan(plan), show, false);
                     }
                 }
                 Task::none()
@@ -4054,6 +4348,15 @@ impl App {
                 self.marking = Some(pages::Marking::new(count));
                 operation::focus(pages::mark_input_id())
                     .chain(operation::move_cursor_to_end(pages::mark_input_id()))
+            }
+            pages::Op::RotatePages | pages::Op::DeletePages => {
+                let action = if op == pages::Op::RotatePages {
+                    ranges::Action::Rotate
+                } else {
+                    ranges::Action::Delete
+                };
+                self.page_range = Some(ranges::PageRange::new(action, current));
+                operation::focus(ranges::input_id()).chain(operation::select_all(ranges::input_id()))
             }
             pages::Op::Crop => {
                 self.cropping = Some(pages::Cropping::default());
@@ -4841,6 +5144,13 @@ impl App {
             .collect();
         self.selection = None;
         let outcome = self.annotate.mark_text(per_page);
+        if self.annotate.editing.is_some() {
+            // Replace text asks for the new words.
+            return Task::batch([
+                self.after_annotate(outcome),
+                operation::focus(annotate::editor_id()),
+            ]);
+        }
         self.after_annotate(outcome)
     }
 
@@ -4959,12 +5269,26 @@ impl App {
             find::Event::Close => {
                 self.find.open = false;
                 self.find.query.clear();
+                self.find.pattern = None;
                 self.rescan_find();
                 Task::none()
+            }
+            find::Event::Pattern(pattern) => {
+                self.find.pattern = pattern;
+                self.find.query.clear();
+                self.find.open = pattern.is_some();
+                if pattern.is_some() {
+                    self.sidebar.open = true;
+                    self.sidebar.tab = sidebar::Tab::Results;
+                    self.save_sidebar();
+                }
+                self.rescan_find();
+                Task::batch([self.request_search_text(), self.step_find(true)])
             }
             find::Event::Query(query) => {
                 self.find.open = true;
                 self.find.query = query;
+                self.find.pattern = None;
                 if self.find.active() && self.sidebar.tab != sidebar::Tab::Results {
                     // Typing a search shows the results list, like Word.
                     self.sidebar.tab = sidebar::Tab::Results;
@@ -5352,6 +5676,8 @@ impl App {
             texts: Vec::new(),
             layers_shown: Vec::new(),
             spread: None,
+            back: Vec::new(),
+            forward: Vec::new(),
         });
         Task::perform(rx, move |result| {
             Message::Opened(id, result.unwrap_or(Err(OpenError::EngineCrashed)))
@@ -5464,6 +5790,7 @@ impl App {
         if let Screen::Present { page, .. } = &mut self.screen {
             *page = index;
         }
+        self.presented_at = Some(std::time::Instant::now());
         let fit = (self.window_size.width / size.width.max(1.0))
             .min(self.window_size.height / size.height.max(1.0));
         self.zoom = fit.clamp(MIN_ZOOM, MAX_ZOOM);
@@ -5503,6 +5830,90 @@ impl App {
         page.chain(zoomed)
     }
 
+    /// The view shown now, for going back to it later.
+    fn here(&self) -> Option<View> {
+        let doc = self.doc.as_ref().filter(|d| !d.pages.is_empty())?;
+        Some(View {
+            at: doc.layout.unzoomed_y(self.viewport.offset_y, self.zoom),
+            zoom: self.zoom,
+        })
+    }
+
+    /// Shows a view remembered earlier, without remembering the one it leaves.
+    fn show_view(&mut self, view: View) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        if doc.pages.is_empty() {
+            return Task::none();
+        }
+        let at = (view.at.0.min(doc.pages.len() - 1), view.at.1);
+        self.zoom = view.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        let y = doc.layout.zoomed_y(at, self.zoom);
+        self.viewport.offset_y = y;
+        Task::batch([
+            operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y }),
+            self.request_visible(),
+        ])
+    }
+
+    /// Acrobat's single-key accelerators, when they're turned on in Preferences.
+    fn accelerator(&mut self, key: char, shift: bool) -> Task<Message> {
+        use annotate::Tool;
+        if !self.settings.single_keys || self.doc.is_none() || self.saving {
+            return Task::none();
+        }
+        let comment = |app: &mut Self, tool: Tool| app.update(Message::CommentTool(tool));
+        match (key, shift) {
+            ('v', false) => {
+                self.stop_page_tools();
+                if self.annotate.open {
+                    return comment(self, Tool::Select);
+                }
+                Task::none()
+            }
+            ('h', false) => {
+                self.stop_page_tools();
+                self.hand = true;
+                Task::none()
+            }
+            ('z', false) => {
+                self.stop_page_tools();
+                self.zoom_box = true;
+                Task::none()
+            }
+            ('s', false) => comment(self, Tool::Note),
+            ('x', false) => comment(self, Tool::TextBox),
+            ('q', false) => comment(self, Tool::Cloud),
+            ('k' | 'j', false) => comment(self, Tool::Stamp),
+            // Acrobat's Shift+K: a checkmark on the selected comment.
+            ('k', true) => self.update(Message::Annotate(annotate::Event::CheckPicked)),
+            ('u', false) => comment(self, self.last_markup),
+            ('u', true) => {
+                let current = if self.annotate.open {
+                    self.annotate.tool
+                } else {
+                    self.last_markup
+                };
+                comment(self, current.next_in(&Tool::MARKUPS))
+            }
+            ('d', false) => comment(self, self.last_drawing),
+            ('d', true) => {
+                let current = if self.annotate.open {
+                    self.annotate.tool
+                } else {
+                    self.last_drawing
+                };
+                comment(self, current.next_in(&Tool::DRAWING))
+            }
+            // Forms editing, crop, objects and redaction, as in Acrobat.
+            ('a', false) => self.update(Message::Prepare(prepare::Event::Toggle)),
+            ('c', false) => self.update(Message::Pages(pages::Op::Crop)),
+            ('r' | 'o', false) => self.update(Message::EditPictures(pictures::Event::Toggle)),
+            ('t', false) => self.update(Message::Add(add::Event::Toggle)),
+            ('y', true) => self.update(Message::Redact(redact::Event::Toggle)),
+            _ => Task::none(),
+        }
+    }
+
     fn go_to_page(&mut self, index: usize) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
         if doc.pages.is_empty() {
@@ -5510,6 +5921,19 @@ impl App {
         }
         let index = index.min(doc.pages.len() - 1);
         let y = doc.layout.page_top(index, self.zoom);
+        // Going to another page is a new view: remember this one for Previous View.
+        if let Some(here) = self.here()
+            && here.at.0 != index
+            && let Some(doc) = &mut self.doc
+        {
+            if doc.back.last() != Some(&here) {
+                doc.back.push(here);
+                if doc.back.len() > MAX_VIEWS {
+                    doc.back.remove(0);
+                }
+            }
+            doc.forward.clear();
+        }
         self.viewport.offset_y = y;
         Task::batch([
             operation::scroll_to(scroll_id(), AbsoluteOffset { x: 0.0, y }),
@@ -5762,24 +6186,24 @@ impl App {
                             Spread::TwoCover => Icon::CoverPage,
                         },
                         match spread {
-                            Spread::Single => {
-                                format!("Single page: click for two pages side by side ({m}Shift+T)")
-                            }
-                            Spread::Two => {
-                                format!("Two pages: click to show the cover page alone ({m}Shift+T)")
-                            }
-                            Spread::TwoCover => {
-                                format!("Two pages with cover: click for single page ({m}Shift+T)")
-                            }
+                            Spread::Single => "Single page: click for two pages side by side".to_owned(),
+                            Spread::Two => "Two pages: click to show the cover page alone".to_owned(),
+                            Spread::TwoCover => "Two pages with cover: click for single page".to_owned(),
                         },
                         on(Message::NextSpread),
                     ),
                     icons::button(Icon::RotateCcw, "Rotate the view left", on(Message::RotateCcw)),
                     icons::button(Icon::RotateCw, "Rotate the view right", on(Message::RotateCw)),
                     icons::toggle(
+                        Icon::ReadMode,
+                        format!("Read mode: hide the toolbars and panels ({}H)", icons::MOD),
+                        self.read_mode,
+                        Message::ToggleReadMode,
+                    ),
+                    icons::toggle(
                         Icon::Moon,
                         format!(
-                            "Page colours: {} (click for {}, {m}Shift+D)",
+                            "Page colours: {} (click for {})",
                             self.settings.colors.label(),
                             self.settings.colors.next().label()
                         ),
@@ -6027,6 +6451,7 @@ impl App {
                 ),
                 Separator,
                 plain("Copy", k("C"), on(Message::Copy)),
+                plain("Select all", k("A"), on(Message::SelectAll)),
                 check("Snapshot", "", self.snapping, on(Message::ToggleSnapshot)),
                 Separator,
                 item(
@@ -6034,6 +6459,12 @@ impl App {
                     "Find…",
                     k("F"),
                     on(Message::Find(find::Event::Open)),
+                ),
+                item(
+                    Icon::BookmarkAdd,
+                    "Add a bookmark",
+                    k("B"),
+                    on(Message::AddBookmark),
                 ),
                 Separator,
                 item(
@@ -6052,7 +6483,7 @@ impl App {
                 item(
                     Icon::Preferences,
                     "Preferences…",
-                    k(","),
+                    k("K"),
                     Some(Message::Preferences(preferences::Event::Open)),
                 ),
             ],
@@ -6109,6 +6540,7 @@ impl App {
                     plain("Actual size", k("1"), on(Message::ZoomReset)),
                     item(Icon::FitWidth, "Fit width", k("2"), on(Message::FitWidth)),
                     item(Icon::FitPage, "Fit page", k("0"), on(Message::FitPage)),
+                    item(Icon::FitHeight, "Fit height", "", on(Message::FitHeight)),
                     Separator,
                     sub(
                         Some(Icon::SinglePage),
@@ -6142,9 +6574,15 @@ impl App {
                     ),
                     item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
                     Separator,
-                    item(Icon::Present, "Present", k("L"), on(Message::Present)),
+                    check("Read mode", k("H"), self.read_mode, on(Message::ToggleReadMode)),
+                    item(
+                        Icon::Present,
+                        "Full screen, pages only",
+                        k("L"),
+                        on(Message::Present),
+                    ),
                     check(
-                        "Full screen",
+                        "Full screen with the tools",
                         "F11",
                         self.screen == Screen::Full,
                         Some(Message::ToggleFullScreen),
@@ -6152,7 +6590,42 @@ impl App {
                     Separator,
                     item(Icon::PrevPage, "Previous page", "Page Up", on(Message::PrevPage)),
                     item(Icon::NextPage, "Next page", "Page Down", on(Message::NextPage)),
+                    plain("First page", "Home", on(Message::GoToPage(0))),
+                    plain("Last page", "End", on(Message::GoToPage(usize::MAX))),
                     plain("Go to page…", k("Shift+N"), on(Message::FocusPageBox)),
+                    item(
+                        Icon::PrevView,
+                        "Previous view",
+                        if cfg!(target_os = "macos") {
+                            k("←")
+                        } else {
+                            "Alt+←".into()
+                        },
+                        self.doc
+                            .as_ref()
+                            .is_some_and(|d| !d.back.is_empty())
+                            .then_some(Message::PrevView),
+                    ),
+                    item(
+                        Icon::NextView,
+                        "Next view",
+                        if cfg!(target_os = "macos") {
+                            k("→")
+                        } else {
+                            "Alt+→".into()
+                        },
+                        self.doc
+                            .as_ref()
+                            .is_some_and(|d| !d.forward.is_empty())
+                            .then_some(Message::NextView),
+                    ),
+                    Separator,
+                    check(
+                        "Scroll automatically",
+                        k("Shift+H"),
+                        self.auto_scroll,
+                        on(Message::AutoScroll),
+                    ),
                 ]
             }
             menu::Menu::Comment => {
@@ -6160,7 +6633,7 @@ impl App {
                     item(
                         t.icon(),
                         t.label(),
-                        t.key().to_ascii_uppercase().to_string(),
+                        t.key().unwrap_or_default(),
                         on(Message::CommentTool(t)),
                     )
                 };
@@ -6177,9 +6650,12 @@ impl App {
                     tool(Tool::Highlight),
                     tool(Tool::Underline),
                     tool(Tool::StrikeOut),
+                    tool(Tool::Replace),
+                    tool(Tool::InsertText),
                     tool(Tool::Note),
                     tool(Tool::TextBox),
                     tool(Tool::Pen),
+                    tool(Tool::Eraser),
                     sub(
                         Some(Icon::Square),
                         "Shapes",
@@ -6188,6 +6664,7 @@ impl App {
                             Tool::Ellipse,
                             Tool::Arrow,
                             Tool::Line,
+                            Tool::PolyLine,
                             Tool::Polygon,
                             Tool::Cloud,
                         ]
@@ -6219,11 +6696,20 @@ impl App {
                 ]
             }
             menu::Menu::Pages => {
-                let op =
-                    |icon: Icon, label: &str, op: pages::Op| item(icon, label, "", on(Message::Pages(op)));
+                let op = |icon: Icon, label: &str, op: pages::Op| {
+                    let keys = match op {
+                        pages::Op::InsertBlank => k("Shift+T"),
+                        pages::Op::InsertFile => k("Shift+I"),
+                        pages::Op::DeletePages => k("Shift+D"),
+                        pages::Op::RotatePages => k("Shift+R"),
+                        _ => String::new(),
+                    };
+                    item(icon, label, keys, on(Message::Pages(op)))
+                };
                 vec![
                     op(Icon::RotateCcw, "Rotate this page left", pages::Op::RotateCcw),
                     op(Icon::RotateCw, "Rotate this page right", pages::Op::RotateCw),
+                    op(Icon::RotateCw, "Rotate pages…", pages::Op::RotatePages),
                     op(Icon::MoveUp, "Move this page up", pages::Op::MoveUp),
                     op(Icon::MoveDown, "Move this page down", pages::Op::MoveDown),
                     Separator,
@@ -6240,6 +6726,7 @@ impl App {
                     op(Icon::PageReplace, "Replace pages…", pages::Op::Replace),
                     op(Icon::PageExtract, "Extract or split pages…", pages::Op::Extract),
                     op(Icon::Delete, "Delete this page", pages::Op::Delete),
+                    op(Icon::Delete, "Delete pages…", pages::Op::DeletePages),
                     Separator,
                     op(Icon::Crop, "Crop pages…", pages::Op::Crop),
                     op(
@@ -6348,8 +6835,8 @@ impl App {
                     self.measure.on,
                     on(Message::Measure(measure::Event::Toggle)),
                 ),
-                check("Hand", "", self.hand, Some(Message::ToggleHand)),
-                check("Zoom box", "", self.zoom_box, Some(Message::ToggleZoomBox)),
+                check("Hand", "H", self.hand, Some(Message::ToggleHand)),
+                check("Zoom box", "Z", self.zoom_box, Some(Message::ToggleZoomBox)),
                 Separator,
                 item(
                     Icon::Compare,
@@ -6439,6 +6926,9 @@ impl App {
         // move the body in the widget tree and reset its scroll position.
         let body = column![self.tab_bar(), body].into();
         let mut layers = vec![body];
+        // Dialogs go above everything in the window, the menu bar and toolbars included, so
+        // nothing behind one can be clicked while it's open. Only open menus sit higher.
+        let mut dialogs: Vec<Element<'_, Message>> = Vec::new();
         if self.adder.on && self.doc.is_some() {
             layers.push(
                 container(self.adder.bar())
@@ -6451,21 +6941,24 @@ impl App {
             );
         }
         if let Some(card) = self.adder.card() {
-            layers.push(modal(card, Message::Add(add::Event::Cancel)));
+            dialogs.push(modal(card, Message::Add(add::Event::Cancel)));
         }
         if self.redactor.on && self.doc.is_some() {
             layers.push(
-                container(self.redactor.bar(!self.find.hits().is_empty()))
-                    .width(Fill)
-                    .height(Fill)
-                    .padding(16)
-                    .align_x(Center)
-                    .align_y(iced::Bottom)
-                    .into(),
+                container(self.redactor.bar(
+                    !self.find.hits().is_empty(),
+                    self.doc.as_ref().map_or(0, |d| d.pages.len()),
+                ))
+                .width(Fill)
+                .height(Fill)
+                .padding(16)
+                .align_x(Center)
+                .align_y(iced::Bottom)
+                .into(),
             );
         }
         if let Some(card) = self.redactor.card() {
-            layers.push(modal(card, Message::Redact(redact::Event::Cancel)));
+            dialogs.push(modal(card, Message::Redact(redact::Event::Cancel)));
         }
         if self.preparer.on && self.doc.is_some() {
             layers.push(
@@ -6501,10 +6994,10 @@ impl App {
             );
         }
         if let Some(report) = &self.preflight {
-            layers.push(modal(report.card(), Message::Preflight(preflight::Event::Close)));
+            dialogs.push(modal(report.card(), Message::Preflight(preflight::Event::Close)));
         }
         if let Some(card) = self.preparer.card() {
-            layers.push(modal(card, Message::Prepare(prepare::Event::Cancel)));
+            dialogs.push(modal(card, Message::Prepare(prepare::Event::Cancel)));
         }
         if self.measure.on && self.doc.is_some() {
             layers.push(
@@ -6521,10 +7014,10 @@ impl App {
             layers.push(properties_view(&doc.info, &self.initial, self.pages_busy));
         }
         if let Some(card) = self.annotate.editor() {
-            layers.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
+            dialogs.push(modal(card, Message::Annotate(annotate::Event::EditCancel)));
         }
         if let (Some(state), Some(doc)) = (&self.extracting, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::extract_card(
                     state,
                     doc.pages.len(),
@@ -6533,108 +7026,117 @@ impl App {
                 Message::Extract(pages::ExtractEvent::Cancel),
             ));
         }
-        if let Some(state) = &self.cropping {
+        if let (Some(state), Some(doc)) = (&self.page_range, &self.doc) {
             layers.push(modal(
+                ranges::card(state, &doc.info.pages),
+                Message::PageRange(ranges::Event::Cancel),
+            ));
+        }
+        if let Some(state) = &self.cropping {
+            dialogs.push(modal(
                 pages::crop_card(state),
                 Message::Crop(pages::CropEvent::Cancel),
             ));
         }
         if self.all_tools {
-            layers.push(modal(
+            dialogs.push(modal(
                 tools::card(self.form.exists(), self.doc.is_some()),
                 Message::AllTools(false),
             ));
         }
         if let Some(state) = self.cleaning {
-            layers.push(modal(
+            dialogs.push(modal(
                 protect::clean_card(state),
                 Message::Clean(protect::CleanEvent::Cancel),
             ));
         }
         if let Some(state) = &self.protecting {
-            layers.push(modal(
+            dialogs.push(modal(
                 protect::card(state),
                 Message::Protect(protect::Event::Cancel),
             ));
         }
         if let Some(state) = &self.scanning {
-            layers.push(modal(scan::card(state), Message::Scan(scan::Event::Cancel)));
+            dialogs.push(modal(scan::card(state), Message::Scan(scan::Event::Cancel)));
         }
         if let Some(state) = self.shrinking {
-            layers.push(modal(shrink::card(state), Message::Shrink(shrink::Event::Cancel)));
+            dialogs.push(modal(shrink::card(state), Message::Shrink(shrink::Event::Cancel)));
         }
         if let Some(state) = &self.signing {
-            layers.push(modal(
+            dialogs.push(modal(
                 signing::card(state),
                 Message::Signing(signing::Event::Cancel),
             ));
         }
         if let Some(state) = self.flattening {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::flatten_card(state),
                 Message::Flatten(pages::FlattenEvent::Cancel),
             ));
         }
         if let Some(state) = &self.blank {
-            layers.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
+            dialogs.push(modal(create::card(state), Message::Blank(create::Event::Cancel)));
         }
         if let Some(state) = &self.batch {
-            layers.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
+            dialogs.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
         }
         if self.preferences {
-            layers.push(modal(
+            dialogs.push(modal(
                 preferences::card(preferences::View {
                     author: &self.settings.author,
                     account: &self.account,
                     appearance: self.settings.appearance,
                     zoom: self.settings.open_zoom,
                     unit: self.settings.unit,
+                    single_keys: self.settings.single_keys,
+                    present_loop: self.settings.present_loop,
+                    present_seconds: self.settings.present_seconds,
                     note: self.default_app_note.as_deref(),
                 }),
                 Message::Preferences(preferences::Event::Close),
             ));
         }
         if let Some(state) = &self.labelling {
-            layers.push(modal(labels::card(state), Message::Labels(labels::Event::Cancel)));
+            dialogs.push(modal(labels::card(state), Message::Labels(labels::Event::Cancel)));
         }
         if let Some(state) = &self.replacing {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::replace_card(state),
                 Message::Replace(pages::ReplaceEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.exporting, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 export::card(state, doc.pages.len()),
                 Message::Export(export::Event::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.watermarking, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::watermark_card(state, doc.pages.len()),
                 Message::Watermark(pages::WatermarkEvent::Cancel),
             ));
         }
         if let (Some(state), Some(doc)) = (&self.marking, &self.doc) {
-            layers.push(modal(
+            dialogs.push(modal(
                 pages::mark_card(state, doc.pages.len()),
                 Message::Mark(pages::MarkEvent::Cancel),
             ));
         }
         if self.confirm_reset {
-            layers.push(modal(reset_view(), Message::ConfirmReset(false)));
+            dialogs.push(modal(reset_view(), Message::ConfirmReset(false)));
         }
         if let Some(uri) = &self.confirm_link {
-            layers.push(modal(link_view(uri), Message::OpenLink(LinkChoice::Cancel)));
+            dialogs.push(modal(link_view(uri), Message::OpenLink(LinkChoice::Cancel)));
         }
         if self.confirm.is_some() {
-            layers.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
+            dialogs.push(modal(self.confirm_view(), Message::Confirm(Choice::Cancel)));
         }
         if self.strengthen.is_some() {
-            layers.push(modal(self.strengthen_view(), Message::Strengthen(None)));
+            dialogs.push(modal(self.strengthen_view(), Message::Strengthen(None)));
         }
         if let Some(notice) = &self.notice {
-            layers.push(modal(
+            dialogs.push(modal(
                 container(
                     column![
                         text(notice.as_str()),
@@ -6649,15 +7151,24 @@ impl App {
                 Message::DismissNotice,
             ));
         }
+        if self.read_mode && has_doc {
+            layers.push(self.read_mode_bar());
+        }
         if self.shortcuts {
-            layers.push(modal(shortcuts_card(), Message::Shortcuts(false)));
+            dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
         }
         let body: Element<'_, Message> = Stack::with_children(layers).into();
 
         // The same shape whichever edges have bars, so moving a bar doesn't move the body in
         // the widget tree and reset its scroll position.
         let bars = self.bars.arrange(
-            |bar, vertical| self.bar_items(bar, vertical),
+            |bar, vertical| {
+                if self.read_mode {
+                    None
+                } else {
+                    self.bar_items(bar, vertical)
+                }
+            },
             Message::Toolbar,
             self.window_size,
         );
@@ -6669,6 +7180,7 @@ impl App {
         ];
         let mut layers = vec![window.into()];
         layers.extend(bars.floating);
+        layers.extend(dialogs);
         if let Some(menu) = self.menus.open() {
             layers.extend(self.menus.panels(
                 self.menu_entries(menu),
@@ -6678,6 +7190,43 @@ impl App {
             ));
         }
         Stack::with_children(layers).into()
+    }
+
+    /// Read mode's small bar at the bottom: pages, zoom, and leaving read mode.
+    fn read_mode_bar(&self) -> Element<'_, Message> {
+        let on = |m: Message| Some(m);
+        let bar = row![
+            icons::button(Icon::PrevPage, "Previous page", on(Message::PrevPage)),
+            text(format!(
+                "{} / {}",
+                self.current_page() + 1,
+                self.doc.as_ref().map_or(0, |d| d.pages.len())
+            ))
+            .size(13),
+            icons::button(Icon::NextPage, "Next page", on(Message::NextPage)),
+            icons::button(Icon::ZoomOut, "Zoom out", on(Message::ZoomOut)),
+            icons::button(Icon::ZoomIn, "Zoom in", on(Message::ZoomIn)),
+            icons::button(
+                Icon::ReadModeExit,
+                format!("Leave read mode ({}H)", icons::MOD),
+                on(Message::ToggleReadMode)
+            ),
+        ]
+        .spacing(6)
+        .align_y(Center);
+        container(opaque(container(bar).padding([4, 10]).style(
+            |theme: &iced::Theme| {
+                let mut style = container::rounded_box(theme);
+                style.background = style.background.map(|b| b.scale_alpha(0.85));
+                style
+            },
+        )))
+        .width(Fill)
+        .height(Fill)
+        .padding(16)
+        .align_x(Center)
+        .align_y(iced::Bottom)
+        .into()
     }
 
     /// One page on black, nothing else. A click goes forward, a right-click back.
@@ -6806,7 +7355,7 @@ impl App {
     fn with_sidebar<'a>(&'a self, doc: &'a OpenDoc, pages: Element<'a, Message>) -> Element<'a, Message> {
         // Closed, the bar is an empty space rather than missing, so toggling it doesn't move the
         // pages in the widget tree and reset their scroll position.
-        let bar = if !self.sidebar.open {
+        let bar = if !self.sidebar.open || self.read_mode {
             space().into()
         } else {
             self.sidebar.view(sidebar::ViewData {

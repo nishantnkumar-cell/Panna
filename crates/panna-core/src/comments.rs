@@ -33,6 +33,9 @@ pub enum CommentKind {
     Line,
     Polygon,
     Cloud,
+    PolyLine,
+    /// Text to insert, marked with a caret.
+    Caret,
     Stamp,
     /// A reply in another comment's thread, or a review status set on it.
     Reply,
@@ -53,6 +56,8 @@ impl CommentKind {
             "Circle" => Self::Ellipse,
             "Line" => Self::Line,
             "Polygon" => Self::Polygon,
+            "PolyLine" => Self::PolyLine,
+            "Caret" => Self::Caret,
             "Stamp" => Self::Stamp,
             "Link" | "Widget" | "Popup" | "PrinterMark" | "TrapNet" | "Watermark" | "3D" | "RichMedia"
             | "Screen" | "Movie" | "Sound" => return None,
@@ -74,6 +79,8 @@ impl CommentKind {
             Self::Line => "Line",
             Self::Polygon => "Polygon",
             Self::Cloud => "Cloud",
+            Self::PolyLine => "Polygon line",
+            Self::Caret => "Inserted text",
             Self::Stamp => "Stamp",
             Self::Reply => "Reply",
             Self::Other(name) => name,
@@ -171,6 +178,10 @@ pub struct Comment {
     pub reply_to: Option<ObjRef>,
     /// For review statuses (replies that set one): the status.
     pub state: Option<ReviewState>,
+    /// For checkmarks (replies that put one on or take it off): whether it is checked.
+    pub checked: Option<bool>,
+    /// When it was last changed, as 2026-10-19 12:00 UTC; empty when unknown or not saved.
+    pub date: String,
     /// The comment as an annotation Panna can redraw, for the kinds it can make itself. Moving
     /// or restyling a saved comment replaces it with this, changed.
     pub editable: Option<Annotation>,
@@ -246,6 +257,17 @@ impl From<&Annotation> for Comment {
                     CommentKind::Polygon
                 }
             }
+            Kind::PolyLine(points) => {
+                for &(x, y) in points {
+                    add(x, y);
+                }
+                CommentKind::PolyLine
+            }
+            Kind::Caret { rect } => {
+                add(rect.x0, rect.y0);
+                add(rect.x1, rect.y1);
+                CommentKind::Caret
+            }
             Kind::Stamp { rect, .. } => {
                 add(rect.x0, rect.y0);
                 add(rect.x1, rect.y1);
@@ -257,9 +279,11 @@ impl From<&Annotation> for Comment {
                 CommentKind::Reply
             }
         };
-        let (reply_to, state) = match &a.kind {
-            Kind::Reply { to, state, .. } => (Some(*to), *state),
-            _ => (None, None),
+        let (reply_to, state, checked) = match &a.kind {
+            Kind::Reply {
+                to, state, checked, ..
+            } => (Some(*to), *state, *checked),
+            _ => (None, None, None),
         };
         let marked = match &a.kind {
             Kind::Highlight(b) | Kind::Underline(b) | Kind::StrikeOut(b) => b.clone(),
@@ -274,6 +298,8 @@ impl From<&Annotation> for Comment {
             marked,
             reply_to,
             state,
+            checked,
+            date: String::new(),
             editable: None,
             at: at.unwrap_or(TextBox {
                 x0: 0.0,
@@ -340,6 +366,14 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
                     .is_none_or(|m| decode_text_string(m.as_bytes()) == "Review")
             })
             .and_then(|s| ReviewState::parse(&decode_text_string(s.as_bytes())));
+        let checked = reply_to
+            .filter(|_| {
+                annot
+                    .get::<hayro::hayro_syntax::object::String<'_>>(b"StateModel")
+                    .is_some_and(|m| decode_text_string(m.as_bytes()) == "Marked")
+            })
+            .and_then(|_| annot.get::<hayro::hayro_syntax::object::String<'_>>(b"State"))
+            .map(|s| decode_text_string(s.as_bytes()) == "Marked");
         let text = |key: &[u8]| {
             annot
                 .get::<hayro::hayro_syntax::object::String<'_>>(key)
@@ -407,8 +441,17 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             });
         let contents = text(b"Contents");
         let author = text(b"T");
+        let date = [&b"M"[..], b"CreationDate"]
+            .into_iter()
+            .find_map(|key| crate::sig::pdf_date(&text(key)))
+            .unwrap_or_default();
         let redrawn = match reply_to {
-            Some(to) => Some(Kind::Reply { to, at, state }),
+            Some(to) => Some(Kind::Reply {
+                to,
+                at,
+                state,
+                checked,
+            }),
             None => editable(&annot, subtype, at, &marked, &view_box),
         };
         let editable = redrawn.map(|kind| Annotation {
@@ -430,6 +473,8 @@ fn read_page(page: &Page<'_>, index: usize, out: &mut Vec<Comment>) {
             marked,
             reply_to,
             state,
+            checked,
+            date,
             editable,
         });
     }
@@ -521,6 +566,23 @@ fn editable(
                 cloud: is_cloudy(annot),
             }
         }
+        "PolyLine" => {
+            let numbers: Vec<f64> = annot
+                .get::<Array<'_>>(b"Vertices")?
+                .iter::<f64>()
+                .take(20_000)
+                .collect();
+            let (pairs, _) = numbers.as_chunks::<2>();
+            let points: Vec<(f32, f32)> = pairs
+                .iter()
+                .filter_map(|&[x, y]| view_box(&[(x, y)]).map(|p| (p.x0, p.y0)))
+                .collect();
+            if points.len() < 2 {
+                return None;
+            }
+            Kind::PolyLine(points)
+        }
+        "Caret" => Kind::Caret { rect: at },
         // Only Panna's own word stamps: redrawing another program's, or a picture, would lose
         // its artwork.
         "Stamp"
@@ -637,9 +699,10 @@ mod tests {
             CommentKind::from_subtype("Squiggly"),
             Some(CommentKind::Underline)
         );
+        assert_eq!(CommentKind::from_subtype("Caret"), Some(CommentKind::Caret));
         assert_eq!(
-            CommentKind::from_subtype("Caret"),
-            Some(CommentKind::Other("Caret".into()))
+            CommentKind::from_subtype("FileAttachment"),
+            Some(CommentKind::Other("FileAttachment".into()))
         );
     }
 

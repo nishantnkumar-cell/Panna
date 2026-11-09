@@ -35,6 +35,10 @@ pub enum Op {
     /// Asks whether to draw comments and form fields into the pages.
     Flatten,
     Delete,
+    /// Asks which pages to turn, and which way.
+    RotatePages,
+    /// Asks which pages to delete.
+    DeletePages,
     Undo,
 }
 

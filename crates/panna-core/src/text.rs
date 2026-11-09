@@ -145,6 +145,12 @@ impl PageText {
         out.trim_end().to_owned()
     }
 
+    /// Every phone number, card number, email address or such, as `pattern` says, as
+    /// character ranges.
+    pub fn find_pattern(&self, pattern: crate::Pattern) -> Vec<Range<usize>> {
+        crate::patterns::find(&self.chars, pattern)
+    }
+
     /// Every match of `query`, as character ranges. Any run of whitespace in the query matches
     /// one space or line break, so a phrase is found across a line wrap.
     pub fn find(&self, query: &str, options: FindOptions) -> Vec<Range<usize>> {

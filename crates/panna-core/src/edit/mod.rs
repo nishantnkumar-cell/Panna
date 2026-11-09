@@ -794,6 +794,7 @@ pub(crate) fn redact(
     count: usize,
     areas: &[(usize, Vec<crate::TextBox>)],
     scrub: &[String],
+    look: &crate::RedactLook,
 ) -> Result<Vec<u8>, SaveError> {
     let mut extras = vec![rebuild::Extra::default(); count];
     if let Some(first) = extras.first_mut() {
@@ -812,7 +813,9 @@ pub(crate) fn redact(
         extra.redact.extend_from_slice(&rects);
         extra.over.push(marks::Drawing::Boxes {
             rects,
-            color: crate::Color([0.0, 0.0, 0.0]),
+            color: look.fill,
+            overlay: look.overlay.trim().to_owned(),
+            repeat: look.repeat,
         });
     }
     rebuild_from(

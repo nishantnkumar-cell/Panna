@@ -6,7 +6,7 @@ use iced::widget::{
     Column, button, column, container, rich_text, row, scrollable, space, span, text, text_input,
 };
 use iced::{Center, Color, Element, Fill, Theme};
-use panna_core::{FindOptions, PageText};
+use panna_core::{FindOptions, PageText, Pattern};
 
 use crate::Message;
 use crate::icons::{self, Icon};
@@ -23,6 +23,8 @@ pub enum Event {
     Prev,
     /// Jump to match number `n` (from the Results list).
     Goto(usize),
+    /// Look for phone numbers, emails and such instead of words; `None` goes back to words.
+    Pattern(Option<Pattern>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,8 @@ pub struct Find {
     pub open: bool,
     pub query: String,
     pub options: FindOptions,
+    /// Looking for this kind of detail rather than the query, for redacting.
+    pub pattern: Option<Pattern>,
     /// Sorted by page, then position.
     hits: Vec<Hit>,
     current: Option<usize>,
@@ -80,7 +84,7 @@ fn tidy(s: &str, leading: bool) -> String {
 
 impl Find {
     pub fn active(&self) -> bool {
-        self.open && !self.query.trim().is_empty()
+        self.open && (self.pattern.is_some() || !self.query.trim().is_empty())
     }
 
     /// Every match found so far, by page, then position.
@@ -132,10 +136,13 @@ impl Find {
     }
 
     fn matches(&self, page: usize, text: &PageText) -> Vec<Hit> {
-        text.find(&self.query, self.options)
-            .into_iter()
-            .map(|range| Hit { page, range })
-            .collect()
+        match self.pattern {
+            Some(pattern) => text.find_pattern(pattern),
+            None => text.find(&self.query, self.options),
+        }
+        .into_iter()
+        .map(|range| Hit { page, range })
+        .collect()
     }
 
     /// Moves to the next (or previous) match, starting from `from_page` when nothing is
@@ -203,13 +210,14 @@ impl Find {
     pub fn search_box(&self, searched: usize, total: usize) -> Element<'_, Message> {
         let ev = |e: Event| Message::Find(e);
         let has_hits = !self.hits.is_empty();
-        let input = text_input("Search document", &self.query)
+        let placeholder = self.pattern.map_or("Search document", Pattern::label);
+        let input = text_input(placeholder, &self.query)
             .id(input_id())
             .on_input(move |q| ev(Event::Query(q)))
             .on_submit(ev(Event::Next))
             .padding([5, 8])
             .width(Fill);
-        let clear = (!self.query.is_empty())
+        let clear = (!self.query.is_empty() || self.pattern.is_some())
             .then(|| icons::button(Icon::Close, "Clear search (Esc)", Some(ev(Event::Close))));
         let field = row![icons::glyph::<Message>(Icon::Search, true), input]
             .push(clear.unwrap_or_else(|| space().into()))

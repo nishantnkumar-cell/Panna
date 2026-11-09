@@ -102,6 +102,11 @@ mod system {
             libc::SYS_bpf,
             libc::SYS_perf_event_open,
             libc::SYS_userfaultfd,
+            // io_uring runs its operations (socket, connect, openat, ...) in the kernel
+            // without passing through this filter, so it would undo everything above.
+            libc::SYS_io_uring_setup,
+            libc::SYS_io_uring_enter,
+            libc::SYS_io_uring_register,
         ];
         // Elsewhere (aarch64) new processes come only from clone, which threads need too;
         // execve stays refused, so a child could only be another copy of this one.
@@ -361,14 +366,60 @@ mod tests {
         {
             worked |= 16;
         }
+        if io_uring_works() {
+            worked |= 32;
+        }
         std::process::exit(worked);
+    }
+
+    /// Whether an io_uring can be set up, which would let the process run calls the seccomp
+    /// filter never sees.
+    #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    fn io_uring_works() -> bool {
+        let mut params = [0u8; 120]; // struct io_uring_params, zeroed
+        // SAFETY: io_uring_setup reads and writes only the 120-byte params buffer, which
+        // lives across the call; any fd it returns is closed straight away.
+        let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 1u32, params.as_mut_ptr()) };
+        if let Ok(fd) = libc::c_int::try_from(fd)
+            && fd >= 0
+        {
+            // SAFETY: the fd was just returned to us and isn't used anywhere else.
+            unsafe { libc::close(fd) };
+            return true;
+        }
+        false
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn io_uring_works() -> bool {
+        false
     }
 
     /// Whether file access can be taken away here: always on macOS, and on Linux when the
     /// kernel has Landlock.
+    #[cfg(target_os = "macos")]
     fn files_enforced() -> bool {
-        cfg!(target_os = "macos")
-            || std::fs::read_to_string("/sys/kernel/security/lsm").is_ok_and(|l| l.contains("landlock"))
+        true
+    }
+
+    /// Asks the kernel for its Landlock version, which works where securityfs isn't mounted
+    /// (WSL, many containers) too.
+    #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    fn files_enforced() -> bool {
+        const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1;
+        // SAFETY: with this flag and a null attribute pointer of size 0, the kernel only
+        // returns its Landlock version (or an error); no memory is read or written.
+        let version = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                std::ptr::null::<libc::c_void>(),
+                0usize,
+                LANDLOCK_CREATE_RULESET_VERSION,
+            )
+        };
+        version > 0
     }
 
     #[test]

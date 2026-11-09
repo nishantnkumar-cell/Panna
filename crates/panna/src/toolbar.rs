@@ -105,7 +105,7 @@ impl Bar {
         };
         Place {
             dock,
-            pos: Point::new(300.0, 130.0),
+            pos: Point::new(16.0, 130.0),
             along,
             shown: true,
         }

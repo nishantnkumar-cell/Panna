@@ -13,6 +13,10 @@ ignore = [
     # Panna only signs, on the user's own machine, with the rsa crate's blinding on, and no
     # fixed version of the crate exists yet.
     { id = "RUSTSEC-2023-0071", reason = "local signing only, blinded; no fixed release" },
+    # Timing variability in crypto-bigint 0.5, used by p256/p384 to verify signatures (public
+    # data) and to sign on the user's own machine. The fix is only in 0.7, which the 0.13
+    # elliptic-curve crates can't use; revisit when p256/p384 move to it.
+    { id = "RUSTSEC-2026-0387", reason = "local ECDSA signing and public-key verifying only; fix needs crypto-bigint 0.7" },
 ]
 
 [licenses]
