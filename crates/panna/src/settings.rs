@@ -28,6 +28,8 @@ pub struct Settings {
     pub sidebar_tab: Tab,
     pub spread: Spread,
     pub colors: PageColors,
+    /// Pages scroll past continuously; off shows one page or spread at a time.
+    pub scrolling: bool,
     /// The name put on comments; empty for the account's name.
     pub author: String,
     pub appearance: Appearance,
@@ -54,6 +56,7 @@ impl Default for Settings {
             sidebar_tab: Tab::Thumbnails,
             spread: Spread::Single,
             colors: PageColors::Normal,
+            scrolling: true,
             author: String::new(),
             appearance: Appearance::System,
             open_zoom: OpenZoom::ActualSize,
@@ -121,6 +124,7 @@ impl Settings {
                 "sidebar.tab" => out.sidebar_tab = Tab::parse(value.trim()).unwrap_or(out.sidebar_tab),
                 "view.spread" => out.spread = Spread::parse(value.trim()).unwrap_or(out.spread),
                 "view.colors" => out.colors = PageColors::parse(value.trim()).unwrap_or(out.colors),
+                "view.scrolling" => out.scrolling = value.trim() != "false",
                 "view.appearance" => {
                     out.appearance = Appearance::parse(value.trim()).unwrap_or(out.appearance);
                 }
@@ -151,12 +155,13 @@ impl Settings {
         let mut out = String::new();
         self.bars.serialize(&mut out);
         out.push_str(&format!(
-            "sidebar.open={}\nsidebar.side={}\nsidebar.tab={}\nview.spread={}\nview.colors={}\n",
+            "sidebar.open={}\nsidebar.side={}\nsidebar.tab={}\nview.spread={}\nview.colors={}\nview.scrolling={}\n",
             self.sidebar_open,
             self.sidebar_side.as_str(),
             self.sidebar_tab.as_str(),
             self.spread.as_str(),
             self.colors.as_str(),
+            self.scrolling,
         ));
         out.push_str(&format!(
             "view.appearance={}\nview.open_zoom={}\nmeasure.unit={}\nkeys.single={}\npresent.loop={}\npresent.seconds={}\n",
@@ -254,6 +259,7 @@ mod tests {
             sidebar_tab: Tab::Bookmarks,
             spread: Spread::TwoCover,
             colors: PageColors::Sepia,
+            scrolling: false,
             author: "Asha Rao".into(),
             appearance: Appearance::Dark,
             open_zoom: OpenZoom::FitWidth,

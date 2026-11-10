@@ -25,6 +25,8 @@ fuzz_target!(|data: &[u8]| {
             contents: "fuzz".into(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         // Whatever the input, a successful save must reopen.
         if let Ok(saved) = doc.with_annotations(&[note]) {

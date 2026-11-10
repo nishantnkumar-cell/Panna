@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
 use panna_core::{
-    Annotation, Changes, Color, Comment, CommentKind, Document, Kind, Limits, ReviewState, TextBox,
+    Annotation, Changes, Color, Comment, CommentKind, Document, Kind, Limits, LineEnd, ReviewState, TextBox,
 };
 
 /// Assembles numbered objects (1-based) into a PDF with a classic xref table.
@@ -76,6 +76,8 @@ fn annotation(kind: Kind) -> Annotation {
         contents: "Hello (world)".into(),
         author: "Tester".into(),
         dashed: false,
+        fill: None,
+        ends: Default::default(),
     }
 }
 
@@ -204,7 +206,11 @@ fn every_kind_saves_and_reopens() {
         Kind::Underline(vec![b]),
         Kind::StrikeOut(vec![b]),
         Kind::Note { x: 150.0, y: 10.0 },
-        Kind::FreeText { rect: b, size: 12.0 },
+        Kind::FreeText {
+            rect: b,
+            size: 12.0,
+            pointer: Vec::new(),
+        },
         Kind::Ink(vec![
             vec![(10.0, 80.0), (60.0, 90.0), (90.0, 70.0)],
             vec![(5.0, 5.0)],
@@ -546,4 +552,136 @@ fn inserted_text_comes_back_as_a_caret() {
         comment.editable.as_ref().map(|a| &a.kind),
         Some(Kind::Caret { .. })
     ));
+}
+
+#[test]
+fn fills_and_line_endings_save_and_come_back() {
+    let doc = reopen(build(&objects(false)));
+    let blue = Color([0.0, 0.0, 1.0]);
+    let mut rect = annotation(Kind::Rect(TextBox {
+        x0: 40.0,
+        y0: 40.0,
+        x1: 160.0,
+        y1: 60.0,
+    }));
+    rect.fill = Some(blue);
+    let mut line = annotation(Kind::Line {
+        from: (20.0, 20.0),
+        to: (180.0, 20.0),
+        arrow: false,
+    });
+    line.ends = [LineEnd::Circle, LineEnd::ClosedArrow];
+    line.fill = Some(blue);
+    let mut polyline = annotation(Kind::PolyLine(vec![(20.0, 80.0), (60.0, 90.0), (100.0, 80.0)]));
+    polyline.ends = [LineEnd::Square, LineEnd::Slash];
+    let saved = doc.with_annotations(&[rect, line, polyline]).unwrap();
+    let doc = reopen(saved);
+    // The rectangle's inside is blue now, not white.
+    let inside = pixel(&doc, 100, 50);
+    assert!(inside[2] > 200 && inside[0] < 60, "{inside:?}");
+    let listed = doc.info().unwrap().comments;
+    let back: Vec<_> = listed
+        .iter()
+        .map(|c| c.editable.as_ref().map(|a| (a.fill, a.ends)))
+        .collect();
+    assert_eq!(
+        back,
+        [
+            Some((Some(blue), [LineEnd::None; 2])),
+            Some((Some(blue), [LineEnd::Circle, LineEnd::ClosedArrow])),
+            Some((None, [LineEnd::Square, LineEnd::Slash])),
+        ]
+    );
+}
+
+#[test]
+fn callouts_save_and_come_back() {
+    let doc = reopen(build(&objects(false)));
+    let rect = TextBox {
+        x0: 100.0,
+        y0: 20.0,
+        x1: 180.0,
+        y1: 40.0,
+    };
+    let mut callout = annotation(Kind::FreeText {
+        rect,
+        size: 10.0,
+        pointer: vec![(20.0, 80.0)],
+    });
+    callout.width = 1.0;
+    callout.ends = [LineEnd::ClosedArrow, LineEnd::None];
+    callout.fill = Some(Color([1.0, 1.0, 0.0]));
+    let saved = doc.with_annotations(&[callout]).unwrap();
+    let doc = reopen(saved);
+    let listed = doc.info().unwrap().comments;
+    let comment = &listed[0];
+    assert_eq!(comment.kind.label(), "Callout");
+    let back = comment.editable.as_ref().unwrap();
+    let Kind::FreeText { rect: r, pointer, .. } = &back.kind else {
+        panic!("came back as {:?}", back.kind);
+    };
+    // The box is the text box alone, not the whole callout.
+    assert!(
+        (r.x0 - rect.x0).abs() < 0.01 && (r.y1 - rect.y1).abs() < 0.01 && (r.x1 - rect.x1).abs() < 0.01,
+        "{r:?}"
+    );
+    assert_eq!(pointer.len(), 1);
+    assert!((pointer[0].0 - 20.0).abs() < 0.01 && (pointer[0].1 - 80.0).abs() < 0.01);
+    assert_eq!(back.ends, [LineEnd::ClosedArrow, LineEnd::None]);
+    assert_eq!(back.fill, Some(Color([1.0, 1.0, 0.0])));
+    // The box is filled yellow, and the line runs from the tip to the middle of its side.
+    let inside = pixel(&doc, 170, 25);
+    assert!(inside[0] > 200 && inside[2] < 60, "{inside:?}");
+    let line = pixel(&doc, 60, 55);
+    assert!(line[0] > 200 && line[1] + 30 < line[0], "{line:?}");
+}
+
+#[test]
+fn attached_files_save_move_and_can_be_taken_out_again() {
+    let doc = reopen(build(&objects(false)));
+    let bytes: Vec<u8> = (0..5_000u32).map(|i| (i % 251) as u8).collect();
+    let file = panna_core::AttachedFile::new("notes.txt", &bytes).unwrap();
+    let mut added = annotation(Kind::File {
+        x: 30.0,
+        y: 40.0,
+        file,
+    });
+    added.contents = "notes.txt".into();
+    let doc = reopen(doc.with_annotations(&[added]).unwrap());
+    let info = doc.info().unwrap();
+    assert_eq!(info.attachments.len(), 1, "{:?}", info.attachments);
+    assert_eq!(
+        (
+            info.attachments[0].name.as_str(),
+            info.attachments[0].size,
+            info.attachments[0].page
+        ),
+        ("notes.txt", Some(5_000), Some(0))
+    );
+    assert_eq!(doc.attachment(0).unwrap(), bytes);
+    let comment = &info.comments[0];
+    assert_eq!(comment.kind, CommentKind::File);
+    // Moving it redraws the comment, pointing at the same file.
+    let mut moved = comment.editable.clone().unwrap();
+    assert!(
+        matches!(&moved.kind, Kind::File { x, y, file } if (*x - 30.0).abs() < 0.01 && (*y - 40.0).abs() < 0.01 && file.name == "notes.txt")
+    );
+    moved.translate(50.0, 10.0);
+    let doc = reopen(
+        doc.with_changes(&Changes {
+            add: vec![moved],
+            remove: vec![comment.id.unwrap()],
+            ..Changes::default()
+        })
+        .unwrap(),
+    );
+    let info = doc.info().unwrap();
+    assert_eq!(info.comments.len(), 1);
+    assert!(
+        (info.comments[0].at.x0 - 80.0).abs() < 1.5,
+        "{:?}",
+        info.comments[0].at
+    );
+    assert_eq!(info.attachments.len(), 1);
+    assert_eq!(doc.attachment(0).unwrap(), bytes);
 }

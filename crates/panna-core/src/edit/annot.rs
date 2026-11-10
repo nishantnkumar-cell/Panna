@@ -20,6 +20,79 @@ impl Color {
     pub const BLACK: Color = Color([0.0, 0.0, 0.0]);
 }
 
+/// How a line or polygon line ends, as PDF's line ending styles (ISO 32000-2, table 179).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum LineEnd {
+    #[default]
+    None,
+    OpenArrow,
+    ClosedArrow,
+    Circle,
+    Square,
+    Diamond,
+    Butt,
+    Slash,
+}
+
+impl LineEnd {
+    pub const ALL: [LineEnd; 8] = [
+        LineEnd::None,
+        LineEnd::OpenArrow,
+        LineEnd::ClosedArrow,
+        LineEnd::Circle,
+        LineEnd::Square,
+        LineEnd::Diamond,
+        LineEnd::Butt,
+        LineEnd::Slash,
+    ];
+
+    pub fn pdf_name(self) -> &'static str {
+        match self {
+            LineEnd::None => "None",
+            LineEnd::OpenArrow => "OpenArrow",
+            LineEnd::ClosedArrow => "ClosedArrow",
+            LineEnd::Circle => "Circle",
+            LineEnd::Square => "Square",
+            LineEnd::Diamond => "Diamond",
+            LineEnd::Butt => "Butt",
+            LineEnd::Slash => "Slash",
+        }
+    }
+
+    /// The ending a PDF name stands for; the reversed arrows are taken as arrows.
+    pub fn from_name(name: &str) -> LineEnd {
+        match name {
+            "OpenArrow" | "ROpenArrow" => LineEnd::OpenArrow,
+            "ClosedArrow" | "RClosedArrow" => LineEnd::ClosedArrow,
+            "Circle" => LineEnd::Circle,
+            "Square" => LineEnd::Square,
+            "Diamond" => LineEnd::Diamond,
+            "Butt" => LineEnd::Butt,
+            "Slash" => LineEnd::Slash,
+            _ => LineEnd::None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LineEnd::None => "None",
+            LineEnd::OpenArrow => "Open arrow",
+            LineEnd::ClosedArrow => "Closed arrow",
+            LineEnd::Circle => "Circle",
+            LineEnd::Square => "Square",
+            LineEnd::Diamond => "Diamond",
+            LineEnd::Butt => "Butt",
+            LineEnd::Slash => "Slash",
+        }
+    }
+}
+
+impl std::fmt::Display for LineEnd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// What an annotation looks like. Coordinates are in page points as displayed: origin at the
 /// top left, y down, the page's own `/Rotate` applied (the same space as [`TextBox`]).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -32,10 +105,20 @@ pub enum Kind {
         x: f32,
         y: f32,
     },
-    /// Text drawn directly on the page.
+    /// Text drawn directly on the page. With a `pointer`, it is a callout: a framed box
+    /// with a line from it to the point first in `pointer`, bending at the second if there is
+    /// one (Acrobat's Callout tool).
     FreeText {
         rect: TextBox,
         size: f32,
+        #[serde(default)]
+        pointer: Vec<(f32, f32)>,
+    },
+    /// A file attached here, shown as a paperclip with its top-left corner at (x, y).
+    File {
+        x: f32,
+        y: f32,
+        file: super::AttachedFile,
     },
     /// Freehand strokes.
     Ink(Vec<Vec<(f32, f32)>>),
@@ -98,6 +181,14 @@ pub struct Annotation {
     /// Drawn with a dashed line, for ink, shapes and lines (Acrobat's dashed style).
     #[serde(default)]
     pub dashed: bool,
+    /// The inside colour of a rectangle, ellipse, polygon or cloud, and of closed line
+    /// endings (`/IC`); `None` leaves them empty.
+    #[serde(default)]
+    pub fill: Option<Color>,
+    /// How a line or polygon line starts and ends (`/LE`). An arrow line with both `None`
+    /// ends in an open arrow.
+    #[serde(default)]
+    pub ends: [LineEnd; 2],
     /// The comment text (for notes and text boxes, the text itself).
     pub contents: String,
     pub author: String,
@@ -125,6 +216,19 @@ pub(crate) struct PageInfo {
 }
 
 impl Annotation {
+    /// How its line starts and ends, an arrow's open arrow included.
+    pub fn line_ends(&self) -> [LineEnd; 2] {
+        match self.kind {
+            Kind::Line { arrow: true, .. } if self.ends == [LineEnd::None; 2] => {
+                [LineEnd::None, LineEnd::OpenArrow]
+            }
+            Kind::Line { .. } | Kind::PolyLine(_) => self.ends,
+            // A callout's line has one ending, where it points.
+            Kind::FreeText { ref pointer, .. } if !pointer.is_empty() => [self.ends[0], LineEnd::None],
+            _ => [LineEnd::None; 2],
+        }
+    }
+
     /// Shifts it by `dx`, `dy` page points.
     pub fn translate(&mut self, dx: f32, dy: f32) {
         let shift = |b: &mut TextBox| {
@@ -137,15 +241,20 @@ impl Annotation {
             Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
                 boxes.iter_mut().for_each(shift);
             }
-            Kind::Note { x, y } => {
+            Kind::Note { x, y } | Kind::File { x, y, .. } => {
                 *x += dx;
                 *y += dy;
             }
-            Kind::FreeText { rect, .. }
-            | Kind::Rect(rect)
-            | Kind::Ellipse(rect)
-            | Kind::Caret { rect }
-            | Kind::Stamp { rect, .. } => shift(rect),
+            Kind::FreeText { rect, pointer, .. } => {
+                shift(rect);
+                for (x, y) in pointer {
+                    *x += dx;
+                    *y += dy;
+                }
+            }
+            Kind::Rect(rect) | Kind::Ellipse(rect) | Kind::Caret { rect } | Kind::Stamp { rect, .. } => {
+                shift(rect);
+            }
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
                     *x += dx;
@@ -197,12 +306,16 @@ impl Annotation {
             | Kind::Underline(_)
             | Kind::StrikeOut(_)
             | Kind::Note { .. }
+            | Kind::File { .. }
             | Kind::Caret { .. }
             | Kind::Reply { .. } => {}
-            Kind::FreeText { rect, .. }
-            | Kind::Rect(rect)
-            | Kind::Ellipse(rect)
-            | Kind::Stamp { rect, .. } => map_box(rect),
+            Kind::FreeText { rect, pointer, .. } => {
+                map_box(rect);
+                for (x, y) in pointer {
+                    (*x, *y) = (fx(*x), fy(*y));
+                }
+            }
+            Kind::Rect(rect) | Kind::Ellipse(rect) | Kind::Stamp { rect, .. } => map_box(rect),
             Kind::Ink(strokes) => {
                 for (x, y) in strokes.iter_mut().flatten() {
                     (*x, *y) = (fx(*x), fy(*y));
@@ -241,12 +354,25 @@ impl Annotation {
         let opacity = self.opacity.clamp(0.05, 1.0);
         let width = f64::from(self.width.clamp(0.25, 50.0));
         let color = format!("{} {} {}", num(r), num(g), num(b));
+        let fill = self.fill.map(|f| {
+            let [r, g, b] = f.0.map(|c| c.clamp(0.0, 1.0));
+            format!("{} {} {}", num(r), num(g), num(b))
+        });
+        let ends = self.line_ends();
+        // Stroke, or fill and stroke when there's an inside colour.
+        let paint = if let Some(fill) = &fill {
+            format!("{fill} rg B")
+        } else {
+            "S".to_owned()
+        };
 
         let mut extra = String::new();
         let mut content = String::new();
         let mut resources = String::new();
         let mut blend = "/Normal";
         let mut bounds = Bounds::default();
+        // A callout's text box, inside its /Rect, for /RD.
+        let mut inner: Option<[f64; 4]> = None;
 
         let subtype = match &self.kind {
             Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
@@ -313,6 +439,37 @@ impl Annotation {
                     }
                 }
             }
+            Kind::File { x, y, file } => {
+                let [x0, y0, x1, y1] = user_box(&TextBox {
+                    x0: *x,
+                    y0: *y,
+                    x1: x + NOTE_SIZE,
+                    y1: y + NOTE_SIZE,
+                });
+                bounds.add(x0, y0);
+                bounds.add(x1, y1);
+                // A paperclip: two loops, one inside the other.
+                let (w, h) = (x1 - x0, y1 - y0);
+                let p = |fx: f64, fy: f64| format!("{} {}", n(x0 + w * fx), n(y0 + h * fy));
+                let _ = write!(
+                    content,
+                    "{color} RG 1.6 w 1 J 1 j {} m {} l {} {} {} c {} l {} {} {} c {} l S ",
+                    p(0.56, 0.36),
+                    p(0.56, 0.74),
+                    p(0.56, 0.95),
+                    p(0.30, 0.95),
+                    p(0.30, 0.74),
+                    p(0.30, 0.22),
+                    p(0.30, 0.0),
+                    p(0.72, 0.0),
+                    p(0.72, 0.22),
+                    p(0.72, 0.80),
+                );
+                let spec = image_ref.unwrap_or("null");
+                let _ = write!(extra, "/FS {spec} /Name /Paperclip ");
+                let _ = file;
+                "FileAttachment"
+            }
             Kind::Note { x, y } => {
                 let [x0, y0, x1, y1] = user_box(&TextBox {
                     x0: *x,
@@ -346,10 +503,65 @@ impl Annotation {
                 extra.push_str("/Name /Comment /Open false ");
                 "Text"
             }
-            Kind::FreeText { rect, size } => {
+            Kind::FreeText { rect, size, pointer } => {
                 let [x0, y0, x1, y1] = user_box(rect);
                 bounds.add(x0, y0);
                 bounds.add(x1, y1);
+                if let Some(&(tx, ty)) = pointer.first() {
+                    inner = Some([x0, y0, x1, y1]);
+                    let tip = map(tx, ty);
+                    let knee = pointer.get(1).map(|&(x, y)| map(x, y));
+                    // The line leaves the middle of the box's side facing the knee (or tip).
+                    let toward = knee.unwrap_or(tip);
+                    let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                    let joint = if toward.x < x0 {
+                        Point::new(x0, my)
+                    } else if toward.x > x1 {
+                        Point::new(x1, my)
+                    } else if toward.y < y0 {
+                        Point::new(mx, y0)
+                    } else {
+                        Point::new(mx, y1)
+                    };
+                    let mut line = vec![tip];
+                    line.extend(knee);
+                    line.push(joint);
+                    extra.push_str("/IT /FreeTextCallout /CL [");
+                    for p in &line {
+                        bounds.add(p.x, p.y);
+                        let _ = write!(extra, "{} {} ", n(p.x), n(p.y));
+                    }
+                    extra.push_str("] ");
+                    let half = width / 2.0;
+                    let _ = write!(content, "{color} RG {} w ", n(width));
+                    if let Some(fill) = &fill {
+                        let _ = write!(content, "{fill} rg ");
+                    }
+                    let op = if fill.is_some() { "B" } else { "S" };
+                    let _ = write!(
+                        content,
+                        "{} {} {} {} re {op} ",
+                        n(x0 + half),
+                        n(y0 + half),
+                        n(x1 - x0 - width),
+                        n(y1 - y0 - width)
+                    );
+                    for (i, p) in line.iter().rev().enumerate() {
+                        let op = if i == 0 { "m" } else { "l" };
+                        let _ = write!(content, "{} {} {op} ", n(p.x), n(p.y));
+                    }
+                    content.push_str("S ");
+                    let before = line.get(1).copied().unwrap_or(joint);
+                    line_ends(
+                        &mut content,
+                        &mut bounds,
+                        ends,
+                        [(before, tip), (tip, tip)],
+                        width,
+                        fill.as_deref(),
+                    );
+                    bounds.grow(width);
+                }
                 let size = f64::from(size.clamp(4.0, 144.0));
                 let lines = wrap(&self.contents, ((x1 - x0) - 4.0).max(10.0) / size);
                 resources.push_str(
@@ -409,10 +621,14 @@ impl Annotation {
                 let inset = width / 2.0;
                 let (ix0, iy0, ix1, iy1) = (x0 + inset, y0 + inset, x1 - inset, y1 - inset);
                 let _ = write!(content, "{color} RG {} w ", n(width));
+                if let Some(fill) = &fill {
+                    let _ = write!(content, "{fill} rg ");
+                }
+                let op = if fill.is_some() { "B" } else { "S" };
                 if matches!(self.kind, Kind::Rect(_)) {
                     let _ = write!(
                         content,
-                        "{} {} {} {} re S ",
+                        "{} {} {} {} re {op} ",
                         n(ix0),
                         n(iy0),
                         n(ix1 - ix0),
@@ -421,7 +637,7 @@ impl Annotation {
                     "Square"
                 } else {
                     ellipse(&mut content, ix0, iy0, ix1, iy1);
-                    content.push_str("S ");
+                    let _ = write!(content, "{op} ");
                     "Circle"
                 }
             }
@@ -440,31 +656,15 @@ impl Annotation {
                 );
                 bounds.add(a.x, a.y);
                 bounds.add(c.x, c.y);
-                if *arrow {
-                    extra.push_str("/LE [/None /OpenArrow] ");
-                    let d = c - a;
-                    let len = d.hypot();
-                    if len > 1e-6 {
-                        let u = d / len;
-                        let head = width * 3.0 + 6.0;
-                        for angle in [0.5_f64, -0.5] {
-                            let (s, co) = angle.sin_cos();
-                            let back = Point::new(
-                                c.x - head * (u.x * co - u.y * s),
-                                c.y - head * (u.x * s + u.y * co),
-                            );
-                            bounds.add(back.x, back.y);
-                            let _ = write!(
-                                content,
-                                "{} {} m {} {} l S ",
-                                n(c.x),
-                                n(c.y),
-                                n(back.x),
-                                n(back.y)
-                            );
-                        }
-                    }
-                }
+                let _ = arrow;
+                line_ends(
+                    &mut content,
+                    &mut bounds,
+                    ends,
+                    [(c, a), (a, c)],
+                    width,
+                    fill.as_deref(),
+                );
                 bounds.grow(width);
                 "Line"
             }
@@ -488,7 +688,7 @@ impl Annotation {
                     }
                     content.push_str("h ");
                 }
-                content.push_str("S ");
+                let _ = write!(content, "{paint} ");
                 bounds.grow(width);
                 "Polygon"
             }
@@ -506,6 +706,16 @@ impl Annotation {
                     let _ = write!(content, "{} {} {op} ", n(p.x), n(p.y));
                 }
                 content.push_str("S ");
+                if let ([first, second, ..], [.., before, last]) = (corners.as_slice(), corners.as_slice()) {
+                    line_ends(
+                        &mut content,
+                        &mut bounds,
+                        ends,
+                        [(*second, *first), (*before, *last)],
+                        width,
+                        fill.as_deref(),
+                    );
+                }
                 bounds.grow(width);
                 "PolyLine"
             }
@@ -666,6 +876,35 @@ impl Annotation {
             let _ = write!(dict, "/BS << /W {} /S /D /D [{d} {d}] >> ", n(width), d = n(dash));
         } else if stroked {
             let _ = write!(dict, "/BS << /W {} >> ", n(width));
+        }
+        let fillable = matches!(
+            self.kind,
+            Kind::Rect(_) | Kind::Ellipse(_) | Kind::Polygon { .. } | Kind::Line { .. } | Kind::PolyLine(_)
+        );
+        if let (Some(fill), true) = (&fill, fillable) {
+            let _ = write!(dict, "/IC [{fill}] ");
+        }
+        if inner.is_some() {
+            // A callout has one line ending, as a name; the box's own place is /RD.
+            if ends[0] != LineEnd::None {
+                let _ = write!(dict, "/LE /{} ", ends[0].pdf_name());
+            }
+            if let Some(fill) = &fill {
+                let _ = write!(dict, "/IC [{fill}] ");
+            }
+            let _ = write!(dict, "/BS << /W {} >> ", n(width));
+        } else if ends != [LineEnd::None; 2] {
+            let _ = write!(dict, "/LE [/{} /{}] ", ends[0].pdf_name(), ends[1].pdf_name());
+        }
+        if let Some([ix0, iy0, ix1, iy1]) = inner {
+            let _ = write!(
+                dict,
+                "/RD [{} {} {} {}] ",
+                n((ix0 - x0).max(0.0)),
+                n((iy0 - y0).max(0.0)),
+                n((x1 - ix1).max(0.0)),
+                n((y1 - iy1).max(0.0))
+            );
         }
         if !self.contents.is_empty() {
             let _ = write!(dict, "/Contents {} ", text_string(&self.contents));
@@ -861,6 +1100,84 @@ pub fn stamp_label(name: &str) -> String {
     out
 }
 
+/// Draws a line's start and end, each given as (the point before it, the tip), in the
+/// stroke already set; closed endings are filled with `fill` when there is one.
+fn line_ends(
+    out: &mut String,
+    bounds: &mut Bounds,
+    ends: [LineEnd; 2],
+    lines: [(Point, Point); 2],
+    width: f64,
+    fill: Option<&str>,
+) {
+    let size = width * 3.0 + 6.0;
+    if ends != [LineEnd::None; 2] {
+        // Endings are drawn solid even on a dashed line.
+        out.push_str("[] 0 d ");
+    }
+    let closed = |out: &mut String| match fill {
+        Some(fill) => {
+            let _ = write!(out, "{fill} rg b ");
+        }
+        None => out.push_str("s "),
+    };
+    for (end, (before, tip)) in ends.into_iter().zip(lines) {
+        let d = tip - before;
+        let len = d.hypot();
+        if end == LineEnd::None || len < 1e-6 {
+            continue;
+        }
+        // Along the line towards the tip, and across it.
+        let u = d / len;
+        let across = hayro::kurbo::Vec2::new(-u.y, u.x);
+        let at = |along: f64, side: f64| tip + u * along + across * side;
+        let mut path = |points: &[Point], close: bool| {
+            for (i, p) in points.iter().enumerate() {
+                bounds.add(p.x, p.y);
+                let op = if i == 0 { "m" } else { "l" };
+                let _ = write!(out, "{} {} {op} ", n(p.x), n(p.y));
+            }
+            if close {
+                closed(out);
+            } else {
+                out.push_str("S ");
+            }
+        };
+        let half = size / 2.0;
+        match end {
+            LineEnd::None => {}
+            LineEnd::OpenArrow => path(
+                &[at(-size * 0.88, size * 0.48), tip, at(-size * 0.88, -size * 0.48)],
+                false,
+            ),
+            LineEnd::ClosedArrow => path(
+                &[at(-size * 0.88, size * 0.48), tip, at(-size * 0.88, -size * 0.48)],
+                true,
+            ),
+            LineEnd::Square => path(
+                &[at(-half, -half), at(half, -half), at(half, half), at(-half, half)],
+                true,
+            ),
+            LineEnd::Diamond => path(
+                &[at(-half, 0.0), at(0.0, -half), at(half, 0.0), at(0.0, half)],
+                true,
+            ),
+            LineEnd::Butt => path(&[at(0.0, -half), at(0.0, half)], false),
+            LineEnd::Slash => {
+                // 30° from square across the line.
+                let (s, c) = (30f64.to_radians()).sin_cos();
+                path(&[at(-half * s, -half * c), at(half * s, half * c)], false);
+            }
+            LineEnd::Circle => {
+                bounds.add(tip.x - half, tip.y - half);
+                bounds.add(tip.x + half, tip.y + half);
+                ellipse(out, tip.x - half, tip.y - half, tip.x + half, tip.y + half);
+                closed(out);
+            }
+        }
+    }
+}
+
 fn ellipse(out: &mut String, x0: f64, y0: f64, x1: f64, y1: f64) {
     const K: f64 = 0.552_284_75;
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
@@ -972,6 +1289,11 @@ pub fn text_width(s: &str) -> f64 {
 /// Wraps text into lines no wider than `max` (in units of the font size), keeping the
 /// author's own line breaks. Words longer than a line are split.
 pub fn wrap(text: &str, max: f64) -> Vec<String> {
+    wrap_in(text, max, &text_width)
+}
+
+/// [`wrap`] with letters measured by `text_width`, for fonts other than Helvetica.
+pub(crate) fn wrap_in(text: &str, max: f64, text_width: &dyn Fn(&str) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
@@ -1024,6 +1346,8 @@ mod tests {
             contents: String::new(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         a.translate(10.0, -1.0);
         assert!(matches!(
@@ -1048,6 +1372,8 @@ mod tests {
             contents: String::new(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         a.resize(tb(10.0, 10.0, 20.0, 30.0), tb(10.0, 10.0, 40.0, 20.0));
         assert_eq!(a.kind, Kind::Ink(vec![vec![(10.0, 10.0), (40.0, 20.0)]]));

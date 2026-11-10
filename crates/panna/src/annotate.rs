@@ -8,8 +8,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{
-    Annotation, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, NOTE_SIZE, ObjRef, ReviewState,
-    STAMPS, StampImage, TextBox, stamp_label, text_width, wrap,
+    Annotation, AttachedFile, Changes, Color, Comment, CommentId, Kind, LINE_HEIGHT, LineEnd, NOTE_SIZE,
+    ObjRef, ReviewState, STAMPS, StampImage, TextBox, stamp_label, text_width, wrap,
 };
 
 use crate::Message;
@@ -29,6 +29,10 @@ pub enum Tool {
     InsertText,
     Note,
     TextBox,
+    /// A text box with a line pointing at something.
+    Callout,
+    /// Attaches a file where you click, shown as a paperclip.
+    Attach,
     Pen,
     /// Rubs out parts of freehand drawings.
     Eraser,
@@ -44,7 +48,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 19] = [
+    pub const ALL: [Tool; 21] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
@@ -53,6 +57,8 @@ impl Tool {
         Tool::InsertText,
         Tool::Note,
         Tool::TextBox,
+        Tool::Callout,
+        Tool::Attach,
         Tool::Pen,
         Tool::Eraser,
         Tool::Rect,
@@ -78,6 +84,8 @@ impl Tool {
             Tool::PolyLine => Icon::PolyLine,
             Tool::Note => Icon::StickyNote,
             Tool::TextBox => Icon::TextBox,
+            Tool::Callout => Icon::Callout,
+            Tool::Attach => Icon::Paperclip,
             Tool::Pen => Icon::Pen,
             Tool::Rect => Icon::Square,
             Tool::Ellipse => Icon::Circle,
@@ -102,6 +110,8 @@ impl Tool {
             Tool::PolyLine => "Draw a polygon line: click each point, double-click or Enter to finish",
             Tool::Note => "Add a sticky note",
             Tool::TextBox => "Add a text box",
+            Tool::Callout => "Add a callout: drag from what it points at to where the text goes",
+            Tool::Attach => "Attach a file: click where its paperclip goes",
             Tool::Pen => "Draw freehand",
             Tool::Rect => "Draw a rectangle",
             Tool::Ellipse => "Draw an ellipse",
@@ -133,6 +143,8 @@ impl Tool {
             Tool::PolyLine => "Polygon line",
             Tool::Note => "Sticky note",
             Tool::TextBox => "Text box",
+            Tool::Callout => "Callout",
+            Tool::Attach => "Attach file",
             Tool::Pen => "Draw",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
@@ -163,7 +175,7 @@ impl Tool {
             | Tool::Line
             | Tool::PolyLine
             | Tool::Polygon => Some("Shift+D"),
-            Tool::Replace | Tool::InsertText => None,
+            Tool::Replace | Tool::InsertText | Tool::Callout | Tool::Attach => None,
             Tool::Cloud => Some("Q"),
             Tool::Stamp => Some("K"),
             Tool::Sign => None,
@@ -214,6 +226,7 @@ impl Tool {
         matches!(
             self,
             Tool::Pen
+                | Tool::Callout
                 | Tool::Rect
                 | Tool::Ellipse
                 | Tool::Arrow
@@ -224,6 +237,19 @@ impl Tool {
         )
     }
 
+    /// Tools whose shapes have an inside that can be filled.
+    pub fn fills(self) -> bool {
+        matches!(
+            self,
+            Tool::Rect | Tool::Ellipse | Tool::Polygon | Tool::Cloud | Tool::Callout
+        )
+    }
+
+    /// Tools that draw lines with endings: arrows, circles, squares and the like.
+    pub fn ends(self) -> bool {
+        matches!(self, Tool::Line | Tool::Arrow | Tool::PolyLine | Tool::Callout)
+    }
+
     fn index(self) -> usize {
         Tool::ALL.iter().position(|t| *t == self).unwrap_or(0)
     }
@@ -232,7 +258,7 @@ impl Tool {
         match self {
             Tool::Select | Tool::Highlight | Tool::Note => SWATCHES[0],
             Tool::TextBox | Tool::Sign => SWATCHES[5],
-            Tool::Pen | Tool::Replace | Tool::InsertText => SWATCHES[2],
+            Tool::Pen | Tool::Replace | Tool::InsertText | Tool::Attach => SWATCHES[2],
             _ => SWATCHES[3],
         }
     }
@@ -260,6 +286,54 @@ impl std::fmt::Display for Thickness {
     }
 }
 
+/// The inside colours offered for shapes, as in Acrobat's fill colour picker.
+pub const FILLS: [InsideColor; 8] = [
+    InsideColor(None, "No fill"),
+    InsideColor(Some(Color([1.0, 1.0, 1.0])), "White"),
+    InsideColor(Some(Color([0.75, 0.75, 0.75])), "Grey"),
+    InsideColor(Some(Color([1.0, 0.95, 0.6])), "Yellow"),
+    InsideColor(Some(Color([0.7, 0.9, 0.72])), "Green"),
+    InsideColor(Some(Color([0.68, 0.82, 1.0])), "Blue"),
+    InsideColor(Some(Color([1.0, 0.72, 0.72])), "Red"),
+    InsideColor(Some(Color([0.0, 0.0, 0.0])), "Black"),
+];
+
+/// A fill colour and its name.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InsideColor(pub Option<Color>, pub &'static str);
+
+impl std::fmt::Display for InsideColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
+}
+
+/// A line's start (0) or end (1) and how it looks there, as a choice in a list.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ending(pub usize, pub LineEnd);
+
+impl std::fmt::Display for Ending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let side = if self.0 == 0 { "Start" } else { "End" };
+        write!(f, "{side}: {}", self.1.label())
+    }
+}
+
+/// Whether a comment of this kind has an inside that can be filled.
+fn fillable(kind: &Kind) -> bool {
+    matches!(kind, Kind::Rect(_) | Kind::Ellipse(_) | Kind::Polygon { .. }) || callout(kind)
+}
+
+/// Whether it is a callout: a text box pointing at something.
+fn callout(kind: &Kind) -> bool {
+    matches!(kind, Kind::FreeText { pointer, .. } if !pointer.is_empty())
+}
+
+/// Whether a comment of this kind has line endings.
+fn has_ends(kind: &Kind) -> bool {
+    matches!(kind, Kind::Line { .. } | Kind::PolyLine(_)) || callout(kind)
+}
+
 /// Whether a comment of this kind is drawn with lines whose thickness and dashing show.
 fn stroked(kind: &Kind) -> bool {
     matches!(
@@ -270,7 +344,7 @@ fn stroked(kind: &Kind) -> bool {
             | Kind::Line { .. }
             | Kind::Polygon { .. }
             | Kind::PolyLine(_)
-    )
+    ) || callout(kind)
 }
 
 /// Yellow, green, blue, red, purple, black.
@@ -314,6 +388,12 @@ pub enum Event {
     Width(f32),
     /// Turns dashed lines on or off.
     Dashed,
+    /// The inside colour of shapes, or none.
+    Fill(Option<Color>),
+    /// The file chosen to attach where the page was clicked, or `None` when none was.
+    Attach(Option<AttachedFile>),
+    /// How lines start (0) or end (1).
+    End(usize, LineEnd),
     /// Deletes the selected comment.
     DeletePicked,
     Undo,
@@ -407,6 +487,8 @@ pub struct Editing {
     reply: Option<Thread>,
     /// For Replace text: the words crossed out, by page.
     replacing: Vec<(usize, Vec<TextBox>)>,
+    /// For a callout: the point its line goes to.
+    pointer: Vec<(f32, f32)>,
 }
 
 #[derive(Default)]
@@ -417,6 +499,8 @@ pub struct Annotate {
     opacities: [Option<f32>; Tool::ALL.len()],
     widths: [Option<f32>; Tool::ALL.len()],
     dashes: [bool; Tool::ALL.len()],
+    fills: [Option<Color>; Tool::ALL.len()],
+    ends: [Option<[LineEnd; 2]>; Tool::ALL.len()],
     /// Unsaved annotations, oldest first.
     pub items: Vec<Annotation>,
     /// Saved comments taken out, not yet saved.
@@ -433,6 +517,8 @@ pub struct Annotate {
     /// Saved comments Panna can redraw, so they can be moved and restyled.
     saved: Vec<(CommentId, Annotation)>,
     pub picked: Option<Picked>,
+    /// Where a file is to be attached (page, point), while one is being chosen.
+    pub attaching: Option<(usize, (f32, f32))>,
     moving: Option<Moving>,
     /// The opacity slider is being dragged; its undo step is already recorded.
     sliding: bool,
@@ -505,6 +591,38 @@ impl Annotate {
             return a.dashed;
         }
         self.dashes.get(self.tool.index()).copied().unwrap_or(false)
+    }
+
+    /// The inside colour: the selected comment's, or the tool's.
+    pub fn fill(&self) -> Option<Color> {
+        match self.picked_annotation() {
+            Some(a) => a.fill,
+            None => self.tool_fill(self.tool),
+        }
+    }
+
+    fn tool_fill(&self, tool: Tool) -> Option<Color> {
+        self.fills.get(tool.index()).copied().flatten()
+    }
+
+    /// How lines start and end: the selected comment's, or the tool's.
+    pub fn ends(&self) -> [LineEnd; 2] {
+        match self.picked_annotation() {
+            Some(a) => a.line_ends(),
+            None => self.tool_ends(self.tool),
+        }
+    }
+
+    fn tool_ends(&self, tool: Tool) -> [LineEnd; 2] {
+        self.ends
+            .get(tool.index())
+            .copied()
+            .flatten()
+            .unwrap_or(match tool {
+                Tool::Arrow => [LineEnd::None, LineEnd::OpenArrow],
+                Tool::Callout => [LineEnd::OpenArrow, LineEnd::None],
+                _ => [LineEnd::None; 2],
+            })
     }
 
     /// Forgets unsaved annotations once they are saved (or discarded, or a new file opens),
@@ -652,6 +770,7 @@ impl Annotate {
         };
         let tool = match a.kind {
             Kind::Note { .. } => Tool::Note,
+            Kind::FreeText { ref pointer, .. } if !pointer.is_empty() => Tool::Callout,
             Kind::FreeText { .. } => Tool::TextBox,
             _ => Tool::Select,
         };
@@ -663,6 +782,7 @@ impl Annotate {
             target: Some(picked),
             reply: None,
             replacing: Vec::new(),
+            pointer: Vec::new(),
         });
         true
     }
@@ -800,6 +920,58 @@ impl Annotate {
                     *slot = !*slot;
                 }
             }
+            Event::Attach(file) => {
+                let place = self.attaching.take();
+                if let (Some((page, (x, y))), Some(file)) = (place, file) {
+                    let name = file.name.clone();
+                    self.record();
+                    self.push(page, Kind::File { x, y, file }, Tool::Attach, name);
+                    return Outcome::Changed;
+                }
+            }
+            Event::Fill(fill) => {
+                if self.picked.is_some() {
+                    if self
+                        .picked_annotation()
+                        .is_some_and(|a| fillable(&a.kind) && a.fill != fill)
+                        && self.edit(true, |a| a.fill = fill)
+                    {
+                        return Outcome::Changed;
+                    }
+                } else if let Some(slot) = self.fills.get_mut(self.tool.index()) {
+                    *slot = fill;
+                }
+            }
+            Event::End(side, end) => {
+                let side = side.min(1);
+                if self.picked.is_some() {
+                    if self
+                        .picked_annotation()
+                        .is_some_and(|a| has_ends(&a.kind) && a.line_ends().get(side) != Some(&end))
+                        && self.edit(true, |a| {
+                            let mut ends = a.line_ends();
+                            if let Some(slot) = ends.get_mut(side) {
+                                *slot = end;
+                            }
+                            a.ends = ends;
+                            // The endings now say it all, an arrow's head included.
+                            if let Kind::Line { arrow, .. } = &mut a.kind {
+                                *arrow = false;
+                            }
+                        })
+                    {
+                        return Outcome::Changed;
+                    }
+                } else {
+                    let mut ends = self.tool_ends(self.tool);
+                    if let Some(slot) = ends.get_mut(side) {
+                        *slot = end;
+                    }
+                    if let Some(slot) = self.ends.get_mut(self.tool.index()) {
+                        *slot = Some(ends);
+                    }
+                }
+            }
             Event::OpacityDone => {
                 if std::mem::take(&mut self.sliding) {
                     return Outcome::Changed;
@@ -863,7 +1035,9 @@ impl Annotate {
             Event::EditDone => {
                 if let Some(editing) = self.editing.take() {
                     let text = editing.content.text().trim_end().to_owned();
-                    if (editing.tool == Tool::TextBox || editing.reply.is_some()) && text.trim().is_empty() {
+                    if (matches!(editing.tool, Tool::TextBox | Tool::Callout) || editing.reply.is_some())
+                        && text.trim().is_empty()
+                    {
                         return Outcome::Nothing;
                     }
                     if let Some(thread) = editing.reply {
@@ -913,9 +1087,17 @@ impl Annotate {
                             y: editing.at.y0,
                         }
                     } else {
+                        let mut rect = fit_text_box(editing.at, &text);
+                        // A callout's box to the left of its tip keeps its right edge by it.
+                        if editing.pointer.first().is_some_and(|&(x, _)| x > editing.at.x1) {
+                            let shift = editing.at.x1 - rect.x1;
+                            rect.x0 += shift;
+                            rect.x1 += shift;
+                        }
                         Kind::FreeText {
-                            rect: fit_text_box(editing.at, &text),
+                            rect,
                             size: TEXT_SIZE,
+                            pointer: editing.pointer,
                         }
                     };
                     self.record();
@@ -957,6 +1139,7 @@ impl Annotate {
                     target: None,
                     reply: Some(thread),
                     replacing: Vec::new(),
+                    pointer: Vec::new(),
                 });
             }
             Event::SetStatus(thread, state) => {
@@ -1108,6 +1291,7 @@ impl Annotate {
                     Kind::FreeText {
                         rect,
                         size: TEXT_SIZE,
+                        pointer: Vec::new(),
                     },
                     Tool::Sign,
                     date,
@@ -1151,7 +1335,18 @@ impl Annotate {
             .copied()
             .flatten()
             .unwrap_or(STROKE_WIDTH);
-        let dashed = tool != Tool::Cloud && self.dashes.get(tool.index()).copied().unwrap_or(false);
+        let dashed = !matches!(tool, Tool::Cloud | Tool::Callout)
+            && self.dashes.get(tool.index()).copied().unwrap_or(false);
+        let fill = if tool.fills() { self.tool_fill(tool) } else { None };
+        let mut kind = kind;
+        let ends = if tool.ends() {
+            if let Kind::Line { arrow, .. } = &mut kind {
+                *arrow = false;
+            }
+            self.tool_ends(tool)
+        } else {
+            [LineEnd::None; 2]
+        };
         self.items.push(Annotation {
             page,
             kind,
@@ -1161,6 +1356,8 @@ impl Annotate {
             contents,
             author: self.author.clone(),
             dashed,
+            fill,
+            ends,
         });
     }
 
@@ -1179,6 +1376,8 @@ impl Annotate {
             contents,
             author: self.author.clone(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         });
     }
 
@@ -1197,6 +1396,8 @@ impl Annotate {
             contents: String::new(),
             author: self.author.clone(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         });
     }
 
@@ -1268,6 +1469,7 @@ impl Annotate {
                 target: None,
                 reply: None,
                 replacing,
+                pointer: Vec::new(),
             });
             return Outcome::Nothing;
         }
@@ -1511,7 +1713,43 @@ impl Annotate {
                     target: None,
                     reply: None,
                     replacing: Vec::new(),
+                    pointer: Vec::new(),
                 });
+                return Outcome::Nothing;
+            }
+            Tool::Callout => {
+                // The box goes where the drag ends (or up and to the right of a click), on
+                // the far side from the point it shows.
+                let (bx, by) = if dragged {
+                    end
+                } else {
+                    (start.0 + 40.0, start.1 - 40.0)
+                };
+                let (x0, x1) = if bx >= start.0 {
+                    (bx, bx + TEXT_BOX_WIDTH)
+                } else {
+                    (bx - TEXT_BOX_WIDTH, bx)
+                };
+                let y0 = by - NOTE_SIZE / 2.0;
+                self.editing = Some(Editing {
+                    page: draft.page,
+                    tool: Tool::Callout,
+                    at: TextBox {
+                        x0,
+                        y0,
+                        x1,
+                        y1: y0 + NOTE_SIZE,
+                    },
+                    content: text_editor::Content::new(),
+                    target: None,
+                    reply: None,
+                    replacing: Vec::new(),
+                    pointer: vec![start],
+                });
+                return Outcome::Nothing;
+            }
+            Tool::Attach => {
+                self.attaching = Some((draft.page, start));
                 return Outcome::Nothing;
             }
             Tool::Pen => Kind::Ink(vec![draft.points]),
@@ -1525,6 +1763,7 @@ impl Annotate {
                     target: None,
                     reply: None,
                     replacing: Vec::new(),
+                    pointer: Vec::new(),
                 });
                 return Outcome::Nothing;
             }
@@ -1626,9 +1865,12 @@ impl Annotate {
                     .width(if vertical { 56 } else { 64 })
                     .into(),
             );
-            let cloud = self.picked_annotation().map_or(self.tool == Tool::Cloud, |a| {
-                matches!(a.kind, Kind::Polygon { cloud: true, .. })
-            });
+            // Clouds have bumps for a style, and callouts are drawn solid, as in Acrobat.
+            let cloud = self
+                .picked_annotation()
+                .map_or(matches!(self.tool, Tool::Cloud | Tool::Callout), |a| {
+                    matches!(a.kind, Kind::Polygon { cloud: true, .. }) || callout(&a.kind)
+                });
             if !cloud {
                 items.push(icons::toggle(
                     Icon::Dashed,
@@ -1637,6 +1879,45 @@ impl Annotate {
                     ev(Event::Dashed),
                 ));
             }
+        }
+        // Line endings and inside colour. No tooltips: they would cover the lists when open.
+        let (ends, fills) = match self.picked_annotation() {
+            Some(a) => (has_ends(&a.kind), fillable(&a.kind)),
+            None => (self.tool.ends(), self.tool.fills()),
+        };
+        let list_width = if vertical { 56 } else { 132 };
+        if ends {
+            // A callout's line has one ending, where it points.
+            let sides = match self.picked_annotation() {
+                Some(a) if callout(&a.kind) => 1,
+                None if self.tool == Tool::Callout => 1,
+                _ => 2,
+            };
+            let current = self.ends();
+            for (side, now) in current.into_iter().enumerate().take(sides) {
+                let options = LineEnd::ALL.map(|end| Ending(side, end));
+                items.push(
+                    pick_list(options, Some(Ending(side, now)), move |e: Ending| {
+                        ev(Event::End(e.0, e.1))
+                    })
+                    .text_size(12)
+                    .padding([3, 6])
+                    .width(list_width)
+                    .into(),
+                );
+            }
+        }
+        if fills {
+            let fill = self.fill();
+            let chosen = FILLS.iter().copied().find(|f| f.0 == fill);
+            items.push(
+                pick_list(FILLS, chosen, move |f: InsideColor| ev(Event::Fill(f.0)))
+                    .placeholder("Fill")
+                    .text_size(12)
+                    .padding([3, 6])
+                    .width(list_width)
+                    .into(),
+            );
         }
         items.push(divider(vertical));
         let m = icons::MOD;
@@ -1669,6 +1950,8 @@ impl Annotate {
             (Tool::Note, true) => "Edit note",
             (Tool::TextBox, false) => "Text box",
             (Tool::TextBox, true) => "Edit text box",
+            (Tool::Callout, false) => "Callout",
+            (Tool::Callout, true) => "Edit callout",
             (Tool::Replace, _) => "Replace with",
             (Tool::InsertText, _) => "Insert text",
             _ => "Comment",
@@ -1938,7 +2221,7 @@ fn resized(m: &Moving) -> TextBox {
 
 /// New text for a comment; a text box grows or shrinks in height to fit it.
 fn set_text(a: &mut Annotation, text: String) {
-    if let Kind::FreeText { rect, size } = &mut a.kind {
+    if let Kind::FreeText { rect, size, .. } = &mut a.kind {
         let size_f = size.max(1.0);
         let lines = wrap(&text, f64::from((rect.width() - 4.0).max(10.0) / size_f));
         let height = lines.len().max(1) as f32 * size_f * LINE_HEIGHT + 6.0;
@@ -2526,6 +2809,8 @@ mod tests {
             contents: String::new(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         let mut saved = Comment::from(&accepted);
         let saved_id = CommentId {
@@ -2576,6 +2861,100 @@ mod tests {
         a.update(Event::Undo);
         assert_eq!(a.items.len(), 2);
         assert_eq!(a.status(parent.annot), ReviewState::Rejected);
+    }
+
+    #[test]
+    fn attaching_a_file_puts_a_paperclip_where_the_page_was_clicked() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Attach));
+        a.press(0, (40.0, 60.0));
+        a.release();
+        assert_eq!(a.attaching, Some((0, (40.0, 60.0))));
+        // Choosing nothing adds nothing.
+        assert!(matches!(a.update(Event::Attach(None)), Outcome::Nothing));
+        assert!(a.items.is_empty() && a.attaching.is_none());
+        a.press(0, (40.0, 60.0));
+        a.release();
+        let file = AttachedFile::new("plan.txt", b"hello").ok();
+        assert!(matches!(a.update(Event::Attach(file)), Outcome::Changed));
+        assert!(matches!(
+            a.items.first(),
+            Some(Annotation { kind: Kind::File { x, y, file }, contents, .. })
+                if (*x, *y) == (40.0, 60.0) && file.name == "plan.txt" && contents == "plan.txt"
+        ));
+        assert!(a.can_undo());
+    }
+
+    #[test]
+    fn callouts_point_from_their_box_to_where_the_drag_began() {
+        let mut a = Annotate::new();
+        a.update(Event::Tool(Tool::Callout));
+        assert_eq!(a.ends(), [LineEnd::OpenArrow, LineEnd::None]);
+        a.press(0, (300.0, 100.0));
+        a.drag(0, (150.0, 60.0));
+        a.release();
+        if let Some(e) = a.editing.as_mut() {
+            e.content = text_editor::Content::with_text("Look here");
+        }
+        assert!(matches!(a.update(Event::EditDone), Outcome::Changed));
+        let Some(Annotation {
+            kind: Kind::FreeText { rect, pointer, .. },
+            ends,
+            ..
+        }) = a.items.first()
+        else {
+            panic!("{:?}", a.items);
+        };
+        assert_eq!(pointer.as_slice(), &[(300.0, 100.0)]);
+        // Dragged to the left, so the box sits left of where the drag ended.
+        assert_eq!(rect.x1, 150.0);
+        assert!(rect.x0 < 150.0);
+        assert_eq!(*ends, [LineEnd::OpenArrow, LineEnd::None]);
+        // Editing its text keeps it a callout.
+        assert_eq!(
+            a.items.first().map(|i| i.line_ends()[0]),
+            Some(LineEnd::OpenArrow)
+        );
+    }
+
+    #[test]
+    fn fills_and_line_endings_go_to_new_and_selected_comments() {
+        let mut a = Annotate::new();
+        // An arrow starts out ending in an open arrow; other lines have plain ends.
+        a.update(Event::Tool(Tool::Arrow));
+        assert_eq!(a.ends(), [LineEnd::None, LineEnd::OpenArrow]);
+        a.update(Event::Tool(Tool::Line));
+        assert_eq!(a.ends(), [LineEnd::None; 2]);
+        a.update(Event::Tool(Tool::Rect));
+        let fill = FILLS[3].0;
+        a.update(Event::Fill(fill));
+        assert_eq!(a.fill(), fill);
+        rect_at(&mut a, 10.0);
+        assert_eq!(a.items.first().map(|i| i.fill), Some(fill));
+        // Picking the shape shows, and changes, its own fill.
+        a.pick(Picked::New(0));
+        assert!(matches!(a.update(Event::Fill(None)), Outcome::Changed));
+        assert_eq!(a.items.first().map(|i| i.fill), Some(None));
+        // A rectangle has no line endings to change.
+        assert!(matches!(
+            a.update(Event::End(1, LineEnd::Circle)),
+            Outcome::Nothing
+        ));
+        a.unpick();
+        // An arrow drawn with a circle at its start keeps its head at the end.
+        a.update(Event::Tool(Tool::Arrow));
+        a.update(Event::End(0, LineEnd::Circle));
+        a.press(0, (10.0, 60.0));
+        a.drag(0, (90.0, 60.0));
+        a.release();
+        let line = a.items.last().map(|i| i.line_ends());
+        assert_eq!(line, Some([LineEnd::Circle, LineEnd::OpenArrow]));
+        // Taking the head off a picked arrow leaves a plain end, not the arrow's default.
+        a.update(Event::Tool(Tool::Select));
+        a.pick(Picked::New(1));
+        assert!(matches!(a.update(Event::End(1, LineEnd::None)), Outcome::Changed));
+        let line = a.items.last().map(|i| i.line_ends());
+        assert_eq!(line, Some([LineEnd::Circle, LineEnd::None]));
     }
 
     #[test]
@@ -2649,6 +3028,8 @@ mod tests {
             contents: String::new(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         let mut comment = Comment::from(&shape);
         comment.id = Some(id);

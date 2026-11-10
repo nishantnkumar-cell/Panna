@@ -44,6 +44,8 @@ fn changes_save_into_encrypted_files() {
                     contents: "Hello (world)".into(),
                     author: "Tester".into(),
                     dashed: false,
+                    fill: None,
+                    ends: Default::default(),
                 }],
                 fields: vec![(field, FieldValue::Text("Jane Doe".into()))],
                 ..Changes::default()
@@ -110,6 +112,8 @@ fn the_worker_keeps_the_password_for_changes_and_saves() {
         contents: String::new(),
         author: String::new(),
         dashed: false,
+        fill: None,
+        ends: Default::default(),
     };
     for (round, y0) in [300.0, 400.0].into_iter().enumerate() {
         let (tx, rx) = mpsc::channel();

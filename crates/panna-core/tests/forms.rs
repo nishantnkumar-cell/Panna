@@ -157,6 +157,8 @@ fn flattened_fields_and_comments_stay_drawn() {
             contents: "Look".into(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         }],
         ..Changes::default()
     };

@@ -13,6 +13,9 @@ pub(crate) use labels::with_page_labels;
 pub(crate) use outline::with_outline;
 mod view;
 pub(crate) use view::with_initial_view;
+mod file;
+mod fonts;
+pub use fonts::{FontFamily, TextAlign, TextFont};
 mod pack;
 mod pdfa;
 mod picture;
@@ -32,12 +35,15 @@ use hayro::hayro_interpret::TransformExt;
 use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::{Array, Dict, ObjectIdentifier};
 
-pub use annot::{Annotation, Color, Kind, LINE_HEIGHT, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap};
+pub use annot::{
+    Annotation, Color, Kind, LINE_HEIGHT, LineEnd, NOTE_SIZE, STAMPS, stamp_label, text_width, wrap,
+};
+pub use file::{AttachedFile, MAX_ATTACHMENT_BYTES};
 pub use picture::StampImage;
 
 pub use convert::{MAX_BLANK_PAGES, MAX_PICTURES, blank_pdf, pictures_to_pdf, rgba_to_pdf};
 pub use crypt::Protection;
-pub use marks::{HeaderFooter, Watermark, fill as fill_header_footer, today};
+pub use marks::{ExistingMarks, HeaderFooter, Watermark, fill as fill_header_footer, today};
 pub use rebuild::{Cleanup, Margins, PageSource};
 pub(crate) use sign::prepare as prepare_signature;
 pub use sign::{Corner, SignOptions, Visible};
@@ -243,11 +249,32 @@ pub(crate) fn apply(
                     }
                     Some(format!("{image_id} 0 R"))
                 }
+                // A new attached file's contents are a stream of their own.
+                // Its file specification is an object of its own too, so that the comment can
+                // be moved later and still point at it.
+                Kind::File { file, .. } => match file.stream(&date) {
+                    Some(body) => {
+                        let stream_id = out.alloc();
+                        out.put(stream_id, 0, body)?;
+                        let spec_id = out.alloc();
+                        out.put(
+                            spec_id,
+                            0,
+                            file.spec(Some(&format!("{stream_id} 0 R"))).into_bytes(),
+                        )?;
+                        Some(format!("{spec_id} 0 R"))
+                    }
+                    None => Some(file.spec(None)),
+                },
                 _ => None,
             };
             // Image stamps are named apart, so that reading the file back doesn't take them
             // for word stamps to redraw.
-            let image_tag = if image_ref.is_some() { "image-" } else { "" };
+            let image_tag = if matches!(a.kind, Kind::Stamp { image: Some(_), .. }) {
+                "image-"
+            } else {
+                ""
+            };
             let built = a.build(
                 &info,
                 &ap_id.map_or_else(String::new, |id| format!("{id} 0 R")),
@@ -430,15 +457,61 @@ pub(crate) fn crop_each(
     )
 }
 
-/// Every page of `doc`, with `marks` drawn on the pages at `pages`, numbered in that order.
+/// The page marks found in `pdf`.
+pub(crate) fn existing_marks(pdf: &Pdf) -> ExistingMarks {
+    marks::existing(pdf)
+}
+
+/// Every page with the headers and footers (with `header_footer`), and watermarks and
+/// backgrounds (with `watermark`), already on them taken out.
+fn dropping(count: usize, header_footer: bool, watermark: bool) -> Vec<rebuild::Extra> {
+    let mut names = Vec::new();
+    if header_footer {
+        names.extend([marks::HEADER, marks::FOOTER]);
+    }
+    if watermark {
+        names.extend([marks::WATERMARK, marks::BACKGROUND]);
+    }
+    (0..count)
+        .map(|_| rebuild::Extra {
+            drop_marks: names.clone(),
+            ..rebuild::Extra::default()
+        })
+        .collect()
+}
+
+/// Every page of `doc`, with the headers and footers, or watermarks and backgrounds,
+/// already on its pages taken out.
+pub(crate) fn remove_marks(
+    doc: Input<'_>,
+    count: usize,
+    header_footer: bool,
+    watermark: bool,
+) -> Result<Vec<u8>, SaveError> {
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &dropping(count, header_footer, watermark),
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
+/// Every page of `doc`, with `marks` drawn on the pages at `pages`, numbered in that order;
+/// with `replace`, in place of the headers and footers already there.
 pub(crate) fn header_footer(
     doc: Input<'_>,
     count: usize,
     pages: &[usize],
     marks: &HeaderFooter,
+    replace: bool,
 ) -> Result<Vec<u8>, SaveError> {
     let date = marks::today();
-    let mut extras = vec![rebuild::Extra::default(); count];
+    let mut extras = dropping(count, replace, false);
+    let settings = marks::header_settings(marks);
+    for extra in &mut extras {
+        extra.mark_settings.push((marks::HEADER, settings.clone()));
+    }
     for (i, &page) in pages.iter().enumerate() {
         if let Some(extra) = extras.get_mut(page) {
             let number = u64::from(marks.first) + i as u64;
@@ -540,15 +613,22 @@ pub(crate) fn flatten(
     )
 }
 
-/// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order.
+/// Every page of `doc`, with `mark` drawn on the pages at `pages`, numbered in that order;
+/// with `replace`, in place of the watermarks and backgrounds already there.
 pub(crate) fn watermark(
     doc: Input<'_>,
     count: usize,
     pages: &[usize],
     mark: &Watermark,
+    replace: bool,
 ) -> Result<Vec<u8>, SaveError> {
     let date = marks::today();
-    let mut extras = vec![rebuild::Extra::default(); count];
+    let mut extras = dropping(count, false, replace);
+    let settings = marks::watermark_settings(mark);
+    for extra in &mut extras {
+        extra.mark_settings.push((marks::WATERMARK, settings.clone()));
+        extra.mark_settings.push((marks::BACKGROUND, settings.clone()));
+    }
     for (i, &page) in pages.iter().enumerate() {
         if let Some(extra) = extras.get_mut(page) {
             let (under, over) = mark.for_page(1 + i as u64, pages.len(), &date);
@@ -628,6 +708,9 @@ pub enum NewFieldKind {
     Dropdown(Vec<String>),
     /// A list box showing these choices, one of which can be picked.
     List(Vec<String>),
+    /// A text field for a date written in this pattern, such as `dd/mm/yyyy` (Acrobat's
+    /// Date Field: a text field with a date format).
+    Date(String),
     /// A group of radio buttons, one per choice, on the field's page; only one can be on.
     /// The field's own `rect` isn't used.
     Radio(Vec<RadioButton>),
@@ -675,16 +758,44 @@ pub(crate) fn form_fields(
     )
 }
 
+/// Every page of `doc`, with these form field widgets (page, widget) put in new places, in
+/// the same space as [`crate::TextBox`].
+pub(crate) fn move_widgets(
+    doc: Input<'_>,
+    count: usize,
+    moved: &[(usize, ObjRef, crate::TextBox)],
+) -> Result<Vec<u8>, SaveError> {
+    let mut extras = vec![rebuild::Extra::default(); count];
+    for (page, widget, rect) in moved {
+        let extra = extras.get_mut(*page).ok_or(SaveError::NoSuchPage(*page))?;
+        extra
+            .moved
+            .push((*widget, [rect.x0, rect.y0, rect.x1, rect.y1].map(f64::from)));
+    }
+    rebuild_from(
+        &[doc],
+        &every_page(count),
+        &extras,
+        Output::Keep,
+        Cleanup::default(),
+    )
+}
+
 /// Something added to a page itself, rather than as a comment. Places are in points from the
 /// top-left corner of the page as shown (the same space as [`crate::TextBox`]).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Addition {
-    /// Lines of text in Helvetica, the first line's top-left corner at `at`.
+    /// Lines of text in `font`, the first line's top-left corner at `at`, lined up with
+    /// each other as `align` says.
     Text {
         at: (f32, f32),
         text: String,
         size: f32,
         color: Color,
+        #[serde(default)]
+        font: TextFont,
+        #[serde(default)]
+        align: TextAlign,
     },
     /// A picture filling `rect`.
     Picture { rect: crate::TextBox, image: StampImage },
@@ -694,15 +805,21 @@ pub enum Addition {
         target: crate::LinkTarget,
     },
     /// The text in `area` taken out (only the text: pictures and drawings stay) and `text`
-    /// written in its place in Helvetica, at `size`, in `color` or the colour the old text
-    /// was drawn in. With a `leading` (the distance between baselines), `area` is a
-    /// paragraph and the text is wrapped to its width.
+    /// written in its place at `size`, in `color` or the colour the old text was drawn in.
+    /// With a `leading` (the distance between baselines), `area` is a paragraph and the text
+    /// is wrapped to its width. Without a `font`, a single line keeps its own font where that
+    /// can show the new letters, and anything else is in Helvetica. Lines sit in `area` as
+    /// `align` says.
     ReplaceText {
         area: crate::TextBox,
         text: String,
         size: f32,
         color: Option<Color>,
         leading: Option<f32>,
+        #[serde(default)]
+        font: Option<TextFont>,
+        #[serde(default)]
+        align: TextAlign,
     },
 }
 
@@ -723,18 +840,26 @@ pub(crate) fn add(
                 text,
                 size,
                 color,
+                font,
+                align,
             } => {
                 let lines: Vec<String> = text.lines().map(str::to_owned).collect();
                 if lines.iter().all(|l| l.trim().is_empty()) {
                     continue;
                 }
+                let size = f64::from(size.clamp(1.0, 500.0));
+                // Lined up within the widest line.
+                let width = lines.iter().map(|l| font.width(l)).fold(0.0, f64::max) * size;
                 extra.over.push(marks::Drawing::Text {
                     x: f64::from(at.0),
                     top: f64::from(at.1),
                     lines,
-                    size: f64::from(size.clamp(1.0, 500.0)),
-                    leading: f64::from(size.clamp(1.0, 500.0) * annot::LINE_HEIGHT),
+                    size,
+                    leading: size * f64::from(annot::LINE_HEIGHT),
                     color: *color,
+                    font: *font,
+                    align: *align,
+                    width,
                 });
             }
             Addition::Picture { rect, image } => extra.over.push(marks::Drawing::Picture {
@@ -748,18 +873,25 @@ pub(crate) fn add(
                 size,
                 color,
                 leading,
+                font,
+                align,
             } => {
                 extra.redact.push(corners(area));
                 extra.text_only = true;
                 let size = f64::from(size.clamp(1.0, 500.0));
                 let paragraph = leading.map(|l| f64::from(l).clamp(size * 0.8, size * 4.0));
+                let drawn = font.unwrap_or_default();
                 let lines: Vec<String> = match paragraph {
                     // A little room, as the measured width is the longest line's.
-                    Some(_) => annot::wrap(text.trim_end(), f64::from(area.width()) * 1.02 / size),
+                    Some(_) => annot::wrap_in(text.trim_end(), f64::from(area.width()) * 1.02 / size, &|s| {
+                        drawn.width(s)
+                    }),
                     None => text.lines().map(str::to_owned).collect(),
                 };
                 let same = match lines.as_slice() {
-                    [line] if !line.trim().is_empty() => rebuild::same_font(doc.0, page, corners(area), line),
+                    [line] if !line.trim().is_empty() && font.is_none() && *align == TextAlign::Left => {
+                        rebuild::same_font(doc.0, page, corners(area), line)
+                    }
                     _ => None,
                 };
                 if let Some(line) = same {
@@ -780,6 +912,9 @@ pub(crate) fn add(
                         size,
                         leading: paragraph.unwrap_or(size * f64::from(annot::LINE_HEIGHT)),
                         color: color.unwrap_or(Color::BLACK),
+                        font: drawn,
+                        align: *align,
+                        width: f64::from(area.width()),
                     });
                 }
             }
@@ -1128,7 +1263,7 @@ fn rewrite(data: &[u8], set: &field::Entries) -> Result<Vec<u8>, SaveError> {
 }
 
 /// A PDF date string in UTC, like `D:20261017093000Z`.
-fn pdf_date(now: SystemTime) -> String {
+pub(crate) fn pdf_date(now: SystemTime) -> String {
     let secs = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;

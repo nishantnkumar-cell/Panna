@@ -248,6 +248,10 @@ enum Message {
     /// Asks for a picture to stamp.
     StampPicture,
     StampPictureChosen(Option<PathBuf>),
+    /// A file is being attached as a comment: pick it.
+    AttachFile,
+    AttachFileChosen(Option<PathBuf>),
+    AttachFileLoaded(Result<panna_core::AttachedFile, String>),
     StampPictureLoaded(Result<(panna_core::StampImage, String), String>),
     /// Prints the document with its unsaved changes (Ctrl+P).
     Print,
@@ -278,6 +282,10 @@ enum Message {
     },
     /// Space held down picks the Hand tool for as long as it's held.
     SpaceHand(bool),
+    /// What the form preparer asked for.
+    PrepareOutcome(prepare::Outcome),
+    /// Shift, Ctrl, Alt or Cmd went down or up.
+    Modifiers(iced::keyboard::Modifiers),
     /// Back and forward through the views shown, as Acrobat's Previous View and Next View.
     PrevView,
     NextView,
@@ -289,6 +297,9 @@ enum Message {
     FitHeight,
     /// Read mode: toolbars and panels hidden, a small bar to move and zoom.
     ToggleReadMode,
+    /// Shows the document in a second pane below the first, or takes it away.
+    ToggleSplit,
+    SplitScrolled(Viewport),
     /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
     AutoScroll,
     AutoScrollTick,
@@ -313,6 +324,8 @@ enum Message {
     /// Turns the comment tools on if needed and picks a tool, from the Comment menu.
     CommentTool(annotate::Tool),
     SetSpread(Spread),
+    /// Turns continuous scrolling on, or off to show a page or spread at a time.
+    SetScrolling(bool),
     SetColors(colors::PageColors),
     /// Shows or hides the keyboard shortcuts card.
     Shortcuts(bool),
@@ -492,6 +505,8 @@ enum Message {
 
 struct App {
     next_doc_id: u64,
+    /// The modifier keys held down now.
+    modifiers: iced::keyboard::Modifiers,
     doc: Option<OpenDoc>,
     /// The other open documents, in tab order with the shown one left out.
     parked: Vec<Parked>,
@@ -505,6 +520,12 @@ struct App {
     rotation: u8,
     scale_factor: f32,
     viewport: ViewportState,
+    /// Where a page-at-a-time view was just turned to, and when, until the view gets there:
+    /// scroll events already on their way are from before the turn.
+    turned_to: Option<(f32, std::time::Instant)>,
+    /// The second pane's viewport, when the window is split to show two parts of the
+    /// document at once.
+    split: Option<ViewportState>,
     page_input: String,
     settings: Settings,
     trusted: trust::Trusted,
@@ -841,6 +862,8 @@ struct OpenDoc {
     layers_shown: Vec<bool>,
     /// The page layout the file asks for, until the user picks another.
     spread: Option<Spread>,
+    /// Whether the file asks for scrolling, until the user picks.
+    scrolling: Option<bool>,
     /// Views to go back and forward to: where on which page, and the zoom.
     back: Vec<View>,
     forward: Vec<View>,
@@ -884,6 +907,10 @@ struct ViewportState {
 
 fn scroll_id() -> iced::widget::Id {
     iced::widget::Id::new("pages")
+}
+
+fn split_scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("pages-split")
 }
 
 /// Files dropped on the window, and its size and scale changing.
@@ -1122,6 +1149,7 @@ impl App {
             active_tab: 0,
             to_open: Vec::new(),
             next_doc_id: 0,
+            modifiers: iced::keyboard::Modifiers::default(),
             doc: None,
             status: Status::Idle,
             zoom: 1.0,
@@ -1133,6 +1161,8 @@ impl App {
                 width: 1000.0,
                 height: 800.0,
             },
+            turned_to: None,
+            split: None,
             page_input: String::new(),
             bars: Bars::new(settings.bars, menu::HEIGHT),
             sidebar: Sidebar::new(settings.sidebar_open, settings.sidebar_side, settings.sidebar_tab),
@@ -1263,6 +1293,9 @@ impl App {
             })
         } else {
             event::listen_with(|event, status, _window| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(keys)) => {
+                    Some(Message::Modifiers(keys))
+                }
                 iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
                 event => window_event(event),
             })
@@ -1365,8 +1398,21 @@ impl App {
                             panna_core::OpenLayout::Single => Some(Spread::Single),
                             panna_core::OpenLayout::Two => Some(Spread::Two),
                             panna_core::OpenLayout::TwoCover => Some(Spread::TwoCover),
+                            panna_core::OpenLayout::SinglePage => Some(Spread::Single),
+                            panna_core::OpenLayout::TwoPage => Some(Spread::Two),
+                            panna_core::OpenLayout::TwoPageCover => Some(Spread::TwoCover),
                         };
-                        doc.layout = PageLayout::new(&info.pages, doc.spread.unwrap_or(self.settings.spread));
+                        doc.scrolling = match view.layout {
+                            panna_core::OpenLayout::Default => None,
+                            layout => Some(!layout.paged()),
+                        };
+                        let fill = page_fill(
+                            doc.scrolling.unwrap_or(self.settings.scrolling),
+                            self.viewport.height,
+                            self.zoom,
+                        );
+                        doc.layout =
+                            PageLayout::filled(&info.pages, doc.spread.unwrap_or(self.settings.spread), fill);
                         doc.pages = info.pages.iter().map(|_| Slot::default()).collect();
                         doc.thumb_layout = ThumbLayout::new(&info.pages);
                         doc.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
@@ -1475,6 +1521,17 @@ impl App {
             }
             Message::Scrolled(viewport) => {
                 let bounds = viewport.bounds();
+                let before = self.viewport;
+                if let Some((y, at)) = self.turned_to {
+                    let arrived = (viewport.absolute_offset().y - y).abs() < 0.5;
+                    if arrived || at.elapsed() > std::time::Duration::from_millis(400) {
+                        self.turned_to = None;
+                    } else {
+                        // A scroll from before the page turned: stay on the new page.
+                        let x = viewport.absolute_offset().x;
+                        return operation::scroll_to(scroll_id(), AbsoluteOffset { x, y });
+                    }
+                }
                 self.viewport = ViewportState {
                     offset_x: viewport.absolute_offset().x,
                     offset_y: viewport.absolute_offset().y,
@@ -1482,10 +1539,39 @@ impl App {
                     height: bounds.height,
                 };
                 self.page_input.clear();
-                match self.opening.take() {
-                    Some(view) => self.open_at(view),
-                    None => self.request_visible(),
+                if let Some(view) = self.opening.take() {
+                    return self.open_at(view);
                 }
+                let Some(doc) = self.doc.as_ref().filter(|d| d.layout.paged()) else {
+                    return self.request_visible();
+                };
+                // Showing a page at a time: a new viewport height makes rows taller or
+                // shorter, and scrolling past a row's end turns to the next.
+                if (before.height - self.viewport.height).abs() > 0.5 {
+                    let page = doc
+                        .layout
+                        .page_at(before.offset_y + before.height * 0.3, self.zoom);
+                    return self.relayout_at(page);
+                }
+                let y = self.viewport.offset_y;
+                let settled = doc
+                    .layout
+                    .settle(before.offset_y, y, self.viewport.height, self.zoom);
+                if (settled - y).abs() < 0.5 {
+                    return self.request_visible();
+                }
+                self.viewport.offset_y = settled;
+                self.turned_to = Some((settled, std::time::Instant::now()));
+                Task::batch([
+                    operation::scroll_to(
+                        scroll_id(),
+                        AbsoluteOffset {
+                            x: self.viewport.offset_x,
+                            y: settled,
+                        },
+                    ),
+                    self.request_visible(),
+                ])
             }
             Message::ZoomIn => {
                 let next = ZOOM_STEPS.iter().copied().find(|z| *z > self.zoom + 0.001);
@@ -1532,6 +1618,14 @@ impl App {
                 let current = self.doc.as_ref().and_then(|d| d.spread);
                 self.update(Message::SetSpread(current.unwrap_or(self.settings.spread).next()))
             }
+            Message::SetScrolling(on) => {
+                if let Some(doc) = &mut self.doc {
+                    doc.scrolling = None;
+                }
+                self.settings.scrolling = on;
+                self.settings.save();
+                self.relayout()
+            }
             Message::SetSpread(spread) => {
                 if let Some(doc) = &mut self.doc {
                     doc.spread = None;
@@ -1550,6 +1644,10 @@ impl App {
                 operation::focus(page_box_id()).chain(operation::select_all(page_box_id()))
             }
             Message::Accelerator { key, shift } => self.accelerator(key, shift),
+            Message::Modifiers(keys) => {
+                self.modifiers = keys;
+                Task::none()
+            }
             Message::SpaceHand(down) => {
                 if matches!(self.screen, Screen::Present { .. }) {
                     return if down {
@@ -1619,6 +1717,35 @@ impl App {
                 let zoom = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / row_height.max(1.0);
                 let zoom_task = self.set_zoom(zoom);
                 Task::batch([zoom_task, self.go_to_page(page)])
+            }
+            Message::ToggleSplit => {
+                if self.split.take().is_some() {
+                    return self.request_visible();
+                }
+                // The second pane starts where the first one is.
+                let at = AbsoluteOffset {
+                    x: self.viewport.offset_x,
+                    y: self.viewport.offset_y,
+                };
+                self.split = Some(ViewportState {
+                    offset_x: at.x,
+                    offset_y: at.y,
+                    ..self.viewport
+                });
+                operation::scroll_to(split_scroll_id(), at)
+            }
+            Message::SplitScrolled(viewport) => {
+                let Some(split) = &mut self.split else {
+                    return Task::none();
+                };
+                let bounds = viewport.bounds();
+                *split = ViewportState {
+                    offset_x: viewport.absolute_offset().x,
+                    offset_y: viewport.absolute_offset().y,
+                    width: bounds.width,
+                    height: bounds.height,
+                };
+                self.request_visible()
             }
             Message::ToggleReadMode => {
                 self.read_mode = !self.read_mode && self.doc.is_some();
@@ -1835,10 +1962,14 @@ impl App {
                         (true, sidebar::Tab::Layers) => panna_core::OpenPanel::Layers,
                         (true, _) => panna_core::OpenPanel::Pages,
                     };
-                    let layout = match doc.spread.unwrap_or(self.settings.spread) {
-                        Spread::Single => panna_core::OpenLayout::Single,
-                        Spread::Two => panna_core::OpenLayout::Two,
-                        Spread::TwoCover => panna_core::OpenLayout::TwoCover,
+                    let scrolling = doc.scrolling.unwrap_or(self.settings.scrolling);
+                    let layout = match (doc.spread.unwrap_or(self.settings.spread), scrolling) {
+                        (Spread::Single, true) => panna_core::OpenLayout::Single,
+                        (Spread::Two, true) => panna_core::OpenLayout::Two,
+                        (Spread::TwoCover, true) => panna_core::OpenLayout::TwoCover,
+                        (Spread::Single, false) => panna_core::OpenLayout::SinglePage,
+                        (Spread::Two, false) => panna_core::OpenLayout::TwoPage,
+                        (Spread::TwoCover, false) => panna_core::OpenLayout::TwoPageCover,
                     };
                     let view = panna_core::InitialView {
                         page: self.current_page(),
@@ -2093,7 +2224,13 @@ impl App {
             }
             Message::PagePress(page) if self.preparer.on => {
                 if let Some((_, position)) = self.hover.filter(|(p, _)| *p == page) {
-                    self.preparer.press(page, self.page_map(page).to_page(position));
+                    let adding = self.modifiers.shift() || self.modifiers.command();
+                    self.preparer.press(
+                        page,
+                        self.page_map(page).to_page(position),
+                        self.form.fields(),
+                        adding,
+                    );
                 }
                 Task::none()
             }
@@ -2504,31 +2641,36 @@ impl App {
                         self.annotate.update(annotate::Event::Toggle);
                     }
                 }
-                match outcome {
-                    prepare::Outcome::Nothing => Task::none(),
-                    prepare::Outcome::Edit { add, remove } => {
-                        let show = add.first().map_or(self.current_page(), |f| f.page);
-                        self.edit_pages(PageEdit::FormFields { add, remove }, show, false)
-                    }
-                    prepare::Outcome::Detect => {
-                        let Some(doc) = &self.doc else { return Task::none() };
-                        let (tx, rx) = futures_channel::oneshot::channel();
-                        doc.worker.detect_fields(move |result| {
-                            let _ = tx.send(result);
-                        });
-                        self.notice = Some("Looking for fields…".into());
-                        let id = doc.id;
-                        Task::perform(rx, move |result| Message::FieldsDetected {
-                            doc: id,
-                            result: match result {
-                                Ok(Ok(fields)) => Ok(fields),
-                                Ok(Err(e)) => Err(format!("Fields couldn't be looked for: {e}")),
-                                Err(_) => Err("Fields couldn't be looked for.".into()),
-                            },
-                        })
-                    }
-                }
+                self.update(Message::PrepareOutcome(outcome))
             }
+            Message::PrepareOutcome(outcome) => match outcome {
+                prepare::Outcome::Nothing => Task::none(),
+                prepare::Outcome::Move(moved) => {
+                    let show = moved.first().map_or(self.current_page(), |m| m.0);
+                    self.edit_pages(PageEdit::MoveWidgets(moved), show, false)
+                }
+                prepare::Outcome::Edit { add, remove } => {
+                    let show = add.first().map_or(self.current_page(), |f| f.page);
+                    self.edit_pages(PageEdit::FormFields { add, remove }, show, false)
+                }
+                prepare::Outcome::Detect => {
+                    let Some(doc) = &self.doc else { return Task::none() };
+                    let (tx, rx) = futures_channel::oneshot::channel();
+                    doc.worker.detect_fields(move |result| {
+                        let _ = tx.send(result);
+                    });
+                    self.notice = Some("Looking for fields…".into());
+                    let id = doc.id;
+                    Task::perform(rx, move |result| Message::FieldsDetected {
+                        doc: id,
+                        result: match result {
+                            Ok(Ok(fields)) => Ok(fields),
+                            Ok(Err(e)) => Err(format!("Fields couldn't be looked for: {e}")),
+                            Err(_) => Err("Fields couldn't be looked for.".into()),
+                        },
+                    })
+                }
+            },
             Message::EditPictures(event) => {
                 if self.saving || self.doc.is_none() {
                     return Task::none();
@@ -3135,7 +3277,10 @@ impl App {
                     return self.after_pictures(outcome);
                 }
                 if self.preparer.on {
-                    self.preparer.release(self.form.fields());
+                    let outcome = self.preparer.release(self.form.fields());
+                    if !matches!(outcome, prepare::Outcome::Nothing) {
+                        return self.update(Message::PrepareOutcome(outcome));
+                    }
                     return self.preparer.focus().map_or_else(Task::none, operation::focus);
                 }
                 if self.snapshot.is_some_and(|s| s.dragging) {
@@ -3151,6 +3296,9 @@ impl App {
                     let outcome = self.annotate.release();
                     if self.annotate.editing.is_some() {
                         return operation::focus(annotate::editor_id());
+                    }
+                    if self.annotate.attaching.is_some() {
+                        return self.update(Message::AttachFile);
                     }
                     return self.after_annotate(outcome);
                 }
@@ -3705,17 +3853,31 @@ impl App {
                     pages::WatermarkEvent::PictureLoaded(Ok(picture)) => state.picture = Some(picture),
                     pages::WatermarkEvent::PictureLoaded(Err(e)) => self.notice = Some(e),
                     pages::WatermarkEvent::Cancel => self.watermarking = None,
-                    pages::WatermarkEvent::Go => {
-                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                        let Ok((pages, mark)) = pages::watermark_settings(state, count) else {
-                            return Task::none();
-                        };
+                    pages::WatermarkEvent::Replace(v) => state.replace = v,
+                    pages::WatermarkEvent::Remove => {
                         self.watermarking = None;
                         if self.pages_busy || self.saving {
                             return Task::none();
                         }
                         let current = self.current_page();
-                        return self.edit_pages(PageEdit::Watermark { pages, mark }, current, false);
+                        let edit = PageEdit::RemoveMarks {
+                            header_footer: false,
+                            watermark: true,
+                        };
+                        return self.edit_pages(edit, current, false);
+                    }
+                    pages::WatermarkEvent::Go => {
+                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                        let Ok((pages, mark)) = pages::watermark_settings(state, count) else {
+                            return Task::none();
+                        };
+                        let replace = state.existing && state.replace;
+                        self.watermarking = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(PageEdit::Watermark { pages, mark, replace }, current, false);
                     }
                 }
                 Task::none()
@@ -3736,17 +3898,39 @@ impl App {
                     pages::MarkEvent::First(v) => state.first = clean(v, 9),
                     pages::MarkEvent::Range(v) => state.range = clean(v, 200),
                     pages::MarkEvent::Cancel => self.marking = None,
-                    pages::MarkEvent::Go => {
-                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                        let Ok((pages, marks)) = pages::mark_settings(state, count) else {
-                            return Task::none();
-                        };
+                    pages::MarkEvent::Replace(v) => state.replace = v,
+                    pages::MarkEvent::Remove => {
                         self.marking = None;
                         if self.pages_busy || self.saving {
                             return Task::none();
                         }
                         let current = self.current_page();
-                        return self.edit_pages(PageEdit::HeaderFooter { pages, marks }, current, false);
+                        let edit = PageEdit::RemoveMarks {
+                            header_footer: true,
+                            watermark: false,
+                        };
+                        return self.edit_pages(edit, current, false);
+                    }
+                    pages::MarkEvent::Go => {
+                        let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+                        let Ok((pages, marks)) = pages::mark_settings(state, count) else {
+                            return Task::none();
+                        };
+                        let replace = state.existing && state.replace;
+                        self.marking = None;
+                        if self.pages_busy || self.saving {
+                            return Task::none();
+                        }
+                        let current = self.current_page();
+                        return self.edit_pages(
+                            PageEdit::HeaderFooter {
+                                pages,
+                                marks,
+                                replace,
+                            },
+                            current,
+                            false,
+                        );
                     }
                 }
                 Task::none()
@@ -3931,6 +4115,56 @@ impl App {
                 },
                 Message::StampPictureChosen,
             ),
+            Message::AttachFile => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Attach a file")
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::AttachFileChosen,
+            ),
+            Message::AttachFileChosen(None) => {
+                self.annotate.update(annotate::Event::Attach(None));
+                Task::none()
+            }
+            Message::AttachFileChosen(Some(path)) => {
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let too_big = std::fs::metadata(&path)
+                        .is_ok_and(|m| m.len() > panna_core::MAX_ATTACHMENT_BYTES as u64);
+                    let result = if too_big {
+                        Err(format!(
+                            "That file is too big to attach (the most is {} MB).",
+                            panna_core::MAX_ATTACHMENT_BYTES / (1024 * 1024)
+                        ))
+                    } else {
+                        std::fs::read(&path)
+                            .map_err(|e| format!("Couldn't open the file: {e}"))
+                            .and_then(|bytes| {
+                                let name = path
+                                    .file_name()
+                                    .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+                                panna_core::AttachedFile::new(&name, &bytes)
+                            })
+                    };
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::AttachFileLoaded(
+                        result.unwrap_or_else(|_| Err("The file couldn't be read.".into())),
+                    )
+                })
+            }
+            Message::AttachFileLoaded(Err(e)) => {
+                self.annotate.update(annotate::Event::Attach(None));
+                self.notice = Some(e);
+                Task::none()
+            }
+            Message::AttachFileLoaded(Ok(file)) => {
+                self.update(Message::Annotate(annotate::Event::Attach(Some(file))))
+            }
             Message::StampPictureChosen(None) => Task::none(),
             Message::StampPictureChosen(Some(path)) => {
                 let (tx, rx) = futures_channel::oneshot::channel();
@@ -4141,7 +4375,12 @@ impl App {
                 };
                 // Unsaved comments and form entries are now part of the document.
                 let sizes = rotated_sizes(&info.pages, self.rotation);
-                open.layout = PageLayout::new(&sizes, open.spread.unwrap_or(self.settings.spread));
+                let fill = page_fill(
+                    open.scrolling.unwrap_or(self.settings.scrolling),
+                    self.viewport.height,
+                    self.zoom,
+                );
+                open.layout = PageLayout::filled(&sizes, open.spread.unwrap_or(self.settings.spread), fill);
                 open.pages = info.pages.iter().map(|_| Slot::default()).collect();
                 open.thumb_layout = ThumbLayout::new(&sizes);
                 open.thumbs = info.pages.iter().map(|_| Thumb::default()).collect();
@@ -4390,12 +4629,22 @@ impl App {
             }
             pages::Op::Watermark => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                self.watermarking = Some(pages::Watermarking::new(count));
+                let marks = self
+                    .doc
+                    .as_ref()
+                    .map(|d| d.info.marks.clone())
+                    .unwrap_or_default();
+                self.watermarking = Some(pages::Watermarking::for_document(count, &marks));
                 operation::focus(pages::watermark_input_id())
             }
             pages::Op::HeaderFooter => {
                 let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
-                self.marking = Some(pages::Marking::new(count));
+                let marks = self
+                    .doc
+                    .as_ref()
+                    .map(|d| d.info.marks.clone())
+                    .unwrap_or_default();
+                self.marking = Some(pages::Marking::for_document(count, &marks));
                 operation::focus(pages::mark_input_id())
                     .chain(operation::move_cursor_to_end(pages::mark_input_id()))
             }
@@ -5713,6 +5962,7 @@ impl App {
                 protected: false,
                 weak_protection: false,
                 attachments: Vec::new(),
+                marks: Default::default(),
                 layers: Vec::new(),
                 signatures: Vec::new(),
                 initial_view: panna_core::InitialView::default(),
@@ -5726,6 +5976,7 @@ impl App {
             texts: Vec::new(),
             layers_shown: Vec::new(),
             spread: None,
+            scrolling: None,
             back: Vec::new(),
             forward: Vec::new(),
         });
@@ -5790,6 +6041,12 @@ impl App {
             self.zoom = zoom;
             return Task::none();
         };
+        if doc.layout.paged() {
+            // Rows are as tall as the viewport at the new zoom: start the page again.
+            let page = self.current_page();
+            self.zoom = zoom;
+            return self.relayout_at(page);
+        }
         // Keep the point at the top of the viewport in place while zooming.
         let anchor = doc.layout.unzoomed_y(self.viewport.offset_y, self.zoom);
         self.zoom = zoom;
@@ -5808,11 +6065,21 @@ impl App {
     /// Regroups pages into rows after the spread changes, staying on the current page.
     fn relayout(&mut self) -> Task<Message> {
         let page = self.current_page();
+        self.relayout_at(page)
+    }
+
+    /// Regroups pages into rows and shows `page`.
+    fn relayout_at(&mut self, page: usize) -> Task<Message> {
         let Some(doc) = &mut self.doc else {
             return Task::none();
         };
         let sizes = doc.layout.sizes().to_vec();
-        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
+        let fill = page_fill(
+            doc.scrolling.unwrap_or(self.settings.scrolling),
+            self.viewport.height,
+            self.zoom,
+        );
+        doc.layout = PageLayout::filled(&sizes, doc.spread.unwrap_or(self.settings.spread), fill);
         self.go_to_page(page)
     }
 
@@ -5823,7 +6090,12 @@ impl App {
         };
         self.rotation = (self.rotation + turns) % 4;
         let sizes = rotated_sizes(&doc.info.pages, self.rotation);
-        doc.layout = PageLayout::new(&sizes, doc.spread.unwrap_or(self.settings.spread));
+        let fill = page_fill(
+            doc.scrolling.unwrap_or(self.settings.scrolling),
+            self.viewport.height,
+            self.zoom,
+        );
+        doc.layout = PageLayout::filled(&sizes, doc.spread.unwrap_or(self.settings.spread), fill);
         doc.thumb_layout = ThumbLayout::new(&sizes);
         doc.pages.iter_mut().for_each(|slot| *slot = Slot::default());
         doc.thumbs.iter_mut().for_each(|thumb| *thumb = Thumb::default());
@@ -6027,14 +6299,21 @@ impl App {
         let visible = doc
             .layout
             .visible_range(self.viewport.offset_y, self.viewport.height, self.zoom);
-        let keep_start = visible.start.saturating_sub(KEEP_MARGIN);
-        let keep_end = (visible.end + KEEP_MARGIN).min(doc.pages.len());
+        let keep = |range: &std::ops::Range<usize>| {
+            range.start.saturating_sub(KEEP_MARGIN)..(range.end + KEEP_MARGIN).min(doc.pages.len())
+        };
+        let kept = keep(&visible);
+        // The second pane's pages, when the window is split.
+        let also = self
+            .split
+            .map(|v| keep(&doc.layout.visible_range(v.offset_y, v.height, self.zoom)))
+            .unwrap_or(0..0);
         let scale = self.zoom * self.scale_factor;
         let mut tasks = Vec::new();
         let text_range = visible.clone();
 
         for (index, slot) in doc.pages.iter_mut().enumerate() {
-            if index < keep_start || index >= keep_end {
+            if !kept.contains(&index) && !also.contains(&index) {
                 *slot = Slot::default();
                 continue;
             }
@@ -6575,6 +6854,11 @@ impl App {
                     plain("Reset toolbar layout", "", Some(Message::Toolbar(T::Reset))),
                 ]);
                 let spread = self.spread();
+                let scrolling = self
+                    .doc
+                    .as_ref()
+                    .and_then(|d| d.scrolling)
+                    .unwrap_or(self.settings.scrolling);
                 let colors = self.settings.colors;
                 vec![
                     check(
@@ -6602,6 +6886,15 @@ impl App {
                         ]
                         .into_iter()
                         .map(|(s, label)| check(label, "", spread == s, on(Message::SetSpread(s))))
+                        .chain([
+                            Separator,
+                            check(
+                                "Enable scrolling",
+                                "",
+                                scrolling,
+                                on(Message::SetScrolling(!scrolling)),
+                            ),
+                        ])
                         .collect(),
                     ),
                     sub(
@@ -6624,6 +6917,7 @@ impl App {
                     ),
                     item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
                     Separator,
+                    check("Split", "", self.split.is_some(), on(Message::ToggleSplit)),
                     check("Read mode", k("H"), self.read_mode, on(Message::ToggleReadMode)),
                     item(
                         Icon::Present,
@@ -6704,6 +6998,8 @@ impl App {
                     tool(Tool::InsertText),
                     tool(Tool::Note),
                     tool(Tool::TextBox),
+                    tool(Tool::Callout),
+                    tool(Tool::Attach),
                     tool(Tool::Pen),
                     tool(Tool::Eraser),
                     sub(
@@ -6981,6 +7277,15 @@ impl App {
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.pages_view(doc);
+                // The same column with or without the second pane, so the first keeps its
+                // place in the widget tree, and its scroll position, when the window splits.
+                let mut panes = column![container(pages).height(Length::FillPortion(1))];
+                if self.split.is_some() {
+                    panes = panes
+                        .push(rule::horizontal(4))
+                        .push(container(self.split_view(doc)).height(Length::FillPortion(1)));
+                }
+                let pages = panes.into();
                 self.with_sidebar(doc, pages)
             }
             _ => self.welcome_view(),
@@ -7503,6 +7808,70 @@ impl App {
         out
     }
 
+    /// The second pane of a split window: the same pages, scrolled on their own, to look at.
+    fn split_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {
+        let width = self.split.map_or(self.viewport.width, |v| v.width);
+        let mut pages = doc.layout.sizes().iter().zip(&doc.pages).map(|(size, slot)| {
+            let w = (size.width * self.zoom).round();
+            let h = (size.height * self.zoom).round();
+            let content: Element<'_, Message> = match &slot.image {
+                Some(handle) => image(handle.clone()).width(w).height(h).into(),
+                None => space().width(w).height(h).into(),
+            };
+            container(content)
+                .width(w)
+                .height(h)
+                .style(|_| {
+                    container::Style::default()
+                        .background(iced::Color::WHITE)
+                        .border(iced::Border {
+                            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                            width: 1.0,
+                            radius: 0.0.into(),
+                        })
+                })
+                .into()
+        });
+        let rows: Vec<Element<'_, Message>> = doc
+            .layout
+            .rows()
+            .iter()
+            .enumerate()
+            .map(|(r, row)| {
+                let row = iced::widget::Row::with_children(pages.by_ref().take(row.len()))
+                    .spacing(PAGE_GAP)
+                    .align_y(iced::alignment::Vertical::Top);
+                if doc.layout.paged() {
+                    container(row)
+                        .height(Length::Fixed(doc.layout.row_height(r) * self.zoom))
+                        .into()
+                } else {
+                    row.into()
+                }
+            })
+            .collect();
+        let column = iced::widget::Column::with_children(rows)
+            .spacing(PAGE_GAP)
+            .padding(PAGE_GAP)
+            .align_x(Center)
+            .width(Length::Fixed(doc.layout.content_width(self.zoom, width).round()));
+        container(
+            scrollable(column)
+                .id(split_scroll_id())
+                .direction(scrollable::Direction::Both {
+                    vertical: scrollable::Scrollbar::default(),
+                    horizontal: scrollable::Scrollbar::default(),
+                })
+                .on_scroll(Message::SplitScrolled)
+                .width(Fill)
+                .height(Fill),
+        )
+        .style(|theme: &iced::Theme| {
+            container::Style::default().background(theme.extended_palette().background.strong.color)
+        })
+        .into()
+    }
+
     fn pages_view<'a>(&'a self, doc: &'a OpenDoc) -> Element<'a, Message> {
         let pages = doc
             .layout
@@ -7754,11 +8123,18 @@ impl App {
         // Fixed content width: at least the viewport (so pages stay centred), wider when zoomed in.
         let content_width = doc.layout.content_width(self.zoom, self.viewport.width);
         let mut pages = pages;
-        let rows = doc.layout.rows().iter().map(|row| {
-            iced::widget::Row::with_children(pages.by_ref().take(row.len()))
+        let rows = doc.layout.rows().iter().enumerate().map(|(r, row)| {
+            let row = iced::widget::Row::with_children(pages.by_ref().take(row.len()))
                 .spacing(PAGE_GAP)
-                .align_y(iced::alignment::Vertical::Top)
-                .into()
+                .align_y(iced::alignment::Vertical::Top);
+            if doc.layout.paged() {
+                // As tall as the viewport, so the next row starts out of sight.
+                container(row)
+                    .height(Length::Fixed(doc.layout.row_height(r) * self.zoom))
+                    .into()
+            } else {
+                row.into()
+            }
         });
         let rows: Vec<Element<'_, Message>> = rows.collect();
         let column = iced::widget::Column::with_children(rows)
@@ -7814,4 +8190,14 @@ fn annotator(settings: &Settings) -> annotate::Annotate {
         annotate.set_author(name.to_owned());
     }
     annotate
+}
+
+/// The least height of a row in points when pages show one row at a time: the viewport's
+/// height less one gap, at `zoom`; 0 when they scroll.
+fn page_fill(scrolling: bool, viewport_height: f32, zoom: f32) -> f32 {
+    if scrolling {
+        0.0
+    } else {
+        (viewport_height - PAGE_GAP).max(1.0) / zoom.max(0.01)
+    }
 }

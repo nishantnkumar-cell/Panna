@@ -271,6 +271,8 @@ fn the_worker_changes_pages_with_undo_and_saves() {
                 contents: String::new(),
                 author: String::new(),
                 dashed: false,
+                fill: None,
+                ends: Default::default(),
             }],
             ..Changes::default()
         },
@@ -383,7 +385,7 @@ fn headers_and_footers_sit_on_the_page_as_shown() {
     marks.text[0] = "Three pages".into();
     marks.text[4] = "Page {page} of {pages}".into();
     marks.text[5] = "X{page:4}".into();
-    let out = open(doc.with_header_footer(&[0, 2], &marks).unwrap(), None);
+    let out = open(doc.with_header_footer(&[0, 2], &marks, false).unwrap(), None);
     let band = |doc: &Document, page: usize, y0: f32, y1: f32| {
         let width = doc.info().unwrap().pages[page].width;
         doc.page_text(page).unwrap().text_in(&[TextBox {
@@ -414,7 +416,7 @@ fn headers_and_footers_keep_password_protection() {
     );
     let mut marks = panna_core::HeaderFooter::default();
     marks.text[1] = "Confidential".into();
-    let saved = doc.with_header_footer(&[0], &marks).unwrap();
+    let saved = doc.with_header_footer(&[0], &marks, false).unwrap();
     assert!(Document::from_bytes(saved.clone(), None, Limits::default()).is_err());
     let out = open(saved, Some("secret"));
     let t = text(&out, 0);
@@ -433,7 +435,7 @@ fn watermarks_and_backgrounds_are_drawn() {
         background: Some(Color([1.0, 0.0, 0.0])),
         ..Watermark::default()
     };
-    let out = open(doc.with_watermark(&[0, 2], &mark).unwrap(), None);
+    let out = open(doc.with_watermark(&[0, 2], &mark, false).unwrap(), None);
     assert!(text(&out, 0).contains("DRAFT 1"));
     assert!(text(&out, 2).contains("DRAFT 2") && text(&out, 2).contains("Page 3"));
     assert!(!text(&out, 1).contains("DRAFT"));
@@ -463,7 +465,7 @@ fn picture_watermarks_are_drawn_and_shared() {
         opacity: 1.0,
         ..Watermark::default()
     };
-    let bytes = doc.with_watermark(&[0, 1, 2], &mark).unwrap();
+    let bytes = doc.with_watermark(&[0, 1, 2], &mark, false).unwrap();
     // One picture, drawn on every page.
     let pictures = bytes
         .windows(b"/Subtype /Image".len())
@@ -682,4 +684,54 @@ fn a_duplicated_page_gets_its_own_copy_of_its_comments() {
     assert_eq!(comments.iter().map(|c| c.page).collect::<Vec<_>>(), [0, 1]);
     assert_ne!(comments[0].id, comments[1].id);
     assert!(doc.with_page_duplicated(1).is_err());
+}
+
+#[test]
+fn headers_footers_and_watermarks_can_be_replaced_and_removed() {
+    use panna_core::{Color, Watermark};
+    let doc = open(three_pages(), None);
+    assert!(!doc.info().unwrap().marks.header_footer);
+    let mut marks = panna_core::HeaderFooter::default();
+    marks.text[4] = "First {page}".into();
+    let mark = Watermark {
+        text: "DRAFT".into(),
+        background: Some(Color([1.0, 0.0, 0.0])),
+        ..Watermark::default()
+    };
+    let out = open(doc.with_header_footer(&[0, 1, 2], &marks, false).unwrap(), None);
+    let out = open(out.with_watermark(&[0, 1, 2], &mark, false).unwrap(), None);
+    let found = out.info().unwrap().marks;
+    assert!(found.header_footer && found.watermark);
+    // The settings come back to fill the dialogs in again.
+    assert_eq!(found.header_settings.as_ref(), Some(&marks));
+    assert_eq!(
+        found.watermark_settings.as_ref().map(|w| w.text.as_str()),
+        Some("DRAFT")
+    );
+
+    // Replacing the header and footer leaves only the new one, and the watermark stays.
+    marks.text[4] = "Second {page}".into();
+    let out = open(out.with_header_footer(&[0, 1, 2], &marks, true).unwrap(), None);
+    let t = text(&out, 1);
+    assert!(
+        t.contains("Second 2") && !t.contains("First") && t.contains("DRAFT"),
+        "{t}"
+    );
+    assert_eq!(out.info().unwrap().marks.header_settings, Some(marks));
+
+    // Removing the watermark takes its text and its background out; the page's own text stays.
+    let out = open(out.without_marks(false, true).unwrap(), None);
+    let t = text(&out, 2);
+    assert!(
+        !t.contains("DRAFT") && t.contains("Second 3") && t.contains("Page 3"),
+        "{t}"
+    );
+    let cache = out.new_cache();
+    let page = out.render_page(&cache, 2, 1.0).unwrap();
+    assert_eq!(page.rgba[..3], [255, 255, 255]);
+    let found = out.info().unwrap().marks;
+    assert!(found.header_footer && !found.watermark);
+    let out = open(out.without_marks(true, false).unwrap(), None);
+    assert!(!text(&out, 0).contains("Second"));
+    assert!(!out.info().unwrap().marks.header_footer);
 }

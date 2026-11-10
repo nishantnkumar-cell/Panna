@@ -71,6 +71,25 @@ pub(crate) fn widget(
             extra.push_str(&format!("/AP << /N {off} 0 R >> /DA (/Helv 0 Tf 0 g) "));
             "/Tx"
         }
+        super::NewFieldKind::Date(pattern) => {
+            // Only the pattern's letters and separators, so it can't break out of the script.
+            let pattern: String = pattern
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || " /.-:,".contains(*c))
+                .take(40)
+                .collect();
+            let pattern = if pattern.is_empty() {
+                "dd/mm/yyyy".to_owned()
+            } else {
+                pattern
+            };
+            extra.push_str(&format!(
+                "/AP << /N {off} 0 R >> /DA (/Helv 0 Tf 0 g) /AA << \
+                 /F << /S /JavaScript /JS (AFDate_FormatEx\\(\"{pattern}\"\\);) >> \
+                 /K << /S /JavaScript /JS (AFDate_KeystrokeEx\\(\"{pattern}\"\\);) >> >> "
+            ));
+            "/Tx"
+        }
         super::NewFieldKind::CheckBox => {
             let size = (height.min(width) * 0.8).max(1.0);
             let check = format!(

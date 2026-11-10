@@ -93,13 +93,18 @@ pub fn run(file: &Path, steps: &[Step], out: &Path, limits: Limits) -> Result<Pa
                             text: text.clone(),
                             ..Watermark::default()
                         },
+                        replace: false,
                     },
                     Step::PageNumbers => {
                         let mut marks = HeaderFooter::default();
                         if let Some(centre) = marks.text.get_mut(4) {
                             *centre = "Page {page} of {pages}".into();
                         }
-                        PageEdit::HeaderFooter { pages: all(), marks }
+                        PageEdit::HeaderFooter {
+                            pages: all(),
+                            marks,
+                            replace: false,
+                        }
                     }
                     Step::Flatten => PageEdit::Flatten {
                         comments: true,

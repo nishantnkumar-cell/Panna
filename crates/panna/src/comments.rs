@@ -176,6 +176,8 @@ fn icon(kind: &CommentKind) -> Icon {
         CommentKind::StrikeOut => Icon::Strikethrough,
         CommentKind::Note => Icon::StickyNote,
         CommentKind::TextBox => Icon::TextBox,
+        CommentKind::Callout => Icon::Callout,
+        CommentKind::File => Icon::Paperclip,
         CommentKind::Ink => Icon::Pen,
         CommentKind::Rect => Icon::Square,
         CommentKind::Ellipse => Icon::Circle,
@@ -564,6 +566,8 @@ mod tests {
             contents: String::new(),
             author: String::new(),
             dashed: false,
+            fill: None,
+            ends: Default::default(),
         };
         let c = Comment::from(&note);
         let mut view = ListView::default();

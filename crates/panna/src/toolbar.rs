@@ -506,10 +506,13 @@ impl Bars {
                 .align_x(Center)
                 .into()
         } else {
+            // Onto a second line when the window is too narrow for the whole bar.
             Row::with_children(all)
                 .spacing(2)
                 .padding(PAD)
                 .align_y(Center)
+                .wrap()
+                .vertical_spacing(2)
                 .into()
         };
         let floating = dock == Dock::Floating;

@@ -82,6 +82,100 @@ pub fn fill(template: &str, number: u64, total: usize, date: &str) -> String {
     out
 }
 
+/// Acrobat's names for page marks (the /Private entry of a form's /PieceInfo
+/// /ADBE_CompoundType), which let them be found again to update or remove.
+pub(crate) const HEADER: &str = "Header";
+pub(crate) const FOOTER: &str = "Footer";
+pub(crate) const WATERMARK: &str = "Watermark";
+pub(crate) const BACKGROUND: &str = "Background";
+
+/// The headers and footers, and watermarks and backgrounds, already on a document's pages,
+/// Panna's or Acrobat's, with the settings Panna used for them when it made them.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExistingMarks {
+    pub header_footer: bool,
+    pub watermark: bool,
+    pub header_settings: Option<HeaderFooter>,
+    /// Without any picture, which isn't kept with the settings.
+    pub watermark_settings: Option<Watermark>,
+}
+
+/// Most pages looked through for marks, and form XObjects per page.
+const MAX_SCAN_PAGES: usize = 5_000;
+const MAX_SCAN_XOBJECTS: usize = 200;
+/// The largest settings read back.
+const MAX_SETTINGS: usize = 16 * 1024;
+
+/// The /Private mark name of a form XObject's dictionary, if it is a page mark.
+pub(crate) fn private_name(dict: &hayro::hayro_syntax::object::Dict<'_>) -> Option<String> {
+    use hayro::hayro_syntax::object::{Dict, Name};
+    dict.get::<Dict<'_>>(b"PieceInfo")?
+        .get::<Dict<'_>>(b"ADBE_CompoundType")?
+        .get::<Name<'_>>(b"Private")
+        .map(|n| n.as_str().to_owned())
+}
+
+/// Finds the page marks in `pdf`.
+pub(crate) fn existing(pdf: &hayro::hayro_syntax::Pdf) -> ExistingMarks {
+    use hayro::hayro_syntax::object::{Dict, Stream};
+    let mut out = ExistingMarks::default();
+    for page in pdf.pages().iter().take(MAX_SCAN_PAGES) {
+        let Some(xobjects) = page
+            .raw()
+            .get::<Dict<'_>>(b"Resources")
+            .and_then(|r| r.get::<Dict<'_>>(b"XObject"))
+        else {
+            continue;
+        };
+        for key in xobjects.keys().take(MAX_SCAN_XOBJECTS) {
+            let Some(form) = xobjects.get::<Stream<'_>>(key.as_ref()) else {
+                continue;
+            };
+            let dict = form.dict();
+            let Some(name) = private_name(dict) else {
+                continue;
+            };
+            let settings = dict
+                .get::<hayro::hayro_syntax::object::String<'_>>(b"PannaSettings")
+                .map(|s| s.as_bytes().to_vec())
+                .filter(|b| b.len() <= MAX_SETTINGS);
+            match name.as_str() {
+                HEADER | FOOTER => {
+                    out.header_footer = true;
+                    if out.header_settings.is_none() {
+                        out.header_settings = settings.and_then(|b| postcard::from_bytes(&b).ok());
+                    }
+                }
+                WATERMARK | BACKGROUND => {
+                    out.watermark = true;
+                    if out.watermark_settings.is_none() {
+                        out.watermark_settings = settings.and_then(|b| postcard::from_bytes(&b).ok());
+                    }
+                }
+                _ => {}
+            }
+        }
+        if out.header_settings.is_some() && out.watermark_settings.is_some() {
+            break;
+        }
+    }
+    out
+}
+
+/// The settings kept with a header and footer, to fill the dialog in again.
+pub(crate) fn header_settings(marks: &HeaderFooter) -> Vec<u8> {
+    postcard::to_allocvec(marks).unwrap_or_default()
+}
+
+/// The settings kept with a watermark, without its picture.
+pub(crate) fn watermark_settings(mark: &Watermark) -> Vec<u8> {
+    let kept = Watermark {
+        picture: None,
+        ..mark.clone()
+    };
+    postcard::to_allocvec(&kept).unwrap_or_default()
+}
+
 /// Header and footer text ready to draw on one page.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Lines {
@@ -202,6 +296,10 @@ pub(crate) enum Drawing {
         /// From one baseline to the next.
         leading: f64,
         color: Color,
+        font: super::TextFont,
+        /// How each line sits across `width` from `x`.
+        align: super::TextAlign,
+        width: f64,
     },
     /// A picture added to the page, filling `rect` (left, top, right, bottom from the
     /// top-left corner of the page as shown).
@@ -308,13 +406,37 @@ fn rgb(Color([r, g, b]): Color) -> String {
 impl Drawing {
     /// The form's resources: the fonts, and the transparency a watermark needs.
     pub(crate) fn resources(&self) -> String {
+        let mut fonts = RESOURCES.to_owned();
+        if let Drawing::Text { font, .. } = self
+            && !RESOURCES.contains(&format!("/{} ", font.resource()))
+        {
+            // Inside the font dictionary, before its closing and the resources' closing.
+            if let Some(open) = fonts.strip_suffix(" >> >>") {
+                fonts = format!("{open} {} >> >>", font.resource_entry());
+            }
+        }
         match self.opacity() {
             Some(a) => format!(
                 "{} /ExtGState << /PaGS << /Type /ExtGState /CA {a} /ca {a} >> >> >>",
-                RESOURCES.trim_end_matches(">>").trim_end(),
+                fonts.trim_end_matches(">>").trim_end(),
                 a = n(a)
             ),
-            None => RESOURCES.to_owned(),
+            None => fonts,
+        }
+    }
+
+    /// Its mark name, as Acrobat names headers and footers, watermarks and backgrounds;
+    /// `None` for other drawings.
+    pub(crate) fn private(&self) -> Option<&'static str> {
+        match self {
+            Drawing::Lines(_) => Some(HEADER),
+            Drawing::Watermark { .. } | Drawing::PictureMark { .. } => Some(WATERMARK),
+            Drawing::Background(_) => Some(BACKGROUND),
+            Drawing::Both(a, b) => match (a.private(), b.private()) {
+                (Some(BACKGROUND), Some(other)) | (Some(other), _) => Some(other),
+                (None, other) => other,
+            },
+            _ => None,
         }
     }
 
@@ -395,12 +517,22 @@ impl Drawing {
                 size,
                 leading,
                 color,
+                font,
+                align,
+                width,
             } => {
-                let mut out = format!("BT /PaHe {} Tf {} rg {} TL ", n(*size), rgb(*color), n(*leading));
+                let mut out = format!("BT /{} {} Tf {} rg", font.resource(), n(*size), rgb(*color));
                 // The first baseline sits an ascent below the top.
-                let _ = write!(out, "{} {} Td", n(*x), n(height - top - size * 0.77));
+                let first = height - top - size * 0.77;
                 for (i, line) in lines.iter().enumerate() {
-                    out.push_str(if i == 0 { " (" } else { " T* (" });
+                    let room = width - font.width(line) * size;
+                    let left = x + match align {
+                        super::TextAlign::Left => 0.0,
+                        super::TextAlign::Centre => room / 2.0,
+                        super::TextAlign::Right => room,
+                    };
+                    let y = first - i as f64 * leading;
+                    let _ = write!(out, " 1 0 0 1 {} {} Tm (", n(left), n(y));
                     out.push_str(&literal(&win_ansi(line)));
                     out.push_str(") Tj");
                 }

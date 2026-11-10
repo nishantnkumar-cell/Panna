@@ -499,6 +499,10 @@ pub struct Marking {
     /// The first page's number.
     pub first: String,
     pub range: String,
+    /// The pages already have headers or footers.
+    pub existing: bool,
+    /// Take those off the pages before adding these.
+    pub replace: bool,
 }
 
 impl Marking {
@@ -512,7 +516,34 @@ impl Marking {
             margin: "12".into(),
             first: "1".into(),
             range: format!("1-{count}"),
+            existing: false,
+            replace: false,
         }
+    }
+
+    /// The card for a document whose pages carry `marks` already, filled in with the
+    /// settings Panna used for its headers and footers when it knows them.
+    pub fn for_document(count: usize, marks: &panna_core::ExistingMarks) -> Self {
+        let mut state = Self::new(count);
+        if let Some(had) = &marks.header_settings {
+            state.text = had.text.clone();
+            state.size = number_text(had.size);
+            state.margin = number_text(had.margin / POINTS_PER_MM);
+            state.first = had.first.to_string();
+        }
+        state.existing = marks.header_footer;
+        state.replace = marks.header_footer;
+        state
+    }
+}
+
+/// A setting as typed, without needless decimals.
+fn number_text(v: f32) -> String {
+    let rounded = (v * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{rounded:.1}")
     }
 }
 
@@ -523,6 +554,9 @@ pub enum MarkEvent {
     Margin(String),
     First(String),
     Range(String),
+    Replace(bool),
+    /// Takes the headers and footers already there off every page.
+    Remove,
     Go,
     Cancel,
 }
@@ -569,6 +603,30 @@ pub fn mark_settings(
         return Err("Enter text for the header or the footer.".into());
     }
     Ok((pages, marks))
+}
+
+/// For pages that are marked already: whether to replace those marks, and a button to
+/// take them off. Nothing when the pages have none.
+fn existing_row<'a>(
+    existing: bool,
+    replace: bool,
+    label: &'static str,
+    on_replace: impl Fn(bool) -> Message + 'a,
+    remove: Message,
+) -> Element<'a, Message> {
+    if !existing {
+        return space().height(0).into();
+    }
+    row![
+        checkbox(replace).label(label).on_toggle(on_replace),
+        space::horizontal(),
+        button(text("Remove all").wrapping(text::Wrapping::None))
+            .style(button::danger)
+            .on_press(remove),
+    ]
+    .spacing(8)
+    .align_y(iced::Center)
+    .into()
 }
 
 /// The Headers and footers card for a document of `count` pages.
@@ -640,12 +698,20 @@ pub fn mark_card<'a>(state: &Marking, count: usize) -> Element<'a, Message> {
             .spacing(6)
             .align_y(iced::Center),
             example,
+            existing_row(
+                state.existing,
+                state.replace,
+                "Replace the headers and footers already there",
+                move |v| ev(MarkEvent::Replace(v)),
+                ev(MarkEvent::Remove),
+            ),
             row![
                 space::horizontal(),
                 button("Cancel")
                     .style(button::secondary)
                     .on_press(ev(MarkEvent::Cancel)),
-                button("Add").on_press_maybe(parsed.is_ok().then_some(ev(MarkEvent::Go))),
+                button(if state.existing && state.replace { "Update" } else { "Add" })
+                    .on_press_maybe(parsed.is_ok().then_some(ev(MarkEvent::Go))),
             ]
             .spacing(8),
         ]
@@ -849,6 +915,10 @@ pub struct Watermarking {
     pub picture: Option<(String, panna_core::StampImage)>,
     /// The picture's width, as a share of the page's.
     pub scale: f32,
+    /// The pages already have a watermark or page colour.
+    pub existing: bool,
+    /// Take that off the pages before adding this.
+    pub replace: bool,
 }
 
 impl Watermarking {
@@ -864,7 +934,32 @@ impl Watermarking {
             range: format!("1-{count}"),
             picture: None,
             scale: 0.5,
+            existing: false,
+            replace: false,
         }
+    }
+
+    /// The card for a document whose pages carry `marks` already, filled in with the
+    /// settings Panna used for its watermark when it knows them.
+    pub fn for_document(count: usize, marks: &panna_core::ExistingMarks) -> Self {
+        let mut state = Self::new(count);
+        if let Some(had) = &marks.watermark_settings {
+            state.text = had.text.clone();
+            state.ink = INKS.iter().position(|c| *c == had.color).unwrap_or(0);
+            state.size = if had.size > 0.0 {
+                number_text(had.size)
+            } else {
+                String::new()
+            };
+            state.angle = number_text(had.angle);
+            state.opacity = had.opacity.clamp(0.05, 1.0);
+            state.behind = had.behind;
+            state.paper = had.background.and_then(|b| PAPERS.iter().position(|c| *c == b));
+            state.scale = had.picture_scale.clamp(0.05, 1.0);
+        }
+        state.existing = marks.watermark;
+        state.replace = marks.watermark;
+        state
     }
 }
 
@@ -885,6 +980,9 @@ pub enum WatermarkEvent {
     PictureLoaded(Result<(String, panna_core::StampImage), String>),
     RemovePicture,
     Scale(f32),
+    Replace(bool),
+    /// Takes the watermarks and page colours already there off every page.
+    Remove,
     Go,
     Cancel,
 }
@@ -1086,12 +1184,24 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
             .spacing(6)
             .align_y(iced::Center),
             hint,
+            existing_row(
+                state.existing,
+                state.replace,
+                "Replace the watermark already there",
+                move |v| ev(WatermarkEvent::Replace(v)),
+                ev(WatermarkEvent::Remove),
+            ),
             row![
                 space::horizontal(),
                 button("Cancel")
                     .style(button::secondary)
                     .on_press(ev(WatermarkEvent::Cancel)),
-                button("Add").on_press_maybe(parsed.is_ok().then_some(ev(WatermarkEvent::Go))),
+                button(if state.existing && state.replace {
+                    "Update"
+                } else {
+                    "Add"
+                })
+                .on_press_maybe(parsed.is_ok().then_some(ev(WatermarkEvent::Go))),
             ]
             .spacing(8),
         ]
@@ -1168,5 +1278,50 @@ mod tests {
         assert!(plan(Op::Delete, 1, 0, SIZE).is_none());
         assert!(plan(Op::Extract, 3, 0, SIZE).is_none());
         assert!(plan(Op::RotateCw, 3, 5, SIZE).is_none());
+    }
+
+    #[test]
+    fn cards_fill_in_the_marks_already_on_the_pages() {
+        let had = panna_core::HeaderFooter {
+            text: [
+                "Acme".into(),
+                String::new(),
+                String::new(),
+                String::new(),
+                "{page}".into(),
+                String::new(),
+            ],
+            size: 9.0,
+            margin: 20.0 * POINTS_PER_MM,
+            first: 5,
+        };
+        let marks = panna_core::ExistingMarks {
+            header_footer: true,
+            watermark: true,
+            header_settings: Some(had.clone()),
+            watermark_settings: Some(panna_core::Watermark {
+                text: "DRAFT".into(),
+                angle: 30.0,
+                ..panna_core::Watermark::default()
+            }),
+        };
+        let card = Marking::for_document(4, &marks);
+        assert!(card.existing && card.replace);
+        assert_eq!(
+            (card.size.as_str(), card.margin.as_str(), card.first.as_str()),
+            ("9", "20", "5")
+        );
+        let (pages, again) = mark_settings(&card, 4).unwrap();
+        assert_eq!(pages, vec![0, 1, 2, 3]);
+        assert_eq!(again.text, had.text);
+        assert!((again.margin - had.margin).abs() < 0.01);
+
+        let card = Watermarking::for_document(4, &marks);
+        assert!(card.existing && card.replace);
+        assert_eq!((card.text.as_str(), card.angle.as_str()), ("DRAFT", "30"));
+
+        let fresh = Marking::for_document(4, &panna_core::ExistingMarks::default());
+        assert!(!fresh.existing && !fresh.replace);
+        assert_eq!(fresh.text[4], "Page {page} of {pages}");
     }
 }

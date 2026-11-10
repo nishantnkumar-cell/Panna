@@ -4,7 +4,7 @@
 
 use iced::widget::{column, container, pick_list, pin, row, space, text, text_editor, text_input};
 use iced::{Center, Element, Theme};
-use panna_core::{Addition, Color, LinkTarget, StampImage, TextBox};
+use panna_core::{Addition, Color, FontFamily, LinkTarget, StampImage, TextAlign, TextBox, TextFont};
 
 use crate::Message;
 use crate::annotate::SWATCHES;
@@ -37,6 +37,10 @@ pub enum Event {
     Edit(text_editor::Action),
     Size(u16),
     Color(usize),
+    Font(FontChoice),
+    Bold,
+    Italic,
+    Align(TextAlign),
     Address(String),
     Done,
     Cancel,
@@ -66,6 +70,16 @@ pub struct Pending {
     details: Details,
 }
 
+/// A font family to draw in, or for changed text, the font the text had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontChoice(Option<FontFamily>);
+
+impl std::fmt::Display for FontChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.map_or("Same font", FontFamily::label))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Drag {
     page: usize,
@@ -79,6 +93,11 @@ pub struct Adder {
     pub tool: Tool,
     size: u16,
     color: usize,
+    /// The family picked, or none to keep changed text's own font (Helvetica for new text).
+    family: Option<FontFamily>,
+    bold: bool,
+    italic: bool,
+    align: TextAlign,
     drag: Option<Drag>,
     pub pending: Option<Pending>,
 }
@@ -91,6 +110,10 @@ impl Default for Adder {
             size: 12,
             // Black.
             color: SWATCHES.len() - 1,
+            family: None,
+            bold: false,
+            italic: false,
+            align: TextAlign::Left,
             drag: None,
             pending: None,
         }
@@ -132,6 +155,18 @@ fn link_target(typed: &str) -> Option<LinkTarget> {
 }
 
 impl Adder {
+    /// The font picked, if any: a family, or bold, italic or a line-up other than left
+    /// (which the text's own font can't be drawn with).
+    fn font(&self) -> Option<TextFont> {
+        (self.family.is_some() || self.bold || self.italic || self.align != TextAlign::Left).then(|| {
+            TextFont {
+                family: self.family.unwrap_or_default(),
+                bold: self.bold,
+                italic: self.italic,
+            }
+        })
+    }
+
     fn color_value(&self) -> Color {
         SWATCHES.get(self.color).copied().unwrap_or(Color::BLACK)
     }
@@ -171,6 +206,10 @@ impl Adder {
             }
             Event::Size(size) => self.size = size,
             Event::Color(index) => self.color = index.min(SWATCHES.len() - 1),
+            Event::Font(FontChoice(family)) => self.family = family,
+            Event::Bold => self.bold = !self.bold,
+            Event::Italic => self.italic = !self.italic,
+            Event::Align(align) => self.align = align,
             Event::Address(value) => {
                 if let Some(Pending {
                     details: Details::Link(typed),
@@ -197,6 +236,8 @@ impl Adder {
                             text: text.to_owned(),
                             size: f32::from(self.size),
                             color: self.color_value(),
+                            font: self.font().unwrap_or_default(),
+                            align: self.align,
                         }
                     }
                     Details::Link(typed) => match link_target(&typed) {
@@ -227,7 +268,7 @@ impl Adder {
                     } => {
                         let text = content.text();
                         let text = text.trim_end();
-                        if text == was {
+                        if text == was && self.font().is_none() {
                             return Outcome::Nothing;
                         }
                         Addition::ReplaceText {
@@ -236,6 +277,8 @@ impl Adder {
                             size,
                             color: None,
                             leading,
+                            font: self.font(),
+                            align: self.align,
                         }
                     }
                     Details::Picture => return Outcome::Nothing,
@@ -311,6 +354,11 @@ impl Adder {
     /// Opens the card for changing a line or paragraph on page `page`.
     pub fn edit_line(&mut self, page: usize, found: Option<panna_core::Paragraph>) {
         if let Some(found) = found {
+            // Changed text starts in its own font, lined up from the left.
+            self.family = None;
+            self.bold = false;
+            self.italic = false;
+            self.align = TextAlign::Left;
             self.pending = Some(Pending {
                 page,
                 rect: found.area,
@@ -436,6 +484,34 @@ impl Adder {
             ]
             .spacing(8)
         };
+        // The font and how lines sit, for new and changed text.
+        let style = |own: bool| {
+            let mut choices: Vec<FontChoice> = Vec::new();
+            if own {
+                choices.push(FontChoice(None));
+            }
+            choices.extend(FontFamily::ALL.map(|f| FontChoice(Some(f))));
+            let picked = match self.family {
+                None if !own => FontChoice(Some(FontFamily::Helvetica)),
+                family => FontChoice(family),
+            };
+            let align = |a: TextAlign, icon: Icon, tip: &'static str| {
+                icons::toggle(icon, tip, self.align == a, ev(Event::Align(a)))
+            };
+            row![
+                pick_list(choices, Some(picked), move |c| ev(Event::Font(c)))
+                    .text_size(13)
+                    .width(116),
+                icons::toggle(Icon::Bold, "Bold", self.bold, ev(Event::Bold)),
+                icons::toggle(Icon::Italic, "Italic", self.italic, ev(Event::Italic)),
+                space::horizontal(),
+                align(TextAlign::Left, Icon::TextLeft, "Line up on the left"),
+                align(TextAlign::Centre, Icon::TextCentre, "Centre"),
+                align(TextAlign::Right, Icon::TextRight, "Line up on the right"),
+            ]
+            .spacing(4)
+            .align_y(Center)
+        };
         let body: Element<'_, Message> = match &pending.details {
             Details::Picture => return None,
             Details::Text(content) => {
@@ -454,6 +530,7 @@ impl Adder {
                         .placeholder("Type here")
                         .on_action(move |a| ev(Event::Edit(a)))
                         .height(120),
+                    style(false),
                     row![
                         pick_list(SIZES, Some(self.size), move |s| ev(Event::Size(s))).text_size(13),
                         text("pt").size(13),
@@ -462,7 +539,7 @@ impl Adder {
                     ]
                     .spacing(6)
                     .align_y(Center),
-                    text("The text becomes part of the page, in Helvetica.").size(12),
+                    text("The text becomes part of the page.").size(12),
                     buttons(!content.text().trim().is_empty(), "Add"),
                 ]
                 .spacing(10)
@@ -484,22 +561,31 @@ impl Adder {
                     .id(editor_id())
                     .on_action(move |a| ev(Event::Edit(a)))
                     .height(if leading.is_some() { 160 } else { 80 }),
-                text(if leading.is_some() {
-                    format!(
+                style(true),
+                text(match (leading.is_some(), self.font()) {
+                    (true, font) => format!(
                         "The old paragraph is taken out, and the new text drawn in its place at \
-                         {size:.0} pt in Helvetica, in the old text's colour, with its lines \
-                         wrapped to the paragraph's width. A new line starts a new paragraph."
-                    )
-                } else {
-                    format!(
+                         {size:.0} pt in {}, in the old text's colour, with its lines wrapped to \
+                         the paragraph's width. A new line starts a new paragraph.",
+                        font.unwrap_or_default().base_font()
+                    ),
+                    (false, None) => format!(
                         "The old text is taken out, and the new text drawn in its place at {size:.0} \
                          pt, in the old text's colour and font. If the font can't show the new \
                          letters (fonts are often embedded with only the letters a page uses), or \
                          the text runs to more lines, it's drawn in Helvetica."
-                    )
+                    ),
+                    (false, Some(font)) => format!(
+                        "The old text is taken out, and the new text drawn in its place at {size:.0} \
+                         pt in {}, in the old text's colour.",
+                        font.base_font()
+                    ),
                 })
                 .size(12),
-                buttons(content.text().trim_end() != was, "Change"),
+                buttons(
+                    content.text().trim_end() != was || self.font().is_some(),
+                    "Change"
+                ),
             ]
             .spacing(10)
             .into(),

@@ -54,6 +54,8 @@ fn text_pictures_and_links_become_part_of_the_page() {
                 text: "Hello there\nSecond line".into(),
                 size: 12.0,
                 color: Color::BLACK,
+                font: Default::default(),
+                align: Default::default(),
             },
             Addition::Picture {
                 rect: b(100.0, 100.0, 140.0, 140.0),

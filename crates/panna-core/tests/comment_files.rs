@@ -44,6 +44,8 @@ fn comments() -> Vec<Annotation> {
         contents: "Look (here) — पन्ना".into(),
         author: "Jo".into(),
         dashed: false,
+        fill: None,
+        ends: Default::default(),
     };
     let b = |x0, y0, x1, y1| TextBox { x0, y0, x1, y1 };
     vec![

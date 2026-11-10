@@ -258,3 +258,53 @@ fn list_boxes_and_radio_groups_are_made_and_filled() {
     assert_eq!(widgets, 1, "only the list box is left");
     assert_eq!(new.reopen(saved).unwrap().info().unwrap().fields.len(), 1);
 }
+
+#[test]
+fn widgets_move_and_resize_keeping_their_fields() {
+    let doc = blank();
+    let add = vec![
+        field(
+            0,
+            b(20.0, 30.0, 180.0, 50.0),
+            "Name",
+            NewFieldKind::Text { multiline: false },
+        ),
+        field(0, b(20.0, 70.0, 34.0, 84.0), "Agree", NewFieldKind::CheckBox),
+    ];
+    let new = doc.reopen(doc.with_form_fields(&add, &[]).unwrap()).unwrap();
+    let fields = new.info().unwrap().fields;
+    let name = &fields[0];
+    let to = b(50.0, 120.0, 250.0, 150.0);
+    let moved = new
+        .reopen(new.with_widgets_moved(&[(0, name.widgets[0].annot, to)]).unwrap())
+        .unwrap();
+    let after = moved.info().unwrap().fields;
+    let names: Vec<&str> = after.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["Name", "Agree"]);
+    assert!(close(after[0].widgets[0].at, to), "{:?}", after[0].widgets[0].at);
+    // The other field stays where it was.
+    assert!(
+        close(after[1].widgets[0].at, add[1].rect),
+        "{:?}",
+        after[1].widgets[0].at
+    );
+}
+
+#[test]
+fn date_fields_carry_their_date_format() {
+    let doc = blank();
+    let add = vec![field(
+        0,
+        b(20.0, 30.0, 140.0, 50.0),
+        "When",
+        NewFieldKind::Date("dd/mm/yyyy\")".into()),
+    )];
+    let new = doc.reopen(doc.with_form_fields(&add, &[]).unwrap()).unwrap();
+    let fields = new.info().unwrap().fields;
+    assert!(matches!(fields[0].kind, FieldKind::Text { multiline: false, .. }));
+    // Only the pattern's own characters are kept.
+    assert_eq!(
+        fields[0].format,
+        Some(panna_core::Format::Date("dd/mm/yyyy".into()))
+    );
+}
