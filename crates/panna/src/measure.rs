@@ -39,7 +39,7 @@ impl Unit {
     }
 
     /// How many of this unit make a point (1/72 inch).
-    fn per_point(self) -> f64 {
+    pub fn per_point(self) -> f64 {
         match self {
             Unit::Points => 1.0,
             Unit::Inches => 1.0 / 72.0,
@@ -48,7 +48,7 @@ impl Unit {
         }
     }
 
-    fn symbol(self) -> &'static str {
+    pub fn symbol(self) -> &'static str {
         match self {
             Unit::Points => "pt",
             Unit::Inches => "in",

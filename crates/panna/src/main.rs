@@ -19,6 +19,7 @@ mod find;
 #[cfg(target_os = "macos")]
 mod finder;
 mod form;
+mod guides;
 mod icons;
 mod initial;
 mod labels;
@@ -316,6 +317,13 @@ enum Message {
     ToggleSplit,
     /// Opens the document in a second window, as Acrobat's Window › New Window.
     NewWindow,
+    ToggleRulers,
+    ToggleGrid,
+    ToggleSnap,
+    ClearGuides,
+    /// A ruler was clicked: along the top (`true`) or the left, this far in points from the
+    /// page's edge. Adds a guide there, or takes away the one there.
+    RulerClick(bool, f32),
     SplitScrolled(Viewport),
     /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
     AutoScroll,
@@ -620,6 +628,8 @@ struct App {
     /// Choosing password protection.
     protecting: Option<protect::Protecting>,
     signing: Option<signing::Signing>,
+    /// Rulers, grid and guides.
+    guides: guides::Guides,
     /// Choosing hidden information to remove.
     cleaning: Option<panna_core::Cleanup>,
     /// The Save a smaller copy card.
@@ -1221,6 +1231,7 @@ impl App {
             labelling: None,
             protecting: None,
             signing: None,
+            guides: guides::Guides::default(),
             cleaning: None,
             shrinking: None,
             recognising: false,
@@ -1792,6 +1803,27 @@ impl App {
                     ),
                 ])
             }
+            Message::ToggleRulers => {
+                self.guides.rulers = !self.guides.rulers;
+                Task::none()
+            }
+            Message::ToggleGrid => {
+                self.guides.grid = !self.guides.grid;
+                Task::none()
+            }
+            Message::ToggleSnap => {
+                self.guides.snap = !self.guides.snap;
+                Task::none()
+            }
+            Message::ClearGuides => {
+                self.guides.guides.clear();
+                Task::none()
+            }
+            Message::RulerClick(across, at) => {
+                // The top ruler places a guide running down the page, the left one across.
+                self.guides.toggle(across, at, self.zoom);
+                Task::none()
+            }
             Message::NewWindow => {
                 let Some(doc) = &self.doc else { return Task::none() };
                 // Another copy of Panna, given only the file's path: no shell, nothing else
@@ -2275,6 +2307,20 @@ impl App {
             }
             Message::Find(event) => self.find_event(event),
             Message::PagePointer(page, position) => {
+                // Placing things snaps to the grid and guides, when that's on.
+                let placing = self.adder.on
+                    || self.preparer.on
+                    || self.measure.on
+                    || (self.annotate.open && !self.annotate.tool.marks_text());
+                let position = if placing && self.guides.snap {
+                    let zoom = self.zoom.max(0.01);
+                    let (x, y) =
+                        self.guides
+                            .snapped((position.x / zoom, position.y / zoom), self.settings.unit, zoom);
+                    Point::new(x * zoom, y * zoom)
+                } else {
+                    position
+                };
                 self.hover = Some((page, position));
                 if self.adder.on {
                     self.adder.hover(page, self.page_map(page).to_page(position));
@@ -7087,6 +7133,25 @@ impl App {
                     ),
                     item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
                     Separator,
+                    sub(
+                        Some(Icon::Ruler),
+                        "Rulers & grids",
+                        vec![
+                            check("Rulers", k("R"), self.guides.rulers, on(Message::ToggleRulers)),
+                            check("Grid", k("U"), self.guides.grid, on(Message::ToggleGrid)),
+                            check(
+                                "Snap to grid and guides",
+                                k("Shift+U"),
+                                self.guides.snap,
+                                on(Message::ToggleSnap),
+                            ),
+                            plain(
+                                "Clear guides",
+                                "",
+                                (!self.guides.guides.is_empty()).then_some(Message::ClearGuides),
+                            ),
+                        ],
+                    ),
                     check("Split", "", self.split.is_some(), on(Message::ToggleSplit)),
                     item(Icon::NewWindow, "New window", "", on(Message::NewWindow)),
                     check("Read mode", k("H"), self.read_mode, on(Message::ToggleReadMode)),
@@ -7447,7 +7512,7 @@ impl App {
             )
             .into(),
             (Status::Idle, Some(doc)) if has_doc => {
-                let pages = self.pages_view(doc);
+                let pages = self.with_rulers(doc, self.pages_view(doc));
                 // The same column with or without the second pane, so the first keeps its
                 // place in the widget tree, and its scroll position, when the window splits.
                 let mut panes = column![container(pages).height(Length::FillPortion(1))];
@@ -7891,6 +7956,55 @@ impl App {
         center(scrollable(content)).into()
     }
 
+    /// The pages with rulers along the top and left, when they're shown. The rulers are
+    /// always there in the tree, with no size when hidden, so the pages keep their place.
+    fn with_rulers<'a>(&'a self, doc: &'a OpenDoc, pages: Element<'a, Message>) -> Element<'a, Message> {
+        let shown = self.guides.rulers && !self.read_mode;
+        if !shown {
+            return column![
+                row![space().width(0).height(0), space().width(0).height(0)],
+                row![space().width(0).height(0), pages]
+            ]
+            .into();
+        }
+        // Measured from the page under the pointer, else the current one.
+        let page = self.hover.map_or_else(|| self.current_page(), |(p, _)| p);
+        let content_w = doc.layout.content_width(self.zoom, self.viewport.width);
+        let left = doc.layout.page_left(page, self.zoom, content_w) - self.viewport.offset_x;
+        let top = doc.layout.page_top(page, self.zoom) - self.viewport.offset_y;
+        let pointer = self
+            .hover
+            .filter(|(p, _)| *p == page)
+            .map(|(_, at)| (at.x / self.zoom.max(0.01), at.y / self.zoom.max(0.01)));
+        let unit = self.settings.unit;
+        let corner = iced::widget::tooltip(
+            container(space())
+                .width(guides::RULER)
+                .height(guides::RULER)
+                .style(|theme: &iced::Theme| {
+                    container::Style::default().background(theme.extended_palette().background.weak.color)
+                }),
+            container(text("Click a ruler to add a guide there; click it again to take it away").size(12))
+                .padding(4)
+                .style(container::rounded_box),
+            iced::widget::tooltip::Position::Bottom,
+        );
+        column![
+            row![
+                corner,
+                self.guides
+                    .ruler(true, left, self.zoom, unit, pointer.map(|p| p.0))
+                    .readout(pointer.map(|at| guides::coordinates(at, unit)))
+            ],
+            row![
+                self.guides
+                    .ruler(false, top, self.zoom, unit, pointer.map(|p| p.1)),
+                pages
+            ]
+        ]
+        .into()
+    }
+
     fn with_sidebar<'a>(&'a self, doc: &'a OpenDoc, pages: Element<'a, Message>) -> Element<'a, Message> {
         // Closed, the bar is an empty space rather than missing, so toggling it doesn't move the
         // pages in the widget tree and reset their scroll position.
@@ -8123,6 +8237,11 @@ impl App {
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                         );
                         let adding = self.adder.overlay(index, self.page_map(index));
+                        let lines = self.guides.overlay(
+                            Size::new(size.width * self.zoom, size.height * self.zoom),
+                            self.zoom,
+                            self.settings.unit,
+                        );
                         let mut redacting = if self.redactor.on {
                             self.redactor.overlays(index, self.page_map(index))
                         } else {
@@ -8173,10 +8292,12 @@ impl App {
                             && measured.is_none()
                             && adding.is_none()
                             && redacting.is_empty()
+                            && lines.is_none()
                         {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
                             let mut layers = vec![image(handle.clone()).width(width).height(height).into()];
+                            layers.extend(lines);
                             layers.extend(marks);
                             layers.extend(preview);
                             layers.extend(outline);

@@ -87,6 +87,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("r" | "R") => Some(Message::Pages(crate::pages::Op::RotatePages)),
             // Automatic scrolling.
             Key::Character("h" | "H") => Some(Message::AutoScroll),
+            // Snap to grid, as in Acrobat.
+            Key::Character("u" | "U") => Some(Message::ToggleSnap),
             // Acrobat's Read Out Loud keys.
             Key::Character("y" | "Y") => Some(Message::ReadAloudToggle),
             Key::Character("v" | "V") => Some(Message::ReadAloud(crate::speech::Event::Page)),
@@ -112,6 +114,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("1") => Some(Message::ZoomReset),
             Key::Character("2") => Some(Message::FitWidth),
             Key::Character("3") => Some(Message::FitVisible),
+            Key::Character("r") => Some(Message::ToggleRulers),
+            Key::Character("u") => Some(Message::ToggleGrid),
             Key::Character("f") => Some(Message::Find(Event::Open)),
             Key::Character("g") => Some(Message::Find(Event::Next)),
             Key::Character("c") => Some(Message::Copy),
