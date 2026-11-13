@@ -940,6 +940,19 @@ impl Document {
             .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
+    /// The tagged document's reading order (see [`crate::ReadingOrder`]).
+    pub fn reading_order(&self) -> crate::ReadingOrder {
+        catch_unwind(AssertUnwindSafe(|| crate::edit::reading_order(&self.pdf))).unwrap_or_default()
+    }
+
+    /// The document with its top-level structure elements in `order`, each with its role.
+    pub fn reordered(&self, order: &[(crate::ObjRef, String)]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::reordered(&self.pdf, &self.bytes, order)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The document with descriptions (alternate text) given to figures, by the structure
     /// elements the accessibility check names, as an incremental update.
     pub fn described(&self, alts: &[((u32, u16), String)]) -> Result<Vec<u8>, crate::SaveError> {

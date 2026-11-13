@@ -129,6 +129,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                 Message::Preflight(crate::preflight::Event::RunAccessibility),
             ),
             tool(
+                Icon::ReadingOrder,
+                "Reading order of a tagged document",
+                Message::Order(crate::order::Event::Open),
+            ),
+            tool(
                 Icon::Redact,
                 "Remove content for good (redact)",
                 Message::Redact(crate::redact::Event::Toggle),

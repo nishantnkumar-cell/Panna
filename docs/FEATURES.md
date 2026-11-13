@@ -181,7 +181,7 @@ they're large for how often they're used. Each has a GitHub issue labelled
 | Customisable keyboard shortcuts | [#31](https://github.com/nishantnkumar-cell/Panna/issues/31) |
 | Word export: keep pictures, tables and layout | [#32](https://github.com/nishantnkumar-cell/Panna/issues/32) |
 | Embed missing fonts when converting to PDF/A | [#33](https://github.com/nishantnkumar-cell/Panna/issues/33) |
-| Edit the reading order by hand | [#34](https://github.com/nishantnkumar-cell/Panna/issues/34) |
+| Edit the reading order by hand | Done: Tools › Reading order opens a panel listing a tagged document's paragraphs, headings and figures in the order screen readers read them, numbered on the page too; each can be read earlier or later and given another role, and the result saved as a copy. Documents whose tags aren't objects of their own are shown but can't be changed ([#34](https://github.com/nishantnkumar-cell/Panna/issues/34)) |
 | Screen-reader support for Panna's own interface | [#35](https://github.com/nishantnkumar-cell/Panna/issues/35) |
 | Sign with the macOS keychain and Linux NSS | [#36](https://github.com/nishantnkumar-cell/Panna/issues/36) |
 | Code-signed and notarised releases | [#37](https://github.com/nishantnkumar-cell/Panna/issues/37) |

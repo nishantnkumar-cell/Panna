@@ -738,6 +738,37 @@ pub fn describe_file(
     }
 }
 
+/// The reading order of the tagged file at `source` (see [`crate::ReadingOrder`]), read in
+/// the locked-down process. Blocks; call it off the interface's thread.
+pub fn reading_order_file(source: &Path) -> Result<crate::ReadingOrder, SaveError> {
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, _) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    match doc.call(Op::ReadingOrder) {
+        Answer::Order(order) => Ok(order),
+        _ => Err(SaveError::EngineCrashed),
+    }
+}
+
+/// Puts the file at `source` in a new reading order, with roles, writes it to `target`, and
+/// gives the accessibility check of what was written. Blocks.
+pub fn reorder_file(
+    source: &Path,
+    target: &Path,
+    order: &[(crate::ObjRef, String)],
+) -> Result<Vec<crate::AccessFinding>, SaveError> {
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, _) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    match doc.call(Op::Reordered(order.to_vec())) {
+        Answer::Tagged(result) => result.and_then(|(bytes, findings)| {
+            write_atomically(target, &bytes)?;
+            Ok(findings)
+        }),
+        _ => Err(SaveError::EngineCrashed),
+    }
+}
+
 /// Writes to a temporary file next to `path`, then renames it over `path`, so a failed write
 /// never leaves a half-written PDF behind.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {

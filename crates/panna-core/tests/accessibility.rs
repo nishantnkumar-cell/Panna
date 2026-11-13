@@ -213,3 +213,78 @@ fn drawn_pictures_become_figures_and_forms_do_not() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].element, figures[1].element);
 }
+
+#[test]
+fn the_reading_order_is_read_and_changed() {
+    let content = "BT /F1 24 Tf 20 160 Td (Report) Tj ET\n\
+                   BT /F1 11 Tf 20 100 Td (The first paragraph.) Tj ET\n\
+                   BT /F1 11 Tf 20 80 Td (The second one.) Tj ET";
+    let bytes = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Lang (en-GB) >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
+             /Resources << /Font << /F1 5 0 R >> >> >>",
+            &stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ],
+        "",
+    );
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    // Untagged: nothing to show, and why.
+    let none = doc.reading_order();
+    assert!(none.items.is_empty() && none.note.is_some());
+
+    let tagged = doc.reopen(doc.tagged().unwrap()).unwrap();
+    let order = tagged.reading_order();
+    assert!(order.editable, "{:?}", order.note);
+    let shown: Vec<(&str, &str, Option<usize>)> = order
+        .items
+        .iter()
+        .map(|i| (i.role.as_str(), i.preview.as_str(), i.page))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("H1", "Report", Some(0)),
+            ("P", "The first paragraph.", Some(0)),
+            ("P", "The second one.", Some(0))
+        ]
+    );
+    // The heading's box is near the top of the page (shown space runs down from the top).
+    let area = order.items[0].area.unwrap();
+    assert!(area.y0 > 10.0 && area.y1 < 50.0 && area.x0 >= 19.0, "{area:?}");
+
+    // The second paragraph first, and the heading made a second-level one.
+    let new: Vec<_> = [2, 0, 1]
+        .iter()
+        .map(|&i| {
+            let item = &order.items[i];
+            (
+                item.id,
+                if i == 0 {
+                    "H2".to_owned()
+                } else {
+                    item.role.clone()
+                },
+            )
+        })
+        .collect();
+    let changed = tagged.reopen(tagged.reordered(&new).unwrap()).unwrap();
+    let again: Vec<(String, String)> = changed
+        .reading_order()
+        .items
+        .into_iter()
+        .map(|i| (i.role, i.preview))
+        .collect();
+    assert_eq!(
+        again,
+        [
+            ("P".to_owned(), "The second one.".to_owned()),
+            ("H2".to_owned(), "Report".to_owned()),
+            ("P".to_owned(), "The first paragraph.".to_owned())
+        ]
+    );
+    // An order that leaves an element out isn't taken.
+    assert!(tagged.reordered(&new[..2]).is_err());
+}

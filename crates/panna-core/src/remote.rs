@@ -78,6 +78,8 @@ pub(crate) enum Op {
     Tagged,
     /// Figures given these descriptions, by object number and generation.
     Described(Vec<((u32, u16), String)>),
+    ReadingOrder,
+    Reordered(Vec<(ObjRef, String)>),
     CommentsFromFile(Vec<u8>),
     /// Compared with another file's bytes.
     Compare(Vec<u8>),
@@ -128,6 +130,7 @@ pub(crate) enum Answer {
     Access(Vec<AccessFinding>),
     Archived(Result<(Vec<u8>, Vec<Finding>), SaveError>),
     Tagged(Result<(Vec<u8>, Vec<AccessFinding>), SaveError>),
+    Order(crate::ReadingOrder),
     Annotations(Result<(Vec<Annotation>, usize), String>),
     Changes(Result<Vec<Change>, String>),
     Revised(Result<Revision, SaveError>),
@@ -166,7 +169,8 @@ impl Op {
             Self::Preflight(_) => Answer::Findings(Vec::new()),
             Self::Accessibility => Answer::Access(Vec::new()),
             Self::Archived => Answer::Archived(Err(save)),
-            Self::Tagged | Self::Described(_) => Answer::Tagged(Err(save)),
+            Self::Tagged | Self::Described(_) | Self::Reordered(_) => Answer::Tagged(Err(save)),
+            Self::ReadingOrder => Answer::Order(crate::ReadingOrder::default()),
             Self::CommentsFromFile(_) => Answer::Annotations(Err(message())),
             Self::Compare(_) => Answer::Changes(Err(message())),
             Self::InsertFile { .. } | Self::ReplaceFromFile { .. } | Self::Edit(_) | Self::WithChanges(_) => {
@@ -244,6 +248,12 @@ pub(crate) fn perform<'a>(
             Ok((copy.bytes().to_vec(), findings))
         })),
         Op::Tagged => Answer::Tagged(doc.tagged().and_then(|bytes| {
+            let copy = doc.reopen(bytes).map_err(|_| SaveError::Damaged)?;
+            let findings = copy.accessibility();
+            Ok((copy.bytes().to_vec(), findings))
+        })),
+        Op::ReadingOrder => Answer::Order(doc.reading_order()),
+        Op::Reordered(order) => Answer::Tagged(doc.reordered(&order).and_then(|bytes| {
             let copy = doc.reopen(bytes).map_err(|_| SaveError::Damaged)?;
             let findings = copy.accessibility();
             Ok((copy.bytes().to_vec(), findings))

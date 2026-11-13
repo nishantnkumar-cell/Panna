@@ -30,6 +30,7 @@ mod links;
 mod loupe;
 mod measure;
 mod menu;
+mod order;
 mod pages;
 mod pictures;
 mod preferences;
@@ -271,6 +272,8 @@ enum Message {
     FolderSearch(folder_search::Event),
     /// The Check spelling card.
     Spelling(spelling::Event),
+    /// The Reading order panel.
+    Order(order::Event),
     /// Opens `path` at `page` (or shows it, if open), searching it for `query`.
     OpenFoundAt {
         path: PathBuf,
@@ -694,6 +697,8 @@ struct App {
     /// The Search a folder card, while open; kept when closed so it opens as it was left.
     folder_search: Option<folder_search::FolderSearch>,
     folder_search_open: bool,
+    /// The Reading order panel, while open.
+    ordering: Option<order::Ordering>,
     /// The Check spelling card, while open.
     spelling: Option<spelling::Spelling>,
     /// A file being opened at a page other than the one it asks for.
@@ -1302,6 +1307,7 @@ impl App {
             folder_search_open: false,
             open_page: None,
             spelling: None,
+            ordering: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -4004,6 +4010,91 @@ impl App {
                 }
                 self.open_page = Some((path, page));
                 open
+            }
+            Message::Order(order::Event::Open) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    self.notice = Some(
+                        "Save your changes first: the reading order is read from the saved file.".into(),
+                    );
+                    return Task::none();
+                }
+                let source = doc.path.clone();
+                self.ordering = Some(order::Ordering::new(source.clone()));
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(panna_core::reading_order_file(&source).map_err(|e| e.to_string()));
+                });
+                Task::perform(rx, |result| {
+                    Message::Order(order::Event::Loaded(
+                        result.unwrap_or_else(|_| Err("Reading the tags stopped unexpectedly.".into())),
+                    ))
+                })
+            }
+            Message::Order(order::Event::Loaded(result)) => {
+                if let Some(state) = &mut self.ordering {
+                    match result {
+                        Ok(order) => state.load(order),
+                        Err(e) => state.fail(e),
+                    }
+                }
+                Task::none()
+            }
+            Message::Order(order::Event::Close) => {
+                self.ordering = None;
+                Task::none()
+            }
+            Message::Order(order::Event::Save) => {
+                let name = format!("{} (reading order).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a copy in the new reading order as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    |to| Message::Order(order::Event::SaveTo(to)),
+                )
+            }
+            Message::Order(order::Event::SaveTo(None)) => Task::none(),
+            Message::Order(order::Event::SaveTo(Some(target))) => {
+                let Some(state) = &mut self.ordering else {
+                    return Task::none();
+                };
+                state.busy = true;
+                let (source, order) = (state.source.clone(), state.order());
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let result = panna_core::reorder_file(&source, &target, &order)
+                        .map(|_| target)
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::Order(order::Event::Saved(
+                        result.unwrap_or_else(|_| Err("Saving stopped unexpectedly.".into())),
+                    ))
+                })
+            }
+            Message::Order(order::Event::Saved(Ok(path))) => {
+                self.ordering = None;
+                self.update(Message::FileChosen(Some(path)))
+            }
+            Message::Order(order::Event::Saved(Err(e))) => {
+                if let Some(state) = &mut self.ordering {
+                    state.fail(e);
+                }
+                Task::none()
+            }
+            Message::Order(event) => {
+                let page = self.ordering.as_mut().and_then(|state| state.update(&event));
+                match page {
+                    Some(page) if page != self.current_page() => self.go_to_page(page),
+                    _ => Task::none(),
+                }
             }
             Message::Spelling(spelling::Event::Open) => {
                 if self.doc.is_none() {
@@ -7754,6 +7845,12 @@ impl App {
                     "",
                     on(Message::Preflight(preflight::Event::RunAccessibility)),
                 ),
+                item(
+                    Icon::ReadingOrder,
+                    "Reading order…",
+                    "",
+                    on(Message::Order(order::Event::Open)),
+                ),
             ],
             menu::Menu::Help => vec![
                 plain("Keyboard shortcuts", "", Some(Message::Shortcuts(true))),
@@ -8085,6 +8182,17 @@ impl App {
         }
         if has_doc && (self.loupe_on || self.pan_zoom_on) {
             layers.push(self.zoom_panels());
+        }
+        if let Some(state) = self.ordering.as_ref().filter(|_| has_doc) {
+            layers.push(
+                container(opaque(order::panel(state, self.current_page())))
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(iced::Right)
+                    .align_y(iced::Top)
+                    .into(),
+            );
         }
         if self.shortcuts {
             dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
@@ -8619,11 +8727,24 @@ impl App {
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                         );
                         let adding = self.adder.overlay(index, self.page_map(index));
-                        let lines = self.guides.overlay(
+                        let mut lines = self.guides.overlay(
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                             self.zoom,
                             self.settings.unit,
                         );
+                        if let Some(boxes) = self.ordering.as_ref().and_then(|o| {
+                            o.overlay(
+                                index,
+                                self.page_map(index),
+                                Size::new(size.width * self.zoom, size.height * self.zoom),
+                            )
+                        }) {
+                            // Both drawn over the page, one above the other.
+                            lines = Some(match lines {
+                                Some(grid) => iced::widget::Stack::with_children([grid, boxes]).into(),
+                                None => boxes,
+                            });
+                        }
                         let mut redacting = if self.redactor.on {
                             self.redactor.overlays(index, self.page_map(index))
                         } else {
