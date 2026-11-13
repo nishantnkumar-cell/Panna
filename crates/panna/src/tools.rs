@@ -46,6 +46,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             Message::Combine(crate::combine::Event::Open),
         ),
         tool(
+            Icon::FolderSearch,
+            "Search a folder of PDFs…",
+            Message::FolderSearch(crate::folder_search::Event::Open),
+        ),
+        tool(
             Icon::Batch,
             "Batch actions on a folder of PDFs…",
             Message::Batch(crate::batch::Event::Open),

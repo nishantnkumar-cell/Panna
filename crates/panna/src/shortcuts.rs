@@ -74,6 +74,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     if modifiers.command() && modifiers.shift() {
         return match key.as_ref() {
             Key::Character("g" | "G") => Some(Message::Find(Event::Prev)),
+            // Acrobat's Advanced Search.
+            Key::Character("f" | "F") => Some(Message::FolderSearch(crate::folder_search::Event::Open)),
             Key::Character("z" | "Z") => Some(Message::Annotate(annotate::Event::Redo)),
             Key::Character("s" | "S") => Some(Message::SaveAs),
             Key::Character("=" | "+") => Some(Message::RotateCw),

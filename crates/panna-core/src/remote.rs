@@ -533,6 +533,14 @@ impl Isolated {
         }
     }
 
+    /// The text of page `index`.
+    pub fn page_text(&mut self, index: usize) -> Result<PageText, RenderError> {
+        match self.call(Op::Text(index)) {
+            Answer::Text(result) => result,
+            _ => Err(RenderError::EngineCrashed),
+        }
+    }
+
     /// The file as it now is.
     pub fn bytes(&self) -> &[u8] {
         &self.doc.bytes

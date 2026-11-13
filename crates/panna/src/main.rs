@@ -19,6 +19,7 @@ mod export;
 mod find;
 #[cfg(target_os = "macos")]
 mod finder;
+mod folder_search;
 mod form;
 mod guides;
 mod icons;
@@ -264,6 +265,15 @@ enum Message {
     Batch(batch::Event),
     /// The Combine files card.
     Combine(combine::Event),
+    /// The Search a folder card.
+    FolderSearch(folder_search::Event),
+    /// Opens `path` at `page` (or shows it, if open), searching it for `query`.
+    OpenFoundAt {
+        path: PathBuf,
+        page: usize,
+        query: String,
+        options: panna_core::FindOptions,
+    },
     /// Prints it with each page that has comments followed by a list of them.
     PrintWithComments,
     /// Asks where to save a list of the comments, by page, as a PDF.
@@ -671,6 +681,11 @@ struct App {
     batch: Option<batch::Batch>,
     /// The Combine files card, while open.
     combining: Option<combine::Combining>,
+    /// The Search a folder card, while open; kept when closed so it opens as it was left.
+    folder_search: Option<folder_search::FolderSearch>,
+    folder_search_open: bool,
+    /// A file being opened at a page other than the one it asks for.
+    open_page: Option<(PathBuf, usize)>,
     /// The account's name, shown in Preferences as the name used when none is set.
     account: String,
     /// What happened after asking to be the default PDF app, shown on the card.
@@ -1013,7 +1028,7 @@ fn properties_view<'a>(
 /// The keyboard shortcuts, in two columns.
 fn shortcuts_card<'a>() -> Element<'a, Message> {
     let m = icons::MOD;
-    let keys: [(String, &str); 35] = [
+    let keys: [(String, &str); 36] = [
         (format!("{m}O"), "Open"),
         (format!("{m}S"), "Save"),
         (format!("{m}Shift+S"), "Save as"),
@@ -1022,6 +1037,7 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
         (format!("{m}Tab"), "Next tab"),
         (format!("{m}D"), "Document properties"),
         (format!("{m}F, F3, Shift+F3"), "Find, next, previous"),
+        (format!("{m}Shift+F"), "Search a folder of PDFs"),
         (format!("{m}Z, {m}Y"), "Undo, redo"),
         (format!("{m}C"), "Copy"),
         (format!("{m}K"), "Preferences"),
@@ -1266,6 +1282,9 @@ impl App {
             preferences: false,
             batch: None,
             combining: None,
+            folder_search: None,
+            folder_search_open: false,
+            open_page: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -1410,6 +1429,7 @@ impl App {
                 | Message::Preferences(preferences::Event::Open)
                 | Message::Batch(batch::Event::Open)
                 | Message::Combine(combine::Event::Open)
+                | Message::FolderSearch(folder_search::Event::Open)
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
                 | Message::Signing(signing::Event::Open)
@@ -1444,6 +1464,9 @@ impl App {
                         self.settings.save();
                         self.rotation = 0;
                         let mut view = info.initial_view;
+                        if let Some((_, page)) = self.open_page.take_if(|(p, _)| *p == doc.path) {
+                            view.page = page.min(info.pages.len().saturating_sub(1));
+                        }
                         if view.zoom == panna_core::OpenZoom::Default {
                             view.zoom = self.settings.open_zoom.zoom();
                         }
@@ -3895,6 +3918,60 @@ impl App {
                     }
                 ));
                 Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
+            }
+            Message::FolderSearch(folder_search::Event::Open) => {
+                let state = self
+                    .folder_search
+                    .get_or_insert_with(folder_search::FolderSearch::default);
+                if state.query.is_empty() {
+                    state.query = self.find.query.clone();
+                }
+                self.folder_search_open = true;
+                operation::focus(folder_search::input_id())
+            }
+            Message::FolderSearch(event) => {
+                let Some(state) = self.folder_search.take() else {
+                    return Task::none();
+                };
+                let kept = state.clone();
+                let (state, task) = state.update(event);
+                match state {
+                    Some(state) => self.folder_search = Some(state),
+                    None => {
+                        // Closed: keep what was typed and found, for next time.
+                        self.folder_search = Some(kept);
+                        self.folder_search_open = false;
+                        if let Some(state) = &mut self.folder_search {
+                            state.stop();
+                        }
+                    }
+                }
+                task
+            }
+            Message::OpenFoundAt {
+                path,
+                page,
+                query,
+                options,
+            } => {
+                self.find.open = true;
+                self.find.query = query;
+                self.find.pattern = None;
+                self.find.options = options;
+                self.sidebar.open = true;
+                self.sidebar.tab = sidebar::Tab::Results;
+                self.save_sidebar();
+                let open = self.open(path.clone(), None);
+                if self
+                    .doc
+                    .as_ref()
+                    .is_some_and(|d| d.path == path && !d.info.pages.is_empty())
+                {
+                    self.rescan_find();
+                    return Task::batch([open, self.request_search_text(), self.go_to_page(page)]);
+                }
+                self.open_page = Some((path, page));
+                open
             }
             Message::Combine(combine::Event::Open) => {
                 self.combining.get_or_insert_with(combine::Combining::default);
@@ -7076,6 +7153,12 @@ impl App {
                     on(Message::Find(find::Event::Open)),
                 ),
                 item(
+                    Icon::FolderSearch,
+                    "Search a folder of PDFs…",
+                    k("Shift+F"),
+                    Some(Message::FolderSearch(folder_search::Event::Open)),
+                ),
+                item(
                     Icon::BookmarkAdd,
                     "Add a bookmark",
                     k("B"),
@@ -7761,6 +7844,12 @@ impl App {
         }
         if let Some(state) = &self.batch {
             dialogs.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
+        }
+        if let Some(state) = self.folder_search.as_ref().filter(|_| self.folder_search_open) {
+            dialogs.push(modal(
+                folder_search::card(state),
+                Message::FolderSearch(folder_search::Event::Close),
+            ));
         }
         if let Some(state) = &self.combining {
             dialogs.push(modal(

@@ -241,6 +241,11 @@ impl Find {
                 ev(Event::WholeWord)
             ),
             icons::button(
+                Icon::FolderSearch,
+                format!("Search a folder of PDFs ({}Shift+F)", icons::MOD),
+                Some(Message::FolderSearch(crate::folder_search::Event::Open))
+            ),
+            icons::button(
                 Icon::FindPrev,
                 "Previous result (Shift+F3)",
                 has_hits.then(|| ev(Event::Prev))

@@ -172,7 +172,7 @@ they're large for how often they're used. Each has a GitHub issue labelled
 | Auto-scroll | [#25](https://github.com/nishantnkumar-cell/Panna/issues/25) |
 | Loupe and pan-and-zoom window | Done: View › Loupe shows the page around the pointer magnified 2, 3, 4 or 8 times in a floating panel; View › Pan & zoom window shows the whole current page with a box for the part in the window, and clicking or dragging in it moves the view there ([#26](https://github.com/nishantnkumar-cell/Panna/issues/26)) |
 | Export to HTML, RTF and EPUB | [#27](https://github.com/nishantnkumar-cell/Panna/issues/27) |
-| Search across a folder of PDFs, with a saved index | [#28](https://github.com/nishantnkumar-cell/Panna/issues/28) |
+| Search across a folder of PDFs, with a saved index | Done, without a saved index: Edit › Search a folder of PDFs (Ctrl+Shift+F, or the folder button under the search box) finds words in every PDF in a folder and the folders inside it, each file read in the locked-down process, and lists each match with the text around it; picking one opens the file at that page with the words highlighted. A saved index (Acrobat Catalog) is still to do ([#28](https://github.com/nishantnkumar-cell/Panna/issues/28)) |
 | Spell check in comments and form fields | [#29](https://github.com/nishantnkumar-cell/Panna/issues/29) |
 | Convert documents to PDF/X | [#30](https://github.com/nishantnkumar-cell/Panna/issues/30) |
 | Customisable keyboard shortcuts | [#31](https://github.com/nishantnkumar-cell/Panna/issues/31) |

@@ -17,6 +17,7 @@ mod detect;
 mod document;
 mod edit;
 mod export;
+pub mod folder;
 mod formats;
 mod formdata;
 mod forms;
