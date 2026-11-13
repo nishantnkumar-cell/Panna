@@ -671,6 +671,25 @@ pub(crate) fn export_files<'a>(
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
             Ok(vec![(path.clone(), crate::office::xlsx(doc, &pages)?)])
         }
+        ExportFormat::Html | ExportFormat::Rtf | ExportFormat::Epub => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(Vec::new());
+            };
+            let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
+            // The document's title, or else the file's name.
+            let title = doc
+                .info()
+                .ok()
+                .and_then(|i| i.title)
+                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "Document".to_owned());
+            let bytes = match export.format {
+                ExportFormat::Html => crate::ebook::html(doc, &pages, &title)?,
+                ExportFormat::Rtf => crate::ebook::rtf(doc, &pages)?,
+                _ => crate::ebook::epub(doc, &pages, &title)?,
+            };
+            Ok(vec![(path.clone(), bytes)])
+        }
         ExportFormat::PowerPoint => {
             let Some((_, path)) = export.pages.first() else {
                 return Ok(Vec::new());

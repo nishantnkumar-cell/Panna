@@ -11,13 +11,13 @@ use crate::{Document, SaveError};
 
 /// A paragraph: its text, font size in points, and heading level (0 for body text).
 #[derive(Debug, Clone, PartialEq)]
-struct Paragraph {
-    text: String,
-    size: f32,
-    level: u8,
+pub(crate) struct Paragraph {
+    pub(crate) text: String,
+    pub(crate) size: f32,
+    pub(crate) level: u8,
 }
 
-enum Block {
+pub(crate) enum Block {
     Paragraph(Paragraph),
     PageBreak,
 }
@@ -59,7 +59,7 @@ fn paragraphs(lines: &[Line]) -> Vec<Paragraph> {
 
 /// Text that can go in XML: the five special characters escaped, characters XML can't hold
 /// left out.
-fn xml(s: &str) -> String {
+pub(crate) fn xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -78,7 +78,7 @@ fn xml(s: &str) -> String {
 
 /// The document's text: the body's size is the size most of the text is in, and larger
 /// paragraphs that are short enough become headings.
-fn blocks(doc: &Document, pages: &[usize]) -> Result<Vec<Block>, SaveError> {
+pub(crate) fn blocks(doc: &Document, pages: &[usize]) -> Result<Vec<Block>, SaveError> {
     let mut out = Vec::new();
     for (n, &index) in pages.iter().enumerate() {
         let text = doc.page_text(index).map_err(|_| SaveError::NoSuchPage(index))?;
@@ -198,28 +198,40 @@ const STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\
 
 /// A ZIP archive of `files` (name and contents), each compressed.
 fn zip(files: &[(&str, &[u8])]) -> Result<Vec<u8>, SaveError> {
+    zip_stored_first(files, false)
+}
+
+/// A ZIP archive of `files`, each compressed but the first when `stored_first`, which is
+/// kept as it is (as an EPUB's `mimetype` must be).
+pub(crate) fn zip_stored_first(files: &[(&str, &[u8])], stored_first: bool) -> Result<Vec<u8>, SaveError> {
     let io = |e: std::io::Error| SaveError::Io(e.to_string());
     let mut out = Vec::new();
     let mut central = Vec::new();
-    for (name, data) in files {
+    for (n, (name, data)) in files.iter().enumerate() {
         let mut crc = flate2::Crc::new();
         crc.update(data);
         let crc = crc.sum();
-        let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-        enc.write_all(data).map_err(io)?;
-        let packed = enc.finish().map_err(io)?;
-        let too_big = || SaveError::Io("The document is too large for a Word file".into());
+        let stored = stored_first && n == 0;
+        let method: u16 = if stored { 0 } else { 8 };
+        let packed = if stored {
+            data.to_vec()
+        } else {
+            let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            enc.write_all(data).map_err(io)?;
+            enc.finish().map_err(io)?
+        };
+        let too_big = || SaveError::Io("The document is too large to save this way".into());
         let offset = u32::try_from(out.len()).map_err(|_| too_big())?;
         let (packed_len, len) = (
             u32::try_from(packed.len()).map_err(|_| too_big())?,
             u32::try_from(data.len()).map_err(|_| too_big())?,
         );
         let name_len = u16::try_from(name.len()).map_err(|_| too_big())?;
-        // Version 2.0, UTF-8 names, deflated, 1980-01-01 00:00.
+        // Version 2.0, UTF-8 names, deflated (or stored), 1980-01-01 00:00.
         let common = |v: &mut Vec<u8>| {
             v.extend(20u16.to_le_bytes());
             v.extend(0x0800u16.to_le_bytes());
-            v.extend(8u16.to_le_bytes());
+            v.extend(method.to_le_bytes());
             v.extend(0u16.to_le_bytes());
             v.extend(0x0021u16.to_le_bytes());
             v.extend(crc.to_le_bytes());

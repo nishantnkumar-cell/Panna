@@ -15,6 +15,7 @@ mod comments;
 mod compare;
 mod detect;
 mod document;
+mod ebook;
 mod edit;
 mod export;
 pub mod folder;

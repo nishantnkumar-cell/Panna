@@ -540,6 +540,39 @@ fn pages_are_exported_as_text_and_pictures() {
     })
     .unwrap();
     assert!(std::fs::read(&xlsx).unwrap().starts_with(b"PK\x03\x04"));
+    let html = dir.join("out.html");
+    run(Export {
+        format: ExportFormat::Html,
+        dpi: 0.0,
+        pages: vec![(0, html.clone()), (1, html.clone())],
+    })
+    .unwrap();
+    let page = std::fs::read_to_string(&html).unwrap();
+    assert!(page.starts_with("<!DOCTYPE html>"), "{page}");
+    assert!(page.contains("<section id=\"page-2\">") && page.contains("Page 2"), "{page}");
+    let rtf = dir.join("out.rtf");
+    run(Export {
+        format: ExportFormat::Rtf,
+        dpi: 0.0,
+        pages: vec![(0, rtf.clone()), (2, rtf.clone())],
+    })
+    .unwrap();
+    let rich = std::fs::read_to_string(&rtf).unwrap();
+    assert!(rich.starts_with("{\\rtf1") && rich.contains("\\page") && rich.contains("Page 3"), "{rich}");
+    assert!(rich.ends_with('}'));
+    let epub = dir.join("out.epub");
+    run(Export {
+        format: ExportFormat::Epub,
+        dpi: 0.0,
+        pages: vec![(0, epub.clone()), (1, epub.clone()), (2, epub.clone())],
+    })
+    .unwrap();
+    let book = std::fs::read(&epub).unwrap();
+    // The mimetype comes first, stored as it is, as EPUB readers look for it there.
+    assert!(book.starts_with(b"PK\x03\x04"));
+    assert_eq!(&book[8..10], [0, 0]);
+    assert_eq!(&book[30..38], b"mimetype");
+    assert_eq!(&book[38..58], b"application/epub+zip");
     let (png, jpg) = (dir.join("p.png"), dir.join("p.jpg"));
     run(Export {
         format: ExportFormat::Png,

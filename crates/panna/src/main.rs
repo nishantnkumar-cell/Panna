@@ -5462,6 +5462,9 @@ impl App {
                         panna_core::ExportFormat::Excel => {
                             ("Export as an Excel workbook", "Excel workbooks", "xlsx")
                         }
+                        panna_core::ExportFormat::Html => ("Export as a web page", "Web pages", "html"),
+                        panna_core::ExportFormat::Rtf => ("Export as Rich Text", "Rich Text files", "rtf"),
+                        panna_core::ExportFormat::Epub => ("Export as an e-book", "EPUB e-books", "epub"),
                         _ => ("Export text as", "Text files", "txt"),
                     };
                     Task::perform(
@@ -7076,7 +7079,7 @@ impl App {
                 ),
                 item(
                     Icon::Export,
-                    "Export as text, Office or pictures…",
+                    "Export as text, Office, web, e-book or pictures…",
                     "",
                     on(Message::Export(export::Event::Open)),
                 ),
