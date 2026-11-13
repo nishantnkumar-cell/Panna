@@ -314,6 +314,8 @@ enum Message {
     ToggleReadMode,
     /// Shows the document in a second pane below the first, or takes it away.
     ToggleSplit,
+    /// Opens the document in a second window, as Acrobat's Window › New Window.
+    NewWindow,
     SplitScrolled(Viewport),
     /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
     AutoScroll,
@@ -1789,6 +1791,30 @@ impl App {
                         },
                     ),
                 ])
+            }
+            Message::NewWindow => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Another copy of Panna, given only the file's path: no shell, nothing else
+                // from the document.
+                let started = std::env::current_exe().and_then(|program| {
+                    std::process::Command::new(program)
+                        .arg(&doc.path)
+                        .stdin(std::process::Stdio::null())
+                        .spawn()
+                        // Reaped when it closes, so it doesn't linger as a zombie.
+                        .map(|mut child| {
+                            std::thread::spawn(move || child.wait());
+                        })
+                });
+                self.notice = match started {
+                    Err(e) => Some(format!("Couldn't open a new window: {e}")),
+                    Ok(_) if self.dirty() => Some(
+                        "The new window shows the document as last saved, without your unsaved changes."
+                            .into(),
+                    ),
+                    Ok(_) => None,
+                };
+                Task::none()
             }
             Message::ToggleSplit => {
                 if self.split.take().is_some() {
@@ -7062,6 +7088,7 @@ impl App {
                     item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
                     Separator,
                     check("Split", "", self.split.is_some(), on(Message::ToggleSplit)),
+                    item(Icon::NewWindow, "New window", "", on(Message::NewWindow)),
                     check("Read mode", k("H"), self.read_mode, on(Message::ToggleReadMode)),
                     item(
                         Icon::Present,

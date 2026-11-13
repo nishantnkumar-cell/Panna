@@ -160,6 +160,7 @@ pub enum Icon {
     ImageField,
     FlipAcross,
     FlipDown,
+    NewWindow,
 }
 
 impl Icon {
@@ -315,6 +316,7 @@ impl Icon {
             Icon::ImageField => include_bytes!("../icons/image.svg"),
             Icon::FlipAcross => include_bytes!("../icons/flip-horizontal-2.svg"),
             Icon::FlipDown => include_bytes!("../icons/flip-vertical-2.svg"),
+            Icon::NewWindow => include_bytes!("../icons/app-window.svg"),
         }
     }
 }
@@ -423,7 +425,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 150] = [
+    const ALL: [Icon; 151] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -574,6 +576,7 @@ mod tests {
         Icon::ImageField,
         Icon::FlipAcross,
         Icon::FlipDown,
+        Icon::NewWindow,
     ];
 
     #[test]
