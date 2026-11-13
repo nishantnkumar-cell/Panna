@@ -44,6 +44,7 @@ type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
 type AccessReply = Box<dyn FnOnce(Vec<crate::AccessFinding>) + Send>;
 type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
 type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
+type MarginsReply = Box<dyn FnOnce(Option<crate::Margins>) + Send>;
 type LeftoversReply = Box<dyn FnOnce(crate::Leftovers) + Send>;
 type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
@@ -187,6 +188,8 @@ enum Reply {
     Compare(PathBuf, CompareReply),
     /// Where the pictures on a page are.
     Pictures(usize, PicturesReply),
+    /// The white around what's drawn on a page.
+    WhiteMargins(usize, MarginsReply),
     /// What redacting these areas would leave in bookmarks and comments.
     Leftovers(Vec<(usize, Vec<crate::TextBox>)>, LeftoversReply),
     /// Where form fields could go.
@@ -562,6 +565,16 @@ impl RenderWorker {
         });
     }
 
+    /// How much white surrounds what's drawn on `page` as shown (top, right, bottom, left, in
+    /// points), for Fit Visible; `None` for a blank page.
+    pub fn white_margins(&self, page: usize, reply: impl FnOnce(Option<crate::Margins>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::WhiteMargins(page, Box::new(reply)),
+        });
+    }
+
     /// What redacting `areas` would leave in bookmarks and comments (see
     /// [`Document::leftovers`]).
     pub fn leftovers(
@@ -847,6 +860,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     }))
                 }
                 Reply::Pictures(page, reply) => reply(ask!(Op::Pictures(page), Boxes)),
+                Reply::WhiteMargins(page, reply) => reply(ask!(Op::WhiteMargins(page), Margins)),
                 Reply::Leftovers(areas, reply) => reply(ask!(Op::Leftovers(areas), Leftovers)),
                 Reply::DetectFields(reply) => reply(ask!(Op::DetectFields, Fields)),
                 Reply::Preflight(standard, reply) => reply(ask!(Op::Preflight(standard), Findings)),

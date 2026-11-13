@@ -59,8 +59,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
-    Changes, Comment, DocumentInfo, Limits, LinkTarget, OpenError, PageEdit, PageSize, PageText, RenderError,
-    RenderWorker, RenderedPage, SaveError, TextBox,
+    Changes, Comment, DocumentInfo, Limits, LinkTarget, ObjRef, OpenError, PageEdit, PageSize, PageText,
+    RenderError, RenderWorker, RenderedPage, SaveError, TextBox,
 };
 
 use icons::Icon;
@@ -293,8 +293,23 @@ enum Message {
     ArrowScroll(bool),
     /// Enter finishes a polygon, or else moves a screen on (Shift+Enter, back).
     EnterKey(bool),
+    /// A form's push button was pressed.
+    FormButton(panna_core::ButtonAction),
+    /// An image field was clicked: choose its picture.
+    FieldPicture(usize),
+    FieldPictureLoaded(usize, Result<panna_core::StampImage, String>),
+    /// An empty signature field was clicked: sign in it.
+    SignField(ObjRef),
     /// Fits the page's height to the window.
     FitHeight,
+    /// Fits the width of what's drawn on the page (its white margins left out) to the window.
+    FitVisible,
+    /// The white margins of a page, found for Fit Visible.
+    VisibleMargins {
+        doc: u64,
+        page: usize,
+        margins: Option<panna_core::Margins>,
+    },
     /// Read mode: toolbars and panels hidden, a small bar to move and zoom.
     ToggleReadMode,
     /// Shows the document in a second pane below the first, or takes it away.
@@ -982,7 +997,10 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
         (format!("{m}K"), "Preferences"),
         ("F10, Alt+letter".into(), "Open a menu"),
         (format!("{m}+, {m}−"), "Zoom in, zoom out"),
-        (format!("{m}1, {m}2, {m}0"), "Actual size, fit width, fit page"),
+        (
+            format!("{m}1, {m}2, {m}3, {m}0"),
+            "Actual size, fit width, fit visible, fit page",
+        ),
         ("Page Up, Page Down".into(), "Previous, next page"),
         ("Left, Right".into(), "Previous, next page"),
         ("Enter, Shift+Enter".into(), "Next, previous screen"),
@@ -1717,6 +1735,60 @@ impl App {
                 let zoom = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / row_height.max(1.0);
                 let zoom_task = self.set_zoom(zoom);
                 Task::batch([zoom_task, self.go_to_page(page)])
+            }
+            Message::FitVisible => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = self.current_page();
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.white_margins(page, move |margins| {
+                    let _ = tx.send(margins);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |margins| Message::VisibleMargins {
+                    doc: id,
+                    page,
+                    margins: margins.ok().flatten(),
+                })
+            }
+            Message::VisibleMargins { doc, page, margins } => {
+                let Some(open) = &self.doc else {
+                    return Task::none();
+                };
+                if open.id != doc {
+                    return Task::none();
+                }
+                // A blank page has nothing to fit: fit the page's width instead.
+                let Some(margins) = margins else {
+                    return self.update(Message::FitWidth);
+                };
+                let Some((row_width, pages, _)) = open.layout.row_size(page) else {
+                    return Task::none();
+                };
+                let [_, right, _, left] = shown_margins(margins, self.rotation);
+                let visible = (row_width - left - right).max(1.0);
+                let room = (self.viewport.width - 2.0 * PAGE_GAP - 16.0).max(100.0)
+                    - pages.saturating_sub(1) as f32 * PAGE_GAP;
+                let zoom_task = self.set_zoom(room / visible);
+                let page_task = self.go_to_page(page);
+                // Scroll across so what's drawn starts at the window's left edge.
+                let Some(open) = &self.doc else {
+                    return Task::none();
+                };
+                let content_w = open.layout.content_width(self.zoom, self.viewport.width);
+                let x = (open.layout.page_left(page, self.zoom, content_w) + left * self.zoom - PAGE_GAP)
+                    .max(0.0);
+                self.viewport.offset_x = x;
+                Task::batch([
+                    zoom_task,
+                    page_task,
+                    operation::scroll_to(
+                        scroll_id(),
+                        AbsoluteOffset {
+                            x,
+                            y: self.viewport.offset_y,
+                        },
+                    ),
+                ])
             }
             Message::ToggleSplit => {
                 if self.split.take().is_some() {
@@ -3334,6 +3406,77 @@ impl App {
                     LinkChoice::Copy => iced::clipboard::write(uri),
                     LinkChoice::Cancel => Task::none(),
                 }
+            }
+            Message::FormButton(action) => {
+                use panna_core::ButtonAction as A;
+                let Some(doc) = &self.doc else { return Task::none() };
+                let last = doc.pages.len().saturating_sub(1);
+                match action {
+                    A::Nothing => {
+                        self.notice = Some("This button runs a script, which Panna doesn't run.".into());
+                        Task::none()
+                    }
+                    A::ResetForm => self.update(Message::ResetForm),
+                    A::GoTo(page) => self.go_to_page(page),
+                    A::Print => self.update(Message::Print),
+                    A::NextPage => self.step_page(true),
+                    A::PreviousPage => self.step_page(false),
+                    A::FirstPage => self.go_to_page(0),
+                    A::LastPage => self.go_to_page(last),
+                }
+            }
+            Message::FieldPicture(index) => Task::perform(
+                async {
+                    let path = rfd::AsyncFileDialog::new()
+                        .set_title("Choose a picture for the field")
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
+                        .pick_file()
+                        .await?
+                        .path()
+                        .to_path_buf();
+                    Some(
+                        std::fs::read(&path)
+                            .map_err(|e| format!("Couldn't open the picture: {e}"))
+                            .and_then(|bytes| panna_core::StampImage::decode(&bytes)),
+                    )
+                },
+                move |result| {
+                    Message::FieldPictureLoaded(index, result.unwrap_or_else(|| Err(String::new())))
+                },
+            ),
+            Message::FieldPictureLoaded(index, result) => {
+                match result {
+                    Ok(picture) => {
+                        self.form.update(form::Event::Picture(index, picture));
+                    }
+                    Err(e) if !e.is_empty() => self.notice = Some(e),
+                    Err(_) => {}
+                }
+                Task::none()
+            }
+            Message::SignField(id) => {
+                let name = self
+                    .form
+                    .fields()
+                    .iter()
+                    .find(|f| f.id == id)
+                    .map(|f| f.name.clone())
+                    .unwrap_or_default();
+                if self.dirty() {
+                    self.notice =
+                        Some("Save your changes before signing, so the signature covers them.".into());
+                    return Task::none();
+                }
+                let task = self.update(Message::Signing(signing::Event::Open));
+                if let Some(state) = &mut self.signing {
+                    state.field = Some((id, name));
+                }
+                task
             }
             Message::ResetForm => {
                 self.confirm_reset = self.form.can_reset() && !self.saving;
@@ -6875,6 +7018,7 @@ impl App {
                     item(Icon::FitWidth, "Fit width", k("2"), on(Message::FitWidth)),
                     item(Icon::FitPage, "Fit page", k("0"), on(Message::FitPage)),
                     item(Icon::FitHeight, "Fit height", "", on(Message::FitHeight)),
+                    item(Icon::FitVisible, "Fit visible", k("3"), on(Message::FitVisible)),
                     Separator,
                     sub(
                         Some(Icon::SinglePage),
@@ -8165,6 +8309,12 @@ fn set_window_mode(mode: window::Mode) -> Task<Message> {
 }
 
 /// Page sizes as shown, turned by the view's rotation.
+/// Page margins (top, right, bottom, left) turned clockwise by `rotation` quarter turns.
+fn shown_margins(margins: panna_core::Margins, rotation: u8) -> panna_core::Margins {
+    let turns = usize::from(rotation % 4);
+    std::array::from_fn(|i| margins[(i + 4 - turns) % 4])
+}
+
 fn rotated_sizes(pages: &[PageSize], rotation: u8) -> Vec<PageSize> {
     pages
         .iter()

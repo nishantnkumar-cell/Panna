@@ -27,6 +27,8 @@ struct Encoded {
     alpha: Option<Vec<u8>>,
 }
 
+impl Eq for StampImage {}
+
 impl PartialEq for StampImage {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.data, &other.data)
@@ -104,6 +106,33 @@ impl StampImage {
     /// Identifies the decoded picture, so one used on many pages is written once.
     pub(crate) fn key(&self) -> usize {
         Arc::as_ptr(&self.data) as usize
+    }
+
+    /// The picture's RGBA samples, row by row, for showing it on screen.
+    pub fn rgba(&self) -> Vec<u8> {
+        use std::io::Read as _;
+        let inflate = |data: &[u8]| {
+            let mut out = Vec::new();
+            // Limited to what the picture can hold, so it can't grow without end.
+            let limit = u64::from(self.width) * u64::from(self.height) * 3;
+            let _ = flate2::read::ZlibDecoder::new(data)
+                .take(limit)
+                .read_to_end(&mut out);
+            out
+        };
+        let rgb = inflate(&self.data.rgb);
+        let alpha = self.data.alpha.as_deref().map(inflate);
+        let pixels = (self.width as usize) * (self.height as usize);
+        (0..pixels)
+            .flat_map(|i| {
+                let [r, g, b] = rgb
+                    .get(i * 3..i * 3 + 3)
+                    .and_then(|px| <[u8; 3]>::try_from(px).ok())
+                    .unwrap_or([255; 3]);
+                let a = alpha.as_ref().and_then(|a| a.get(i).copied()).unwrap_or(255);
+                [r, g, b, a]
+            })
+            .collect()
     }
 
     pub(crate) fn has_mask(&self) -> bool {

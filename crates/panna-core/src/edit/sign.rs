@@ -24,6 +24,10 @@ pub struct SignOptions {
     pub certify: bool,
     /// Where the signature is shown on the page; it's invisible when `None`.
     pub visible: Option<Visible>,
+    /// An empty signature field to sign in, in place of a new one; the signature is shown
+    /// in it, and `visible` isn't used.
+    #[serde(default)]
+    pub field: Option<ObjRef>,
 }
 
 /// A signature shown in a corner of a page: who signed, when, and why.
@@ -168,6 +172,57 @@ fn appearance(lines: &[String], (w, h): (f64, f64), matrix: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// What a shown signature says: who signed, when, why and where.
+fn shown_lines(signer: &str, date: &str, options: &SignOptions) -> Vec<String> {
+    // "D:20261019120000Z" as "2026-10-19 12:00 UTC".
+    let d = date.get(2..).unwrap_or_default();
+    let part = |r: std::ops::Range<usize>| d.get(r).unwrap_or_default();
+    let mut lines = vec![
+        format!("Digitally signed by {signer}"),
+        format!(
+            "Date: {}-{}-{} {}:{} UTC",
+            part(0..4),
+            part(4..6),
+            part(6..8),
+            part(8..10),
+            part(10..12)
+        ),
+    ];
+    if !options.reason.trim().is_empty() {
+        lines.push(format!("Reason: {}", options.reason.trim()));
+    }
+    if !options.location.trim().is_empty() {
+        lines.push(format!("Place: {}", options.location.trim()));
+    }
+    lines
+}
+
+/// The page holding the widget `field`, and its object.
+fn page_of_widget(pdf: &Pdf, field: ObjRef) -> Option<(u32, u16, i64)> {
+    for page in pdf.pages().iter() {
+        let raw = page.raw();
+        let Some(annots) = raw.get::<Array<'_>>(b"Annots") else {
+            continue;
+        };
+        let holds = annots.iter::<Dict<'_>>().take(4_000).any(|a| {
+            a.obj_id().is_some_and(|id| {
+                id.obj_number == field.number && id.gen_number == i32::from(field.generation)
+            })
+        });
+        if holds {
+            let id = raw.obj_id()?;
+            let rotate = match page.rotation() {
+                hayro::hayro_syntax::page::Rotation::None => 0,
+                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
+                hayro::hayro_syntax::page::Rotation::Flipped => 180,
+                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+            };
+            return Some((id.obj_number, u16::try_from(id.gen_number).ok()?, rotate));
+        }
+    }
+    None
+}
+
 /// `original` with an update adding an unsigned signature, and where in the result the room
 /// for it is (the hex string, brackets included). Every byte outside that room is final.
 pub(crate) fn prepare(
@@ -199,7 +254,6 @@ pub(crate) fn prepare(
 
     let mut out = update::Update::new(trailer);
     let sig_id = out.alloc();
-    let field_id = out.alloc();
 
     // A name no other field has.
     let acro = catalog.get::<Dict<'_>>(b"AcroForm");
@@ -239,6 +293,78 @@ pub(crate) fn prepare(
     sig.push_str(&"0".repeat(ROOM * 2));
     sig.push_str(">\n>>");
     out.put(sig_id, 0, sig.into_bytes())?;
+    // Signing an empty signature field: it gets the signature, and shows it in its box.
+    if let Some(field) = options.field {
+        let widget = xref.get::<Dict<'_>>(id_of(field)?).ok_or(SaveError::Damaged)?;
+        let is_sig = widget
+            .get::<hayro::hayro_syntax::object::Name<'_>>(b"FT")
+            .is_some_and(|ft| ft.as_str() == "Sig");
+        if !is_sig || widget.contains_key(b"V") {
+            return Err(SaveError::Damaged);
+        }
+        let rect = widget
+            .get::<hayro::hayro_syntax::object::Rect>(b"Rect")
+            .ok_or(SaveError::Damaged)?;
+        let (_, _, rotate) = page_of_widget(pdf, field).ok_or(SaveError::Damaged)?;
+        let (w, h) = ((rect.x1 - rect.x0).abs(), (rect.y1 - rect.y0).abs());
+        let (w, h) = if rotate % 180 == 0 { (w, h) } else { (h, w) };
+        let matrix = match rotate {
+            90 => "0 1 -1 0 0 0",
+            180 => "-1 0 0 -1 0 0",
+            270 => "0 -1 1 0 0 0",
+            _ => "1 0 0 1 0 0",
+        };
+        let ap_id = out.alloc();
+        out.put(
+            ap_id,
+            0,
+            appearance(
+                &shown_lines(signer, &date, options),
+                (w.max(1.0), h.max(1.0)),
+                matrix,
+            ),
+        )?;
+        out.put_copied(
+            field.number,
+            field.generation,
+            rewrite(
+                widget.data(),
+                &vec![
+                    ("V", format!("{sig_id} 0 R")),
+                    ("AP", format!("<< /N {ap_id} 0 R >>")),
+                ],
+            )?,
+        );
+        let form_set = vec![("SigFlags", "3".to_owned())];
+        let mut catalog_set: Vec<(&'static str, String)> = Vec::new();
+        match (catalog.get_ref(b"AcroForm"), &acro) {
+            (Some(r), Some(form)) => {
+                let num = r.obj_number;
+                let generation = u16::try_from(r.gen_number).map_err(|_| SaveError::Damaged)?;
+                out.put_copied(num, generation, rewrite(form.data(), &form_set)?);
+            }
+            (_, Some(form)) => {
+                let body = rewrite(form.data(), &form_set)?;
+                catalog_set.push((
+                    "AcroForm",
+                    String::from_utf8(body).map_err(|_| SaveError::Damaged)?,
+                ));
+            }
+            (_, None) => return Err(SaveError::Damaged),
+        }
+        if options.certify {
+            catalog_set.push(("Perms", format!("<< /DocMDP {sig_id} 0 R >>")));
+        }
+        if !catalog_set.is_empty() {
+            out.put_copied(
+                root.number,
+                root.generation,
+                rewrite(catalog.data(), &catalog_set)?,
+            );
+        }
+        return finish(out, original, sig_id);
+    }
+    let field_id = out.alloc();
     // Shown: a box in a corner with who signed, when and why. Otherwise a widget with no
     // size. Either way it prints and is locked (flags 132).
     let (rect, ap) = match options.visible {
@@ -251,26 +377,7 @@ pub(crate) fn prepare(
                 hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
             };
             let (rect, size, matrix) = placed([b.x0, b.y0, b.x1, b.y1], rotate, visible.corner);
-            // "D:20261019120000Z" as "2026-10-19 12:00 UTC".
-            let d = date.get(2..).unwrap_or_default();
-            let part = |r: std::ops::Range<usize>| d.get(r).unwrap_or_default();
-            let mut lines = vec![
-                format!("Digitally signed by {signer}"),
-                format!(
-                    "Date: {}-{}-{} {}:{} UTC",
-                    part(0..4),
-                    part(4..6),
-                    part(6..8),
-                    part(8..10),
-                    part(10..12)
-                ),
-            ];
-            if !options.reason.trim().is_empty() {
-                lines.push(format!("Reason: {}", options.reason.trim()));
-            }
-            if !options.location.trim().is_empty() {
-                lines.push(format!("Place: {}", options.location.trim()));
-            }
+            let lines = shown_lines(signer, &date, options);
             let ap_id = out.alloc();
             out.put(ap_id, 0, appearance(&lines, size, matrix))?;
             let n = super::annot::n;
@@ -334,6 +441,12 @@ pub(crate) fn prepare(
             rewrite(catalog.data(), &catalog_set)?,
         );
     }
+    finish(out, original, sig_id)
+}
+
+/// The finished update, and where in it the room for the signature is, with the byte range
+/// filled in.
+fn finish(out: update::Update, original: &[u8], sig_id: u32) -> Result<(Vec<u8>, Range<usize>), SaveError> {
     let mut bytes = out.finish(original);
 
     // The room and the byte range, found in what was written.

@@ -714,6 +714,15 @@ pub enum NewFieldKind {
     /// A group of radio buttons, one per choice, on the field's page; only one can be on.
     /// The field's own `rect` isn't used.
     Radio(Vec<RadioButton>),
+    /// A push button showing `caption` that does `action` when pressed.
+    Button {
+        caption: String,
+        action: crate::ButtonAction,
+    },
+    /// An image field: a button whose picture is chosen by clicking it.
+    Image,
+    /// A place for a digital signature.
+    Signature,
 }
 
 /// One button of a new radio group.
@@ -1139,10 +1148,13 @@ fn fill_fields(
         let Some(f) = fields.iter().find(|f| f.id == *id) else {
             continue;
         };
-        edits
-            .entry((id.number, id.generation))
-            .or_default()
-            .push(("V", field::value(f, value)));
+        // A picture is what an image field's buttons show; buttons have no value.
+        if !matches!(value, FieldValue::Picture(_)) {
+            edits
+                .entry((id.number, id.generation))
+                .or_default()
+                .push(("V", field::value(f, value)));
+        }
         for w in &f.widgets {
             let entry = match value {
                 FieldValue::State(state) => {
@@ -1161,6 +1173,31 @@ fn fill_fields(
                     };
                     let ap = out.alloc();
                     out.put(ap, 0, stream)?;
+                    ("AP", format!("<< /N {ap} 0 R >>"))
+                }
+                FieldValue::Picture(picture) => {
+                    let Some(widget) = get(w.annot) else { continue };
+                    let Some(rect) = widget.get::<hayro::hayro_syntax::object::Rect>(b"Rect") else {
+                        continue;
+                    };
+                    let mask = picture.has_mask().then(|| out.alloc());
+                    let (image, mask_body) = picture.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
+                    if let (Some(m), Some(body)) = (mask, mask_body) {
+                        out.put(m, 0, body)?;
+                    }
+                    let image_id = out.alloc();
+                    out.put(image_id, 0, image)?;
+                    let ap = out.alloc();
+                    out.put(
+                        ap,
+                        0,
+                        field::picture_appearance(
+                            (rect.x1 - rect.x0).abs(),
+                            (rect.y1 - rect.y0).abs(),
+                            (picture.width, picture.height),
+                            image_id,
+                        ),
+                    )?;
                     ("AP", format!("<< /N {ap} 0 R >>"))
                 }
             };

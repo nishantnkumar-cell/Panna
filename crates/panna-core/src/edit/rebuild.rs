@@ -995,7 +995,8 @@ pub(crate) fn rebuild(
                             w.set(at, body);
                             at
                         };
-                        let body = super::new_field::widget(field, rect, *num, rotate, &mut store);
+                        let body =
+                            super::new_field::widget(field, rect, *num, &page_nums, rotate, &mut store);
                         let widget = w.alloc();
                         w.set(widget, body);
                         new_fields.push(widget);

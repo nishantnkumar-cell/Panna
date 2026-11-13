@@ -68,6 +68,8 @@ pub(crate) enum Op {
     CommentSummary(String),
     Compacted(Option<u32>),
     Pictures(usize),
+    /// How much white surrounds what's drawn on a page (see [`Document::white_margins`]).
+    WhiteMargins(usize),
     Leftovers(Vec<(usize, Vec<TextBox>)>),
     DetectFields,
     Preflight(Standard),
@@ -119,6 +121,7 @@ pub(crate) enum Answer {
     /// The files an export makes, in the order of [`destinations`].
     Files(Result<Vec<Vec<u8>>, SaveError>),
     Boxes(Vec<TextBox>),
+    Margins(Option<crate::Margins>),
     Leftovers(Leftovers),
     Fields(Result<Vec<NewField>, RenderError>),
     Findings(Vec<Finding>),
@@ -157,6 +160,7 @@ impl Op {
             | Self::Rearranged(_) => Answer::Bytes(Err(save)),
             Self::Export(_) => Answer::Files(Err(save)),
             Self::Pictures(_) => Answer::Boxes(Vec::new()),
+            Self::WhiteMargins(_) => Answer::Margins(None),
             Self::Leftovers(_) => Answer::Leftovers(Leftovers::default()),
             Self::DetectFields => Answer::Fields(Err(render)),
             Self::Preflight(_) => Answer::Findings(Vec::new()),
@@ -228,6 +232,7 @@ pub(crate) fn perform<'a>(
         Op::CommentsFile(format, name) => Answer::Bytes(Ok(doc.comments_file(format, &name))),
         Op::Compacted(pictures) => Answer::Bytes(doc.compacted(pictures)),
         Op::Pictures(page) => Answer::Boxes(doc.pictures(page)),
+        Op::WhiteMargins(page) => Answer::Margins(view.white_margins(page)),
         Op::Leftovers(areas) => Answer::Leftovers(doc.leftovers(&areas)),
         Op::DetectFields => Answer::Fields(doc.detect_fields()),
         Op::Preflight(Standard::PdfA) => Answer::Findings(doc.preflight()),

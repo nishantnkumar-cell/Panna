@@ -83,7 +83,7 @@ fn signing_with_a_certificate_file_makes_a_valid_signature() {
         reason: "Approved".into(),
         location: "Café".into(),
         certify: true,
-        visible: None,
+        ..panna_core::SignOptions::default()
     };
     for p12 in ["signer-rsa.p12", "signer-ec.p12"] {
         let doc = plain();
@@ -252,4 +252,45 @@ fn signing_with_a_key_held_elsewhere_makes_a_valid_signature() {
         assert_eq!(sigs[0].status, SigStatus::Valid, "{p12}");
         assert_eq!(sigs[0].signer, "Pat Example");
     }
+}
+
+#[test]
+fn an_empty_signature_field_is_signed_in_place() {
+    let doc = plain();
+    let field = panna_core::NewField {
+        page: 0,
+        rect: panna_core::TextBox {
+            x0: 20.0,
+            y0: 20.0,
+            x1: 180.0,
+            y1: 70.0,
+        },
+        name: "Approver".into(),
+        tooltip: String::new(),
+        required: false,
+        kind: panna_core::NewFieldKind::Signature,
+    };
+    let doc = doc.reopen(doc.with_form_fields(&[field], &[]).unwrap()).unwrap();
+    let fields = doc.info().unwrap().fields;
+    assert_eq!(fields[0].kind, panna_core::FieldKind::Signature { signed: false });
+    let options = panna_core::SignOptions {
+        field: Some(fields[0].id),
+        ..panna_core::SignOptions::default()
+    };
+    let signed = doc
+        .signed(&fixture("signer-rsa.p12"), "secret", &options)
+        .unwrap();
+    let doc = doc.reopen(signed).unwrap();
+    let sigs = doc.signatures();
+    assert_eq!(sigs.len(), 1);
+    assert_eq!(sigs[0].status, SigStatus::Valid);
+    assert_eq!(sigs[0].page, Some(0));
+    let fields = doc.info().unwrap().fields;
+    assert_eq!(fields.len(), 1, "no second signature field");
+    assert_eq!(fields[0].kind, panna_core::FieldKind::Signature { signed: true });
+    // Signing it again is refused.
+    assert!(
+        doc.signed(&fixture("signer-rsa.p12"), "secret", &options)
+            .is_err()
+    );
 }

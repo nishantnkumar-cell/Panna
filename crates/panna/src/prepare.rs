@@ -30,6 +30,41 @@ pub enum Tool {
     List,
     Radio,
     Date,
+    Button,
+    Image,
+    Signature,
+}
+
+/// What a new push button can do, as the card lists it.
+pub const BUTTON_ACTIONS: [&str; 8] = [
+    "Do nothing",
+    "Clear the form",
+    "Go to a page",
+    "Print",
+    "Go to the next page",
+    "Go to the previous page",
+    "Go to the first page",
+    "Go to the last page",
+];
+
+/// The action at `choice` in [`BUTTON_ACTIONS`], going to `page` (from 1) for "Go to a page".
+fn button_action(choice: usize, page: &str) -> panna_core::ButtonAction {
+    use panna_core::ButtonAction as A;
+    match choice {
+        1 => A::ResetForm,
+        2 => page
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|p| p.checked_sub(1))
+            .map_or(A::Nothing, A::GoTo),
+        3 => A::Print,
+        4 => A::NextPage,
+        5 => A::PreviousPage,
+        6 => A::FirstPage,
+        7 => A::LastPage,
+        _ => A::Nothing,
+    }
 }
 
 /// The date patterns a date field can take, as in Acrobat's date formats.
@@ -148,6 +183,9 @@ impl Tool {
             Tool::List => (120.0, 60.0),
             Tool::Radio => (RADIO_SIZE, RADIO_SIZE),
             Tool::Date => (100.0, 20.0),
+            Tool::Button => (90.0, 24.0),
+            Tool::Image => (100.0, 100.0),
+            Tool::Signature => (180.0, 50.0),
         }
     }
 
@@ -164,6 +202,9 @@ impl Tool {
             Tool::List => "List",
             Tool::Radio => "Group",
             Tool::Date => "Date",
+            Tool::Button => "Button",
+            Tool::Image => "Image",
+            Tool::Signature => "Signature",
         }
     }
 }
@@ -179,6 +220,12 @@ pub enum Event {
     Options(text_editor::Action),
     /// A date field's pattern, by its place in [`DATE_PATTERNS`].
     Pattern(usize),
+    /// A button's caption.
+    Caption(String),
+    /// What a button does, by its place in [`BUTTON_ACTIONS`].
+    Action(usize),
+    /// The page a "Go to a page" button goes to, as typed.
+    Target(String),
     /// Lines the picked fields up with the one picked last.
     Align(Align),
     Done,
@@ -203,6 +250,11 @@ enum Pending {
         options: text_editor::Content,
         /// For a date field, its pattern's place in [`DATE_PATTERNS`].
         pattern: usize,
+        /// For a button: its caption, its action's place in [`BUTTON_ACTIONS`], and the page
+        /// it goes to.
+        caption: String,
+        action: usize,
+        target: String,
     },
     Existing {
         id: ObjRef,
@@ -265,6 +317,9 @@ fn kind_label(kind: &FieldKind) -> &'static str {
         FieldKind::Radio => "Radio buttons",
         FieldKind::Choice { combo: true, .. } => "Drop-down",
         FieldKind::Choice { .. } => "List",
+        FieldKind::Button { .. } => "Button",
+        FieldKind::Image => "Image field",
+        FieldKind::Signature { .. } => "Signature field",
     }
 }
 
@@ -394,6 +449,21 @@ impl Preparer {
                     options.perform(action);
                 }
             }
+            Event::Caption(v) => {
+                if let Some(Pending::New { caption, .. }) = &mut self.pending {
+                    *caption = v.chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
+                }
+            }
+            Event::Action(i) => {
+                if let Some(Pending::New { action, .. }) = &mut self.pending {
+                    *action = i.min(BUTTON_ACTIONS.len() - 1);
+                }
+            }
+            Event::Target(v) => {
+                if let Some(Pending::New { target, .. }) = &mut self.pending {
+                    *target = v.chars().filter(char::is_ascii_digit).take(6).collect();
+                }
+            }
             Event::Pattern(i) => {
                 if let Some(Pending::New { pattern, .. }) = &mut self.pending {
                     *pattern = i.min(DATE_PATTERNS.len() - 1);
@@ -443,6 +513,9 @@ impl Preparer {
                     multiline,
                     options,
                     pattern,
+                    caption,
+                    action,
+                    target,
                 }) = self.pending.take()
                 else {
                     self.pending = None;
@@ -461,6 +534,9 @@ impl Preparer {
                         multiline,
                         options,
                         pattern,
+                        caption,
+                        action,
+                        target,
                     });
                     return Outcome::Nothing;
                 }
@@ -477,6 +553,16 @@ impl Preparer {
                             .unwrap_or(DATE_PATTERNS[0])
                             .to_owned(),
                     ),
+                    Tool::Button => NewFieldKind::Button {
+                        caption: if caption.trim().is_empty() {
+                            "Button".to_owned()
+                        } else {
+                            caption.trim().to_owned()
+                        },
+                        action: button_action(action, &target),
+                    },
+                    Tool::Image => NewFieldKind::Image,
+                    Tool::Signature => NewFieldKind::Signature,
                     Tool::Radio => {
                         let boxes = radio_layout(rect, list.len(), dragged);
                         rect = around(&boxes).unwrap_or(rect);
@@ -639,6 +725,9 @@ impl Preparer {
             multiline: false,
             options: text_editor::Content::new(),
             pattern: 0,
+            caption: String::new(),
+            action: 0,
+            target: String::new(),
         });
         Outcome::Nothing
     }
@@ -730,6 +819,9 @@ impl Preparer {
             tool(Tool::List, Icon::ListField, "Add a list box"),
             tool(Tool::Radio, Icon::RadioField, "Add radio buttons"),
             tool(Tool::Date, Icon::Calendar, "Add a date field"),
+            tool(Tool::Button, Icon::ButtonField, "Add a button"),
+            tool(Tool::Image, Icon::ImageField, "Add an image field"),
+            tool(Tool::Signature, Icon::Signature, "Add a digital signature field"),
             icons::button(
                 Icon::DetectFields,
                 "Find fields automatically, from blanks, lines and boxes",
@@ -855,6 +947,9 @@ impl Preparer {
                 multiline,
                 options,
                 pattern,
+                caption,
+                action,
+                target,
                 ..
             } => {
                 let title = match tool {
@@ -864,6 +959,9 @@ impl Preparer {
                     Tool::List => "Add a list box",
                     Tool::Radio => "Add radio buttons",
                     Tool::Date => "Add a date field",
+                    Tool::Button => "Add a button",
+                    Tool::Image => "Add an image field",
+                    Tool::Signature => "Add a digital signature field",
                 };
                 let ready = !tool.has_choices() || !options_of(options).is_empty();
                 let mut body = column![
@@ -893,6 +991,36 @@ impl Preparer {
                             ))
                         })
                         .width(iced::Fill),
+                    );
+                }
+                if *tool == Tool::Button {
+                    let chosen = BUTTON_ACTIONS.get(*action).copied();
+                    body = body
+                        .push(text("Caption").size(12))
+                        .push(text_input("Button", caption).on_input(move |v| ev(Event::Caption(v))))
+                        .push(text("When pressed").size(12))
+                        .push(
+                            pick_list(BUTTON_ACTIONS, chosen, move |a: &'static str| {
+                                ev(Event::Action(
+                                    BUTTON_ACTIONS.iter().position(|b| *b == a).unwrap_or(0),
+                                ))
+                            })
+                            .width(iced::Fill),
+                        );
+                    if *action == 2 {
+                        body = body
+                            .push(text_input("Page number", target).on_input(move |v| ev(Event::Target(v))));
+                    }
+                }
+                if *tool == Tool::Image {
+                    body = body.push(
+                        text("Whoever fills in the form clicks the field to choose its picture.").size(12),
+                    );
+                }
+                if *tool == Tool::Signature {
+                    body = body.push(
+                        text("Whoever fills in the form clicks the field to sign in it with a certificate.")
+                            .size(12),
                     );
                 }
                 if tool.has_choices() {
@@ -1175,6 +1303,39 @@ mod tests {
             Align::CentreDown.apply(tb(0.0, 0.0, 10.0, 10.0), tb(5.0, 20.0, 45.0, 40.0)),
             tb(0.0, 25.0, 10.0, 35.0)
         );
+    }
+
+    #[test]
+    fn a_button_takes_its_caption_and_action() {
+        let mut p = on();
+        p.update(Event::Tool(Tool::Button));
+        p.press(0, (10.0, 40.0), &[], false);
+        p.release(&[]);
+        p.update(Event::Caption("Next".into()));
+        p.update(Event::Action(2));
+        p.update(Event::Target("3x".into()));
+        let Outcome::Edit { add, .. } = p.update(Event::Done) else {
+            panic!("nothing added");
+        };
+        assert_eq!(
+            add[0].kind,
+            NewFieldKind::Button {
+                caption: "Next".into(),
+                action: panna_core::ButtonAction::GoTo(2),
+            }
+        );
+        for (tool, kind) in [
+            (Tool::Image, NewFieldKind::Image),
+            (Tool::Signature, NewFieldKind::Signature),
+        ] {
+            p.update(Event::Tool(tool));
+            p.press(0, (10.0, 140.0), &[], false);
+            p.release(&[]);
+            let Outcome::Edit { add, .. } = p.update(Event::Done) else {
+                panic!("nothing added");
+            };
+            assert_eq!(add[0].kind, kind);
+        }
     }
 
     #[test]

@@ -155,6 +155,9 @@ pub enum Icon {
     Pause,
     Play,
     Dashed,
+    FitVisible,
+    ButtonField,
+    ImageField,
 }
 
 impl Icon {
@@ -305,6 +308,9 @@ impl Icon {
             Icon::PrevView => include_bytes!("../icons/arrow-big-left.svg"),
             Icon::NextView => include_bytes!("../icons/arrow-big-right.svg"),
             Icon::FitHeight => include_bytes!("../icons/move-vertical.svg"),
+            Icon::FitVisible => include_bytes!("../icons/scan-line.svg"),
+            Icon::ButtonField => include_bytes!("../icons/rectangle-ellipsis.svg"),
+            Icon::ImageField => include_bytes!("../icons/image.svg"),
         }
     }
 }
@@ -413,7 +419,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 145] = [
+    const ALL: [Icon; 148] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -559,6 +565,9 @@ mod tests {
         Icon::Pause,
         Icon::Play,
         Icon::Dashed,
+        Icon::FitVisible,
+        Icon::ButtonField,
+        Icon::ImageField,
     ];
 
     #[test]

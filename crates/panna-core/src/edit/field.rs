@@ -25,7 +25,32 @@ pub(crate) fn value(field: &Field, value: &FieldValue) -> String {
         }
         FieldValue::State(Some(state)) => name(state),
         FieldValue::State(None) => "/Off".into(),
+        // Image fields keep no value; their picture is their appearance.
+        FieldValue::Picture(_) => "null".into(),
     }
+}
+
+/// The appearance of an image field `w` by `h` showing the picture `image` (`size` pixels),
+/// as large as fits and centred, as Acrobat lays out a button's icon.
+pub(crate) fn picture_appearance(w: f64, h: f64, size: (u32, u32), image: u32) -> Vec<u8> {
+    let (pw, ph) = (f64::from(size.0.max(1)), f64::from(size.1.max(1)));
+    let scale = (w / pw).min(h / ph);
+    let (sw, sh) = (pw * scale, ph * scale);
+    let body = format!(
+        "q {} 0 0 {} {} {} cm /Im0 Do Q",
+        n(sw),
+        n(sh),
+        n((w - sw) / 2.0),
+        n((h - sh) / 2.0)
+    );
+    format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 {} {}] /Resources << /XObject << /Im0 {image} 0 R >> >> \
+         /Length {} >>\nstream\n{body}\nendstream",
+        n(w),
+        n(h),
+        body.len()
+    )
+    .into_bytes()
 }
 
 /// A name object, with characters outside the regular set escaped as `#xx`.

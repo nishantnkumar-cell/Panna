@@ -54,7 +54,7 @@ pub use edit::{
 pub use export::{Export, ExportFormat};
 pub use formats::Format;
 pub use formdata::{DataFormat, export as export_form_data, import as import_form_data};
-pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
+pub use forms::{ButtonAction, ChoiceOption, Field, FieldKind, FieldValue, Widget};
 pub use labels::{LabelRange, LabelStyle, page_label};
 pub use layers::Layer;
 pub use limits::Limits;
