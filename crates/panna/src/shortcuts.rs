@@ -145,6 +145,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         Key::Named(Named::Enter) => Some(Message::EnterKey(false)),
         // F4 shows or hides the navigation pane, as in Acrobat.
         Key::Named(Named::F3) => Some(Message::Find(Event::Next)),
+        Key::Named(Named::F7) => Some(Message::Spelling(crate::spelling::Event::Open)),
         Key::Named(Named::F4) => Some(Message::Sidebar(crate::sidebar::Event::Toggle)),
         Key::Named(Named::F11) => Some(Message::ToggleFullScreen),
         // Left and Right turn pages; Up and Down scroll (and turn pages while presenting).

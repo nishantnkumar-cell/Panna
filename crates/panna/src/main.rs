@@ -50,6 +50,7 @@ mod sign;
 mod signatures;
 mod signing;
 mod speech;
+mod spelling;
 mod toolbar;
 mod tools;
 mod trust;
@@ -268,6 +269,8 @@ enum Message {
     Combine(combine::Event),
     /// The Search a folder card.
     FolderSearch(folder_search::Event),
+    /// The Check spelling card.
+    Spelling(spelling::Event),
     /// Opens `path` at `page` (or shows it, if open), searching it for `query`.
     OpenFoundAt {
         path: PathBuf,
@@ -691,6 +694,8 @@ struct App {
     /// The Search a folder card, while open; kept when closed so it opens as it was left.
     folder_search: Option<folder_search::FolderSearch>,
     folder_search_open: bool,
+    /// The Check spelling card, while open.
+    spelling: Option<spelling::Spelling>,
     /// A file being opened at a page other than the one it asks for.
     open_page: Option<(PathBuf, usize)>,
     /// The account's name, shown in Preferences as the name used when none is set.
@@ -1035,7 +1040,7 @@ fn properties_view<'a>(
 /// The keyboard shortcuts, in two columns.
 fn shortcuts_card<'a>() -> Element<'a, Message> {
     let m = icons::MOD;
-    let keys: [(String, &str); 37] = [
+    let keys: [(String, &str); 38] = [
         (format!("{m}O"), "Open"),
         (format!("{m}S"), "Save"),
         (format!("{m}Shift+S"), "Save as"),
@@ -1046,6 +1051,7 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
         (format!("{m}F, F3, Shift+F3"), "Find, next, previous"),
         (format!("{m}Shift+F"), "Search a folder of PDFs"),
         (format!("{m}4"), "Reflow the text to fit the window"),
+        ("F7".to_owned(), "Check spelling in comments and form fields"),
         (format!("{m}Z, {m}Y"), "Undo, redo"),
         (format!("{m}C"), "Copy"),
         (format!("{m}K"), "Preferences"),
@@ -1295,6 +1301,7 @@ impl App {
             folder_search: None,
             folder_search_open: false,
             open_page: None,
+            spelling: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -3997,6 +4004,56 @@ impl App {
                 }
                 self.open_page = Some((path, page));
                 open
+            }
+            Message::Spelling(spelling::Event::Open) => {
+                if self.doc.is_none() {
+                    return Task::none();
+                }
+                let mut sources: Vec<(spelling::Source, String)> = self
+                    .annotate
+                    .texts()
+                    .into_iter()
+                    .map(|(picked, page, text)| (spelling::Source::Comment(picked, page), text))
+                    .collect();
+                sources.extend(
+                    self.form
+                        .texts()
+                        .into_iter()
+                        .map(|(index, name, text)| (spelling::Source::Field(index, name), text)),
+                );
+                self.spelling = Some(spelling::Spelling::new(sources, &self.settings.words));
+                operation::focus(spelling::input_id())
+            }
+            Message::Spelling(event) => {
+                let Some(state) = self.spelling.take() else {
+                    return Task::none();
+                };
+                let (state, action) = state.update(event);
+                self.spelling = state;
+                match action {
+                    spelling::Action::Nothing => Task::none(),
+                    spelling::Action::AddWord(word) => {
+                        if !self.settings.words.contains(&word)
+                            && self.settings.words.len() < settings::MAX_WORDS
+                        {
+                            self.settings.words.push(word);
+                            self.settings.save();
+                        }
+                        Task::none()
+                    }
+                    spelling::Action::Replace(spelling::Source::Field(index, _), text) => {
+                        self.form.set_text(index, text);
+                        Task::none()
+                    }
+                    spelling::Action::Replace(spelling::Source::Comment(picked, _), text) => {
+                        let (outcome, now) = self.annotate.replace_text(picked, text);
+                        // A saved comment is now a new one: point the card at it.
+                        if let Some(state) = &mut self.spelling {
+                            state.renumber(picked, now);
+                        }
+                        self.after_annotate(outcome)
+                    }
+                }
             }
             Message::Combine(combine::Event::Open) => {
                 self.combining.get_or_insert_with(combine::Combining::default);
@@ -7225,6 +7282,12 @@ impl App {
                     on(Message::Find(find::Event::Open)),
                 ),
                 item(
+                    Icon::SpellCheck,
+                    "Check spelling…",
+                    "F7",
+                    on(Message::Spelling(spelling::Event::Open)),
+                ),
+                item(
                     Icon::FolderSearch,
                     "Search a folder of PDFs…",
                     k("Shift+F"),
@@ -7932,6 +7995,12 @@ impl App {
             dialogs.push(modal(
                 folder_search::card(state),
                 Message::FolderSearch(folder_search::Event::Close),
+            ));
+        }
+        if let Some(state) = &self.spelling {
+            dialogs.push(modal(
+                spelling::card(state),
+                Message::Spelling(spelling::Event::Close),
             ));
         }
         if let Some(state) = &self.combining {

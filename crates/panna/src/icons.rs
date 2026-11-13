@@ -165,6 +165,7 @@ pub enum Icon {
     FolderSearch,
     Reflow,
     Articles,
+    SpellCheck,
 }
 
 impl Icon {
@@ -325,6 +326,7 @@ impl Icon {
             Icon::FolderSearch => include_bytes!("../icons/folder-search.svg"),
             Icon::Reflow => include_bytes!("../icons/wrap-text.svg"),
             Icon::Articles => include_bytes!("../icons/newspaper.svg"),
+            Icon::SpellCheck => include_bytes!("../icons/spell-check.svg"),
         }
     }
 }
@@ -433,7 +435,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 155] = [
+    const ALL: [Icon; 156] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -589,6 +591,7 @@ mod tests {
         Icon::FolderSearch,
         Icon::Reflow,
         Icon::Articles,
+        Icon::SpellCheck,
     ];
 
     #[test]

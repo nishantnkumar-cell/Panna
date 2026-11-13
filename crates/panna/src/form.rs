@@ -64,6 +64,30 @@ impl std::fmt::Display for Choice {
 }
 
 impl Form {
+    /// Every text field's index, name and text, for checking spelling.
+    pub fn texts(&self) -> Vec<(usize, String, String)> {
+        self.fields
+            .iter()
+            .zip(&self.values)
+            .enumerate()
+            .filter(|(_, (f, _))| matches!(f.kind, FieldKind::Text { .. }) && !f.read_only)
+            .filter_map(|(i, (f, v))| match v {
+                FieldValue::Text(t) if !t.trim().is_empty() => Some((i, f.name.clone(), t.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Gives text field `index` new text, its editor too when it has several lines.
+    pub fn set_text(&mut self, index: usize, text: String) {
+        if let Some(editor) = self.editors.get_mut(&index) {
+            *editor = text_editor::Content::with_text(&text);
+        }
+        if let Some(value) = self.values.get_mut(index) {
+            *value = FieldValue::Text(text);
+        }
+    }
+
     /// Takes a newly opened (or just saved) document's fields.
     pub fn load(&mut self, fields: &[Field]) {
         self.fields = fields.to_vec();

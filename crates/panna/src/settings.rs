@@ -15,6 +15,8 @@ use crate::toolbar;
 /// Settings files bigger than this are ignored rather than parsed.
 const MAX_BYTES: u64 = 64 * 1024;
 const MAX_RECENT: usize = 10;
+/// Words kept in the personal spelling dictionary, at most.
+pub const MAX_WORDS: usize = 5_000;
 /// Longest name kept for comments.
 const MAX_AUTHOR: usize = 200;
 /// Longest wait between pages when presenting on a timer, in seconds.
@@ -45,6 +47,8 @@ pub struct Settings {
     pub redact: RedactLook,
     /// Most recently opened first.
     pub recent: Vec<PathBuf>,
+    /// Words added to the spelling dictionary, in lower case.
+    pub words: Vec<String>,
 }
 
 impl Default for Settings {
@@ -66,6 +70,7 @@ impl Default for Settings {
             present_seconds: 0,
             redact: RedactLook::default(),
             recent: Vec::new(),
+            words: Vec::new(),
         }
     }
 }
@@ -141,6 +146,12 @@ impl Settings {
                 }
                 "redact.repeat" => out.redact.repeat = value.trim() == "true",
                 "comments.author" => out.author = value.trim().chars().take(MAX_AUTHOR).collect(),
+                "spelling.word" if out.words.len() < MAX_WORDS => {
+                    let word = value.trim();
+                    if !word.is_empty() && word.chars().count() <= 64 && !word.contains(char::is_whitespace) {
+                        out.words.push(word.to_lowercase());
+                    }
+                }
                 // Paths keep their exact spelling, so no trimming.
                 "recent" if !value.is_empty() && out.recent.len() < MAX_RECENT => {
                     out.recent.push(PathBuf::from(value));
@@ -183,6 +194,9 @@ impl Settings {
         // A name with a line break can't be stored in this format.
         if !self.author.contains(['\n', '\r']) {
             out.push_str(&format!("comments.author={}\n", self.author));
+        }
+        for word in &self.words {
+            out.push_str(&format!("spelling.word={word}\n"));
         }
         // Paths that aren't UTF-8 or contain line breaks can't be stored in this format.
         for path in &self.recent {
@@ -273,6 +287,7 @@ mod tests {
                 repeat: true,
             },
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
+            words: vec!["panna".into(), "acrobat's".into()],
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

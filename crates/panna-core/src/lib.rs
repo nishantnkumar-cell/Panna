@@ -35,6 +35,7 @@ mod patterns;
 mod preflight;
 mod remote;
 mod sig;
+pub mod spell;
 mod text;
 mod view;
 mod worker;
