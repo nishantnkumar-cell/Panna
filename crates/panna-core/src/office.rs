@@ -24,7 +24,7 @@ pub(crate) enum Block {
 
 /// Lines joined into paragraphs: a line continues the one before when it's close below it,
 /// in about the same size of type.
-fn paragraphs(lines: &[Line]) -> Vec<Paragraph> {
+pub(crate) fn paragraphs(lines: &[Line]) -> Vec<Paragraph> {
     let mut out: Vec<Paragraph> = Vec::new();
     let mut prev: Option<&Line> = None;
     for line in lines {

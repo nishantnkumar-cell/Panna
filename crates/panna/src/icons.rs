@@ -163,6 +163,8 @@ pub enum Icon {
     NewWindow,
     Combine,
     FolderSearch,
+    Reflow,
+    Articles,
 }
 
 impl Icon {
@@ -321,6 +323,8 @@ impl Icon {
             Icon::NewWindow => include_bytes!("../icons/app-window.svg"),
             Icon::Combine => include_bytes!("../icons/combine.svg"),
             Icon::FolderSearch => include_bytes!("../icons/folder-search.svg"),
+            Icon::Reflow => include_bytes!("../icons/wrap-text.svg"),
+            Icon::Articles => include_bytes!("../icons/newspaper.svg"),
         }
     }
 }
@@ -429,7 +433,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 153] = [
+    const ALL: [Icon; 155] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -583,6 +587,8 @@ mod tests {
         Icon::NewWindow,
         Icon::Combine,
         Icon::FolderSearch,
+        Icon::Reflow,
+        Icon::Articles,
     ];
 
     #[test]

@@ -116,6 +116,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("1") => Some(Message::ZoomReset),
             Key::Character("2") => Some(Message::FitWidth),
             Key::Character("3") => Some(Message::FitVisible),
+            Key::Character("4") => Some(Message::ToggleReflow),
             Key::Character("r") => Some(Message::ToggleRulers),
             Key::Character("u") => Some(Message::ToggleGrid),
             Key::Character("f") => Some(Message::Find(Event::Open)),

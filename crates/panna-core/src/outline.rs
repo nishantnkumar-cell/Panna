@@ -39,6 +39,61 @@ impl OutlineItem {
     }
 }
 
+/// An article thread (Acrobat's Articles panel): a story that runs through boxes on several
+/// pages, read in order.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Article {
+    pub title: String,
+    /// The page of each box, in reading order.
+    pub pages: Vec<usize>,
+}
+
+/// Most articles read, and boxes read in one article.
+const MAX_ARTICLES: usize = 2_000;
+const MAX_BEADS: usize = 10_000;
+
+/// The document's article threads (the catalog's `/Threads`), each with its boxes' pages.
+pub(crate) fn articles(pdf: &Pdf) -> Vec<Article> {
+    let Some(ctx) = Ctx::new(pdf) else {
+        return Vec::new();
+    };
+    let Some(threads) = ctx.catalog.get::<Array<'_>>(b"Threads") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (n, thread) in threads.iter::<Dict<'_>>().take(MAX_ARTICLES).enumerate() {
+        let title = thread
+            .get::<Dict<'_>>(b"I")
+            .and_then(|info| info.get::<hayro::hayro_syntax::object::String<'_>>(b"Title"))
+            .map(|s| clean_title(&decode_text_string(s.as_bytes())))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| format!("Article {}", n + 1));
+        let mut pages = Vec::new();
+        let mut seen = HashSet::new();
+        let mut bead = thread.get::<Dict<'_>>(b"F");
+        while let Some(b) = bead {
+            // The beads go round in a ring, back to the first.
+            match b.obj_id() {
+                Some(id) if seen.insert(id) => {}
+                _ => break,
+            }
+            if pages.len() >= MAX_BEADS {
+                break;
+            }
+            let page = match b.get_raw::<Dict<'_>>(b"P") {
+                Some(MaybeRef::Ref(r)) => ctx.page_ids.get(&r.into()).copied(),
+                _ => None,
+            };
+            if let Some(page) = page {
+                pages.push(page);
+            }
+            bead = b.get::<Dict<'_>>(b"N");
+        }
+        out.push(Article { title, pages });
+    }
+    out
+}
+
 const MAX_ITEMS: usize = 20_000;
 const MAX_DEPTH: u16 = 48;
 /// Bound on name-tree nodes visited per lookup.

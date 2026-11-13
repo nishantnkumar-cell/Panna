@@ -549,7 +549,10 @@ fn pages_are_exported_as_text_and_pictures() {
     .unwrap();
     let page = std::fs::read_to_string(&html).unwrap();
     assert!(page.starts_with("<!DOCTYPE html>"), "{page}");
-    assert!(page.contains("<section id=\"page-2\">") && page.contains("Page 2"), "{page}");
+    assert!(
+        page.contains("<section id=\"page-2\">") && page.contains("Page 2"),
+        "{page}"
+    );
     let rtf = dir.join("out.rtf");
     run(Export {
         format: ExportFormat::Rtf,
@@ -558,7 +561,10 @@ fn pages_are_exported_as_text_and_pictures() {
     })
     .unwrap();
     let rich = std::fs::read_to_string(&rtf).unwrap();
-    assert!(rich.starts_with("{\\rtf1") && rich.contains("\\page") && rich.contains("Page 3"), "{rich}");
+    assert!(
+        rich.starts_with("{\\rtf1") && rich.contains("\\page") && rich.contains("Page 3"),
+        "{rich}"
+    );
     assert!(rich.ends_with('}'));
     let epub = dir.join("out.epub");
     run(Export {

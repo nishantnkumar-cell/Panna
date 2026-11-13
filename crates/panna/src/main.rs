@@ -39,6 +39,7 @@ mod print;
 mod protect;
 mod ranges;
 mod redact;
+mod reflow;
 mod scan;
 mod selection;
 mod settings;
@@ -331,6 +332,8 @@ enum Message {
     ToggleSplit,
     /// Opens the document in a second window, as Acrobat's Window › New Window.
     NewWindow,
+    /// Shows the text of a page at a time reflowed to fit the window, or goes back.
+    ToggleReflow,
     /// Shows or hides the loupe, which magnifies the page around the pointer.
     ToggleLoupe,
     LoupeMagnify(loupe::Magnify),
@@ -652,6 +655,10 @@ struct App {
     signing: Option<signing::Signing>,
     /// Rulers, grid and guides.
     guides: guides::Guides,
+    /// Reflow is on, showing this page.
+    reflow: Option<usize>,
+    /// The reflowed page's paragraphs: the document, the page, and its paragraphs once read.
+    reflowed: Option<reflow::Reflowed>,
     /// The loupe and the pan and zoom window are shown.
     loupe_on: bool,
     pan_zoom_on: bool,
@@ -1028,7 +1035,7 @@ fn properties_view<'a>(
 /// The keyboard shortcuts, in two columns.
 fn shortcuts_card<'a>() -> Element<'a, Message> {
     let m = icons::MOD;
-    let keys: [(String, &str); 36] = [
+    let keys: [(String, &str); 37] = [
         (format!("{m}O"), "Open"),
         (format!("{m}S"), "Save"),
         (format!("{m}Shift+S"), "Save as"),
@@ -1038,6 +1045,7 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
         (format!("{m}D"), "Document properties"),
         (format!("{m}F, F3, Shift+F3"), "Find, next, previous"),
         (format!("{m}Shift+F"), "Search a folder of PDFs"),
+        (format!("{m}4"), "Reflow the text to fit the window"),
         (format!("{m}Z, {m}Y"), "Undo, redo"),
         (format!("{m}C"), "Copy"),
         (format!("{m}K"), "Preferences"),
@@ -1266,6 +1274,8 @@ impl App {
             protecting: None,
             signing: None,
             guides: guides::Guides::default(),
+            reflow: None,
+            reflowed: None,
             loupe_on: false,
             pan_zoom_on: false,
             magnify: loupe::Magnify::default(),
@@ -1849,6 +1859,18 @@ impl App {
                     ),
                 ])
             }
+            Message::ToggleReflow => {
+                if let Some(page) = self.reflow.take() {
+                    self.reflowed = None;
+                    return self.go_to_page(page);
+                }
+                if self.doc.as_ref().is_none_or(|d| d.pages.is_empty()) {
+                    return Task::none();
+                }
+                let page = self.current_page();
+                self.reflow = Some(page);
+                self.refresh_reflow()
+            }
             Message::ToggleLoupe => {
                 self.loupe_on = !self.loupe_on;
                 Task::none()
@@ -2373,6 +2395,9 @@ impl App {
                 let text = result.unwrap_or_default();
                 self.find.add_page(index, &text);
                 slot.text = Some(text);
+                if self.reflow == Some(index) {
+                    let _ = self.refresh_reflow();
+                }
                 if self.reader.waiting_for() == Some(index) {
                     return self.go_on_reading();
                 }
@@ -6316,6 +6341,7 @@ impl App {
                 title: None,
                 properties: Vec::new(),
                 outline: Vec::new(),
+                articles: Vec::new(),
                 comments: Vec::new(),
                 fields: Vec::new(),
                 links: Vec::new(),
@@ -6493,7 +6519,43 @@ impl App {
         Task::batch([mode, self.go_to_page(page)])
     }
 
+    /// Reads the reflowed page's text, or makes its paragraphs from the text already read.
+    fn refresh_reflow(&mut self) -> Task<Message> {
+        let Some(page) = self.reflow else {
+            self.reflowed = None;
+            return Task::none();
+        };
+        let Some(doc) = &self.doc else { return Task::none() };
+        let id = doc.id;
+        if self
+            .reflowed
+            .as_ref()
+            .is_some_and(|(d, p, _)| *d == id && *p == page)
+        {
+            return Task::none();
+        }
+        match doc.texts.get(page).and_then(|t| t.text.clone()) {
+            Some(text) => {
+                self.reflowed = Some((id, page, Arc::new(text.reflowed())));
+                Task::none()
+            }
+            None => {
+                self.reflowed = None;
+                self.request_text(page..page + 1)
+            }
+        }
+    }
+
     fn step_page(&mut self, forward: bool) -> Task<Message> {
+        if let Some(page) = self.reflow {
+            let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+            let target = if forward {
+                (page + 1).min(count.saturating_sub(1))
+            } else {
+                page.saturating_sub(1)
+            };
+            return self.go_to_page(target);
+        }
         let page = self.current_page();
         let target = self.doc.as_ref().map_or(page, |d| d.layout.step(page, forward));
         self.go_to_page(target)
@@ -6601,6 +6663,10 @@ impl App {
         if doc.pages.is_empty() {
             return Task::none();
         }
+        if self.reflow.is_some() {
+            self.reflow = Some(index.min(doc.pages.len() - 1));
+            return self.refresh_reflow();
+        }
         let index = index.min(doc.pages.len() - 1);
         let y = doc.layout.page_top(index, self.zoom);
         // Going to another page is a new view: remember this one for Previous View.
@@ -6642,6 +6708,9 @@ impl App {
     }
 
     fn current_page(&self) -> usize {
+        if let Some(page) = self.reflow {
+            return page;
+        }
         self.doc.as_ref().map_or(0, |d| {
             d.layout
                 .page_at(self.viewport.offset_y + self.viewport.height * 0.3, self.zoom)
@@ -7248,6 +7317,7 @@ impl App {
                     item(Icon::FitPage, "Fit page", k("0"), on(Message::FitPage)),
                     item(Icon::FitHeight, "Fit height", "", on(Message::FitHeight)),
                     item(Icon::FitVisible, "Fit visible", k("3"), on(Message::FitVisible)),
+                    check("Reflow", k("4"), self.reflow.is_some(), on(Message::ToggleReflow)),
                     check("Loupe", "", self.loupe_on, on(Message::ToggleLoupe)),
                     check(
                         "Pan & zoom window",
@@ -7675,6 +7745,16 @@ impl App {
                 .align_x(Center),
             )
             .into(),
+            (Status::Idle, Some(doc)) if has_doc && self.reflow.is_some() => {
+                let page = self.reflow.unwrap_or_default();
+                let paragraphs = self
+                    .reflowed
+                    .as_ref()
+                    .filter(|(d, p, _)| *d == doc.id && *p == page)
+                    .map(|(_, _, paragraphs)| paragraphs.as_slice());
+                let pages = reflow::view(paragraphs, page, doc.pages.len(), self.zoom);
+                self.with_sidebar(doc, pages)
+            }
             (Status::Idle, Some(doc)) if has_doc => {
                 let pages = self.with_rulers(doc, self.pages_view(doc));
                 // The same column with or without the second pane, so the first keeps its
@@ -8259,6 +8339,7 @@ impl App {
                 signatures: &doc.info.signatures,
                 trusted: &self.trusted.certs,
                 layers: &doc.info.layers,
+                articles: &doc.info.articles,
                 layers_shown: &doc.layers_shown,
                 can_undo_pages: self.page_edits > 0,
                 pages_busy: self.pages_busy,

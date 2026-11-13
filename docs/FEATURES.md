@@ -153,6 +153,9 @@ work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-pr
 | Default PDF app on Windows and macOS, through an installer | Desktop | Done, unsigned: a Windows installer that registers Panna and opens Default apps at its entry, and a macOS disk image; the Mac app now opens files from Finder. The Linux menu entry already registers for PDFs |
 | Preferences window | Desktop | Done: Ctrl+, or All tools; your name on comments, light or dark, how documents open, the measuring unit, and making Panna the default PDF app |
 | Action Wizard: run the same steps (OCR, compress, watermark…) over a folder of PDFs | Batch | Done: Batch actions in All tools; OCR, watermark, page numbers, flatten, remove hidden information and make smaller, each file read in the locked-down process and saved under its own name |
+| Reflow view | View | Done: View › Reflow (Ctrl+4) shows a page's text as paragraphs that wrap to the window, headings in bold, larger or smaller with the zoom; the page buttons and keys step through pages |
+| Articles panel | View | Done: a document with article threads gets an Articles button in the sidebar, listing each article; its title goes to where it starts and each of its pages can be stepped through in reading order |
+| Combine many files in one step | Pages | Done: File › Combine files puts PDFs and pictures together in the order listed, with a bookmark for each file |
 
 ### 9.2 Future enhancements (after 1.0)
 

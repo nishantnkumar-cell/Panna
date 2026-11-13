@@ -62,7 +62,7 @@ pub use labels::{LabelRange, LabelStyle, page_label};
 pub use layers::Layer;
 pub use limits::Limits;
 pub use links::{Link, LinkTarget, safe_uri};
-pub use outline::OutlineItem;
+pub use outline::{Article, OutlineItem};
 pub use patterns::Pattern;
 pub use preflight::{Finding, Rule, Standard};
 pub use remote::Isolated;
