@@ -170,7 +170,7 @@ they're large for how often they're used. Each has a GitHub issue labelled
 | Touch and pen input | [#23](https://github.com/nishantnkumar-cell/Panna/issues/23) |
 | Rulers, grids and guides | Done: View › Rulers & grids. Rulers (Ctrl+R) along the top and left measure from the page under the pointer, in the measuring unit, with the pointer's place shown at the end of the top ruler. Grid (Ctrl+U) over every page, a line every quarter inch or half centimetre. Clicking a ruler adds a guide across every page there; clicking it again takes it away. Snap to grid and guides (Ctrl+Shift+U) makes comments, added text, form fields and measurements land on them ([#24](https://github.com/nishantnkumar-cell/Panna/issues/24)) |
 | Auto-scroll | [#25](https://github.com/nishantnkumar-cell/Panna/issues/25) |
-| Loupe and pan-and-zoom window | [#26](https://github.com/nishantnkumar-cell/Panna/issues/26) |
+| Loupe and pan-and-zoom window | Done: View › Loupe shows the page around the pointer magnified 2, 3, 4 or 8 times in a floating panel; View › Pan & zoom window shows the whole current page with a box for the part in the window, and clicking or dragging in it moves the view there ([#26](https://github.com/nishantnkumar-cell/Panna/issues/26)) |
 | Export to HTML, RTF and EPUB | [#27](https://github.com/nishantnkumar-cell/Panna/issues/27) |
 | Search across a folder of PDFs, with a saved index | [#28](https://github.com/nishantnkumar-cell/Panna/issues/28) |
 | Spell check in comments and form fields | [#29](https://github.com/nishantnkumar-cell/Panna/issues/29) |

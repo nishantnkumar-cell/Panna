@@ -25,6 +25,7 @@ mod initial;
 mod labels;
 mod layout;
 mod links;
+mod loupe;
 mod measure;
 mod menu;
 mod pages;
@@ -317,6 +318,14 @@ enum Message {
     ToggleSplit,
     /// Opens the document in a second window, as Acrobat's Window › New Window.
     NewWindow,
+    /// Shows or hides the loupe, which magnifies the page around the pointer.
+    ToggleLoupe,
+    LoupeMagnify(loupe::Magnify),
+    /// Shows or hides the pan and zoom window.
+    TogglePanZoom,
+    /// Moves the view so this point of the current page, as fractions across and down,
+    /// is in the middle of the window.
+    PanTo(f32, f32),
     ToggleRulers,
     ToggleGrid,
     ToggleSnap,
@@ -630,6 +639,10 @@ struct App {
     signing: Option<signing::Signing>,
     /// Rulers, grid and guides.
     guides: guides::Guides,
+    /// The loupe and the pan and zoom window are shown.
+    loupe_on: bool,
+    pan_zoom_on: bool,
+    magnify: loupe::Magnify,
     /// Choosing hidden information to remove.
     cleaning: Option<panna_core::Cleanup>,
     /// The Save a smaller copy card.
@@ -1232,6 +1245,9 @@ impl App {
             protecting: None,
             signing: None,
             guides: guides::Guides::default(),
+            loupe_on: false,
+            pan_zoom_on: false,
+            magnify: loupe::Magnify::default(),
             cleaning: None,
             shrinking: None,
             recognising: false,
@@ -1801,6 +1817,36 @@ impl App {
                             y: self.viewport.offset_y,
                         },
                     ),
+                ])
+            }
+            Message::ToggleLoupe => {
+                self.loupe_on = !self.loupe_on;
+                Task::none()
+            }
+            Message::LoupeMagnify(magnify) => {
+                self.magnify = magnify;
+                Task::none()
+            }
+            Message::TogglePanZoom => {
+                self.pan_zoom_on = !self.pan_zoom_on;
+                Task::none()
+            }
+            Message::PanTo(fx, fy) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = self.current_page();
+                let Some(size) = doc.layout.sizes().get(page).copied() else {
+                    return Task::none();
+                };
+                let content_w = doc.layout.content_width(self.zoom, self.viewport.width);
+                let left = doc.layout.page_left(page, self.zoom, content_w);
+                let top = doc.layout.page_top(page, self.zoom);
+                let x = (left + fx * size.width * self.zoom - self.viewport.width / 2.0).max(0.0);
+                let y = (top + fy * size.height * self.zoom - self.viewport.height / 2.0).max(0.0);
+                self.viewport.offset_x = x;
+                self.viewport.offset_y = y;
+                Task::batch([
+                    operation::scroll_to(scroll_id(), AbsoluteOffset { x, y }),
+                    self.request_visible(),
                 ])
             }
             Message::ToggleRulers => {
@@ -7091,6 +7137,13 @@ impl App {
                     item(Icon::FitPage, "Fit page", k("0"), on(Message::FitPage)),
                     item(Icon::FitHeight, "Fit height", "", on(Message::FitHeight)),
                     item(Icon::FitVisible, "Fit visible", k("3"), on(Message::FitVisible)),
+                    check("Loupe", "", self.loupe_on, on(Message::ToggleLoupe)),
+                    check(
+                        "Pan & zoom window",
+                        "",
+                        self.pan_zoom_on,
+                        on(Message::TogglePanZoom),
+                    ),
                     Separator,
                     sub(
                         Some(Icon::SinglePage),
@@ -7758,6 +7811,9 @@ impl App {
         if self.read_mode && has_doc {
             layers.push(self.read_mode_bar());
         }
+        if has_doc && (self.loupe_on || self.pan_zoom_on) {
+            layers.push(self.zoom_panels());
+        }
         if self.shortcuts {
             dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
         }
@@ -7794,6 +7850,59 @@ impl App {
             ));
         }
         Stack::with_children(layers).into()
+    }
+
+    /// The loupe and the pan and zoom window, floating at the bottom right.
+    fn zoom_panels(&self) -> Element<'_, Message> {
+        let mut panels = column![].spacing(8).align_x(iced::Right);
+        if let Some(doc) = &self.doc {
+            let sizes = doc.layout.sizes();
+            if self.loupe_on {
+                let (handle, shown, at) = match self.hover {
+                    Some((page, at)) => (
+                        doc.pages.get(page).and_then(|s| s.image.as_ref()),
+                        sizes.get(page).map_or(Size::ZERO, |s| {
+                            Size::new(s.width * self.zoom, s.height * self.zoom)
+                        }),
+                        at,
+                    ),
+                    None => (None, Size::ZERO, Point::ORIGIN),
+                };
+                panels = panels.push(opaque(loupe::loupe(handle, shown, at, self.magnify)));
+            }
+            if self.pan_zoom_on {
+                let page = self.current_page();
+                if let Some(size) = sizes.get(page).copied() {
+                    let content_w = doc.layout.content_width(self.zoom, self.viewport.width);
+                    let left = doc.layout.page_left(page, self.zoom, content_w);
+                    let top = doc.layout.page_top(page, self.zoom);
+                    let (w, h) = (
+                        (size.width * self.zoom).max(1.0),
+                        (size.height * self.zoom).max(1.0),
+                    );
+                    let visible = [
+                        (self.viewport.offset_x - left) / w,
+                        (self.viewport.offset_y - top) / h,
+                        (self.viewport.offset_x + self.viewport.width - left) / w,
+                        (self.viewport.offset_y + self.viewport.height - top) / h,
+                    ];
+                    let handle = doc.pages.get(page).and_then(|s| s.image.clone());
+                    panels = panels.push(opaque(loupe::pan_zoom(
+                        handle,
+                        Size::new(size.width, size.height),
+                        visible,
+                        self.zoom,
+                    )));
+                }
+            }
+        }
+        container(panels)
+            .width(Fill)
+            .height(Fill)
+            .padding(16)
+            .align_x(iced::Right)
+            .align_y(iced::Bottom)
+            .into()
     }
 
     /// Read mode's small bar at the bottom: pages, zoom, and leaving read mode.
@@ -8460,7 +8569,7 @@ fn set_window_mode(mode: window::Mode) -> Task<Message> {
 /// Page margins (top, right, bottom, left) turned clockwise by `rotation` quarter turns.
 fn shown_margins(margins: panna_core::Margins, rotation: u8) -> panna_core::Margins {
     let turns = usize::from(rotation % 4);
-    std::array::from_fn(|i| margins[(i + 4 - turns) % 4])
+    std::array::from_fn(|i| margins.get((i + 4 - turns) % 4).copied().unwrap_or_default())
 }
 
 fn rotated_sizes(pages: &[PageSize], rotation: u8) -> Vec<PageSize> {

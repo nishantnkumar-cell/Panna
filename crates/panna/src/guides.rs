@@ -185,13 +185,23 @@ impl canvas::Program<Message> for PageLines {
                 let mut i = 1u32;
                 while i as f32 * step < w && i < 10_000 {
                     let x = i as f32 * step;
-                    line(&mut frame, Point::new(x, 0.0), Point::new(x, h), i % every == 0);
+                    line(
+                        &mut frame,
+                        Point::new(x, 0.0),
+                        Point::new(x, h),
+                        i.is_multiple_of(every),
+                    );
                     i += 1;
                 }
                 let mut i = 1u32;
                 while i as f32 * step < h && i < 10_000 {
                     let y = i as f32 * step;
-                    line(&mut frame, Point::new(0.0, y), Point::new(w, y), i % every == 0);
+                    line(
+                        &mut frame,
+                        Point::new(0.0, y),
+                        Point::new(w, y),
+                        i.is_multiple_of(every),
+                    );
                     i += 1;
                 }
             }
