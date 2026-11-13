@@ -22,6 +22,8 @@ arboard = { version = "3", default-features = false, features = ["image-data", "
 # Drawing signatures and initials into pictures.
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 ab_glyph = "0.2"
+# Recording and playing audio comments.
+cpal = "0.18"
 # Locks down the process that draws pages.
 panna-sandbox = { path = "../panna-sandbox", version = "0.1.0" }
 

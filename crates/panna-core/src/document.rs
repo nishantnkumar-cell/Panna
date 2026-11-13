@@ -1335,6 +1335,23 @@ impl Document {
         })
     }
 
+    /// The sound of a spoken comment, by its sound stream.
+    pub fn sound(&self, stream: crate::ObjRef) -> Option<crate::Sound> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let id = hayro::hayro_syntax::object::ObjectIdentifier::new(
+                stream.number,
+                i32::from(stream.generation),
+            );
+            let stream = self
+                .pdf
+                .xref()
+                .get::<hayro::hayro_syntax::object::Stream<'_>>(id)?;
+            crate::edit::decode_sound(&stream)
+        }))
+        .ok()
+        .flatten()
+    }
+
     /// The contents of attached file `index` (in [`DocumentInfo::attachments`]).
     pub fn attachment(&self, index: usize) -> Option<Vec<u8>> {
         // An attachment may be as large as a file Panna would open, but no larger.

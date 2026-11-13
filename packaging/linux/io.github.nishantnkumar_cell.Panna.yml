@@ -20,6 +20,8 @@ finish-args:
   - --share=ipc
   # GPU rendering.
   - --device=dri
+  # Recording and playing spoken comments (PulseAudio, or PipeWire's stand-in for it).
+  - --socket=pulseaudio
   # Deliberately absent: --share=network (the app is offline by design) and any
   # --filesystem access. Files are opened through the XDG document portal, so the app
   # only ever sees the files you pick or drop on it.

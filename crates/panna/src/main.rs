@@ -6,6 +6,7 @@
 
 mod add;
 mod annotate;
+mod audio;
 mod batch;
 mod bookmarks;
 mod certstore;
@@ -260,6 +261,18 @@ enum Message {
     AttachFile,
     AttachFileChosen(Option<PathBuf>),
     AttachFileLoaded(Result<panna_core::AttachedFile, String>),
+    /// Starts recording a spoken comment where the Record tool was clicked.
+    RecordStart,
+    /// Stops recording, and adds the comment.
+    RecordStop,
+    RecordCancel,
+    /// Time passing while recording or playing.
+    AudioTick,
+    /// Plays a spoken comment, or stops it if it's the one playing; the number tells
+    /// comments apart.
+    PlaySound(u64, panna_core::Recording),
+    SoundLoaded(u64, Option<panna_core::Sound>),
+    StopSound,
     StampPictureLoaded(Result<(panna_core::StampImage, String), String>),
     /// Prints the document with its unsaved changes (Ctrl+P).
     Print,
@@ -710,6 +723,9 @@ struct App {
     ordering: Option<order::Ordering>,
     /// The Output preview panel, while open.
     output: Option<output::OutputPreview>,
+    /// A spoken comment being recorded, and one playing.
+    recorder: Option<audio::Recorder>,
+    player: Option<audio::Player>,
     /// The Check spelling card, while open.
     spelling: Option<spelling::Spelling>,
     /// A file being opened at a page other than the one it asks for.
@@ -1320,6 +1336,8 @@ impl App {
             spelling: None,
             ordering: None,
             output: None,
+            recorder: None,
+            player: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -1410,6 +1428,9 @@ impl App {
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
         if self.auto_scroll {
             subs.push(window::frames().map(|_| Message::AutoScrollTick));
+        }
+        if self.recorder.is_some() || self.player.is_some() {
+            subs.push(Subscription::run(audio::ticks).map(|()| Message::AudioTick));
         }
         if matches!(self.screen, Screen::Present { .. }) && self.settings.present_seconds > 0 {
             subs.push(window::frames().map(Message::PresentTick));
@@ -3627,6 +3648,9 @@ impl App {
                     if self.annotate.attaching.is_some() {
                         return self.update(Message::AttachFile);
                     }
+                    if self.annotate.recording.is_some() {
+                        return self.update(Message::RecordStart);
+                    }
                     return self.after_annotate(outcome);
                 }
                 if !self.selecting {
@@ -4772,6 +4796,88 @@ impl App {
                         result.unwrap_or_else(|_| Err("The file couldn't be read.".into())),
                     )
                 })
+            }
+            Message::RecordStart => {
+                self.player = None;
+                match audio::Recorder::start() {
+                    Ok(recorder) => self.recorder = Some(recorder),
+                    Err(e) => {
+                        self.annotate.update(annotate::Event::Recorded(None));
+                        self.notice = Some(e);
+                    }
+                }
+                Task::none()
+            }
+            Message::RecordCancel => {
+                if let Some(recorder) = self.recorder.take() {
+                    let _ = recorder.finish();
+                }
+                self.annotate.update(annotate::Event::Recorded(None));
+                Task::none()
+            }
+            Message::RecordStop => {
+                let Some(recorder) = self.recorder.take() else {
+                    return Task::none();
+                };
+                match recorder
+                    .finish()
+                    .and_then(|sound| panna_core::Recording::new(&sound))
+                {
+                    Ok(recording) => {
+                        self.update(Message::Annotate(annotate::Event::Recorded(Some(recording))))
+                    }
+                    Err(e) => {
+                        self.annotate.update(annotate::Event::Recorded(None));
+                        self.notice = Some(e);
+                        Task::none()
+                    }
+                }
+            }
+            Message::AudioTick => {
+                if self.player.as_ref().is_some_and(audio::Player::finished) {
+                    self.player = None;
+                }
+                if self
+                    .recorder
+                    .as_ref()
+                    .is_some_and(|r| r.elapsed().as_secs() >= u64::from(panna_core::MAX_SOUND_SECONDS))
+                {
+                    return self.update(Message::RecordStop);
+                }
+                Task::none()
+            }
+            Message::PlaySound(what, recording) => {
+                let same = self.player.as_ref().is_some_and(|p| p.what == what);
+                self.player = None;
+                if same || self.recorder.is_some() {
+                    return Task::none();
+                }
+                if let Some(sound) = recording.sound() {
+                    return self.update(Message::SoundLoaded(what, Some(sound)));
+                }
+                let (Some(doc), Some(stream)) = (&self.doc, recording.saved_stream()) else {
+                    return Task::none();
+                };
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.sound(stream, move |sound| {
+                    let _ = tx.send(sound);
+                });
+                Task::perform(rx, move |sound| Message::SoundLoaded(what, sound.ok().flatten()))
+            }
+            Message::SoundLoaded(_, None) => {
+                self.notice = Some("This sound couldn't be read.".into());
+                Task::none()
+            }
+            Message::SoundLoaded(what, Some(sound)) => {
+                match audio::Player::start(sound, what) {
+                    Ok(player) => self.player = Some(player),
+                    Err(e) => self.notice = Some(e),
+                }
+                Task::none()
+            }
+            Message::StopSound => {
+                self.player = None;
+                Task::none()
             }
             Message::AttachFileLoaded(Err(e)) => {
                 self.annotate.update(annotate::Event::Attach(None));
@@ -7711,6 +7817,7 @@ impl App {
                     tool(Tool::TextBox),
                     tool(Tool::Callout),
                     tool(Tool::Attach),
+                    tool(Tool::Record),
                     tool(Tool::Pen),
                     tool(Tool::Eraser),
                     sub(
@@ -8276,6 +8383,33 @@ impl App {
         if has_doc && (self.loupe_on || self.pan_zoom_on) {
             layers.push(self.zoom_panels());
         }
+        if let Some(player) = &self.player {
+            let bar = container(
+                row![
+                    icons::glyph::<Message>(Icon::ReadAloud, true),
+                    text(format!(
+                        "Playing {} of {}",
+                        audio::clock(player.elapsed().as_secs_f32().min(player.seconds)),
+                        audio::clock(player.seconds)
+                    ))
+                    .size(13),
+                    icons::button(Icon::StopReading, "Stop playing", Some(Message::StopSound)),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+            )
+            .padding([4, 10])
+            .style(container::rounded_box);
+            layers.push(
+                container(opaque(bar))
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(iced::Center)
+                    .align_y(iced::Bottom)
+                    .into(),
+            );
+        }
         if has_doc && (self.ordering.is_some() || self.output.is_some()) {
             let mut panels = column![].spacing(8).align_x(iced::Right);
             if let Some(state) = &self.ordering {
@@ -8296,6 +8430,41 @@ impl App {
         }
         if self.shortcuts {
             dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
+        }
+        if let Some(recorder) = &self.recorder {
+            let card = container(
+                column![
+                    row![
+                        icons::glyph::<Message>(Icon::Mic, true),
+                        text(format!(
+                            "Recording… {}",
+                            audio::clock(recorder.elapsed().as_secs_f32())
+                        ))
+                        .size(16),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Center),
+                    text(format!(
+                        "Speak now. The recording becomes a comment where you clicked, and stops \
+                         by itself after {} minutes.",
+                        panna_core::MAX_SOUND_SECONDS / 60
+                    ))
+                    .size(13),
+                    row![
+                        space::horizontal(),
+                        button("Cancel")
+                            .style(button::secondary)
+                            .on_press(Message::RecordCancel),
+                        button("Stop and add").on_press(Message::RecordStop),
+                    ]
+                    .spacing(8),
+                ]
+                .spacing(10)
+                .width(360),
+            )
+            .padding(16)
+            .style(container::rounded_box);
+            dialogs.push(modal(card.into(), Message::RecordCancel));
         }
         let body: Element<'_, Message> = Stack::with_children(layers).into();
 

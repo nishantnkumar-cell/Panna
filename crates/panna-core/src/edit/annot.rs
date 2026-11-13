@@ -120,6 +120,12 @@ pub enum Kind {
         y: f32,
         file: super::AttachedFile,
     },
+    /// A spoken comment, shown as a speaker with its top-left corner at (x, y).
+    Sound {
+        x: f32,
+        y: f32,
+        sound: super::Recording,
+    },
     /// Freehand strokes.
     Ink(Vec<Vec<(f32, f32)>>),
     Rect(TextBox),
@@ -241,7 +247,7 @@ impl Annotation {
             Kind::Highlight(boxes) | Kind::Underline(boxes) | Kind::StrikeOut(boxes) => {
                 boxes.iter_mut().for_each(shift);
             }
-            Kind::Note { x, y } | Kind::File { x, y, .. } => {
+            Kind::Note { x, y } | Kind::File { x, y, .. } | Kind::Sound { x, y, .. } => {
                 *x += dx;
                 *y += dy;
             }
@@ -307,6 +313,7 @@ impl Annotation {
             | Kind::StrikeOut(_)
             | Kind::Note { .. }
             | Kind::File { .. }
+            | Kind::Sound { .. }
             | Kind::Caret { .. }
             | Kind::Reply { .. } => {}
             Kind::FreeText { rect, pointer, .. } => {
@@ -469,6 +476,41 @@ impl Annotation {
                 let _ = write!(extra, "/FS {spec} /Name /Paperclip ");
                 let _ = file;
                 "FileAttachment"
+            }
+            Kind::Sound { x, y, sound } => {
+                let [x0, y0, x1, y1] = user_box(&TextBox {
+                    x0: *x,
+                    y0: *y,
+                    x1: x + NOTE_SIZE,
+                    y1: y + NOTE_SIZE,
+                });
+                bounds.add(x0, y0);
+                bounds.add(x1, y1);
+                // A speaker: a box and a cone, and two waves.
+                let (w, h) = (x1 - x0, y1 - y0);
+                let p = |fx: f64, fy: f64| format!("{} {}", n(x0 + w * fx), n(y0 + h * fy));
+                let _ = write!(
+                    content,
+                    "{color} rg {color} RG 1.4 w 1 J 1 j {} m {} l {} l {} l {} l {} l h f \
+                     {} m {} {} {} c S {} m {} {} {} c S ",
+                    p(0.08, 0.38),
+                    p(0.28, 0.38),
+                    p(0.52, 0.15),
+                    p(0.52, 0.85),
+                    p(0.28, 0.62),
+                    p(0.08, 0.62),
+                    p(0.66, 0.36),
+                    p(0.74, 0.44),
+                    p(0.74, 0.56),
+                    p(0.66, 0.64),
+                    p(0.76, 0.22),
+                    p(0.94, 0.38),
+                    p(0.94, 0.62),
+                    p(0.76, 0.78),
+                );
+                let reference = sound.reference(image_ref);
+                let _ = write!(extra, "/Sound {reference} /Name /Speaker ");
+                "Sound"
             }
             Kind::Note { x, y } => {
                 let [x0, y0, x1, y1] = user_box(&TextBox {

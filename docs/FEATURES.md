@@ -156,6 +156,7 @@ work still to do is in [THREAT_MODEL.md § 7](THREAT_MODEL.md#7-open-items-in-pr
 | Reflow view | View | Done: View › Reflow (Ctrl+4) shows a page's text as paragraphs that wrap to the window, headings in bold, larger or smaller with the zoom; the page buttons and keys step through pages |
 | Articles panel | View | Done: a document with article threads gets an Articles button in the sidebar, listing each article; its title goes to where it starts and each of its pages can be stepped through in reading order |
 | Combine many files in one step | Pages | Done: File › Combine files puts PDFs and pictures together in the order listed, with a bookmark for each file |
+| Record audio comments | Comments | Done: Comment › Record audio, then click where the speaker goes and speak; the recording (from the system's default microphone, up to ten minutes) is saved in the PDF as a sound comment, as Acrobat does. Sound comments, Panna's or another app's, play from the play button beside them in the Comments list |
 
 ### 9.2 Future enhancements (after 1.0)
 
@@ -169,7 +170,7 @@ they're large for how often they're used. Each has a GitHub issue labelled
 | Page thumbnails and previews in Windows Explorer and macOS Finder | [#19](https://github.com/nishantnkumar-cell/Panna/issues/19) |
 | Interface translations and right-to-left languages | [#20](https://github.com/nishantnkumar-cell/Panna/issues/20) |
 | PDF Portfolios | [#21](https://github.com/nishantnkumar-cell/Panna/issues/21) |
-| Embedded video, audio and 3D models | [#22](https://github.com/nishantnkumar-cell/Panna/issues/22) |
+| Embedded video, audio and 3D models | Sound comments play (see Record audio comments); video, other audio and 3D models still to do ([#22](https://github.com/nishantnkumar-cell/Panna/issues/22)) |
 | Touch and pen input | [#23](https://github.com/nishantnkumar-cell/Panna/issues/23) |
 | Rulers, grids and guides | Done: View › Rulers & grids. Rulers (Ctrl+R) along the top and left measure from the page under the pointer, in the measuring unit, with the pointer's place shown at the end of the top ruler. Grid (Ctrl+U) over every page, a line every quarter inch or half centimetre. Clicking a ruler adds a guide across every page there; clicking it again takes it away. Snap to grid and guides (Ctrl+Shift+U) makes comments, added text, form fields and measurements land on them ([#24](https://github.com/nishantnkumar-cell/Panna/issues/24)) |
 | Auto-scroll | [#25](https://github.com/nishantnkumar-cell/Panna/issues/25) |

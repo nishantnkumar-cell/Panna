@@ -18,6 +18,7 @@ type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type SoundReply = Box<dyn FnOnce(Option<crate::Sound>) + Send>;
 type SplitReply = Box<dyn FnOnce(Result<usize, SaveError>) + Send>;
 
 /// Splitting pages into files of at most a size.
@@ -177,6 +178,7 @@ enum Reply {
     SplitBySize(SizeSplit, SplitReply),
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
+    Sound(crate::ObjRef, SoundReply),
     Print(bool, PrintReply),
     CommentSummary(PathBuf, String, ExtractReply),
     /// Writes a smaller copy of the document.
@@ -359,6 +361,15 @@ impl RenderWorker {
                 },
                 Box::new(reply),
             ),
+        });
+    }
+
+    /// The sound of a spoken comment already in the document, by its stream.
+    pub fn sound(&self, stream: crate::ObjRef, reply: impl FnOnce(Option<crate::Sound>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Sound(stream, Box::new(reply)),
         });
     }
 
@@ -990,6 +1001,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                             .try_for_each(|(path, bytes)| write_atomically(path, bytes))
                     }));
                 }
+                Reply::Sound(stream, reply) => reply(ask!(Op::Sound(stream), Sound)),
                 Reply::Attachment(index, path, reply) => {
                     reply(
                         ask!(Op::Attachment(index), Bytes).and_then(|bytes| write_atomically(&path, &bytes)),

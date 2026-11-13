@@ -4,6 +4,9 @@ pub(crate) mod annot;
 mod convert;
 pub(crate) mod crypt;
 mod field;
+mod sound;
+pub use sound::{MAX_SOUND_SECONDS, Recording, Sound};
+pub(crate) use sound::{decode as decode_sound, seconds as sound_seconds};
 mod hairlines;
 pub use hairlines::HAIRLINE;
 pub(crate) use hairlines::{fix as fix_hairlines, spot_inks, thin_lines};
@@ -278,6 +281,15 @@ pub(crate) fn apply(
                         Some(format!("{spec_id} 0 R"))
                     }
                     None => Some(file.spec(None)),
+                },
+                // A new recording is a sound stream of its own.
+                Kind::Sound { sound, .. } => match sound.stream() {
+                    Some(body) => {
+                        let stream_id = out.alloc();
+                        out.put(stream_id, 0, body)?;
+                        Some(format!("{stream_id} 0 R"))
+                    }
+                    None => None,
                 },
                 _ => None,
             };

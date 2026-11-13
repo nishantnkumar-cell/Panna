@@ -56,6 +56,7 @@ pub use edit::{
     Watermark, blank_pdf, fill_header_footer, pictures_to_pdf, rgba_to_pdf, stamp_label, text_width, today,
     wrap,
 };
+pub use edit::{MAX_SOUND_SECONDS, Recording, Sound};
 pub use export::{Export, ExportFormat};
 pub use formats::Format;
 pub use formdata::{DataFormat, export as export_form_data, import as import_form_data};

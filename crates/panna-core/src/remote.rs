@@ -86,6 +86,8 @@ pub(crate) enum Op {
     /// Compared with another file's bytes.
     Compare(Vec<u8>),
     Attachment(usize),
+    /// A spoken comment's sound, by its stream.
+    Sound(ObjRef),
     Rearranged(Vec<PageSource>),
     /// Of the document as shown.
     Export(Export),
@@ -133,6 +135,7 @@ pub(crate) enum Answer {
     Archived(Result<(Vec<u8>, Vec<Finding>), SaveError>),
     Tagged(Result<(Vec<u8>, Vec<AccessFinding>), SaveError>),
     Order(crate::ReadingOrder),
+    Sound(Option<crate::Sound>),
     /// The new bytes, and how many lines changed.
     Thickened(Result<(Vec<u8>, usize), SaveError>),
     Annotations(Result<(Vec<Annotation>, usize), String>),
@@ -176,6 +179,7 @@ impl Op {
             Self::Tagged | Self::Described(_) | Self::Reordered(_) => Answer::Tagged(Err(save)),
             Self::ReadingOrder => Answer::Order(crate::ReadingOrder::default()),
             Self::Hairlines(_) => Answer::Thickened(Err(save)),
+            Self::Sound(_) => Answer::Sound(None),
             Self::CommentsFromFile(_) => Answer::Annotations(Err(message())),
             Self::Compare(_) => Answer::Changes(Err(message())),
             Self::InsertFile { .. } | Self::ReplaceFromFile { .. } | Self::Edit(_) | Self::WithChanges(_) => {
@@ -279,6 +283,7 @@ pub(crate) fn perform<'a>(
             }
             Err(e) => Err(format!("That file couldn't be opened: {e}")),
         }),
+        Op::Sound(stream) => Answer::Sound(doc.sound(stream)),
         Op::Attachment(index) => Answer::Bytes(
             doc.attachment(index)
                 .ok_or_else(|| SaveError::Io("the attached file couldn't be read".into())),
