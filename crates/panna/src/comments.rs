@@ -178,6 +178,7 @@ fn icon(kind: &CommentKind) -> Icon {
         CommentKind::TextBox => Icon::TextBox,
         CommentKind::Callout => Icon::Callout,
         CommentKind::File => Icon::Paperclip,
+        CommentKind::Sound => Icon::ReadAloud,
         CommentKind::Ink => Icon::Pen,
         CommentKind::Rect => Icon::Square,
         CommentKind::Ellipse => Icon::Circle,
@@ -217,12 +218,14 @@ pub fn panel<'a>(
         .cloned()
         .map(|c| (c, None))
         .collect();
-    entries.extend(
-        unsaved
-            .iter()
-            .enumerate()
-            .map(|(i, a)| (Comment::from(a), Some(i))),
-    );
+    entries.extend(unsaved.iter().enumerate().map(|(i, a)| {
+        let mut comment = Comment::from(a);
+        // A new spoken comment can be played before it's saved.
+        if matches!(a.kind, panna_core::Kind::Sound { .. }) {
+            comment.editable = Some(a.clone());
+        }
+        (comment, Some(i))
+    }));
     let (replies, entries): (Vec<_>, Vec<_>) = entries.into_iter().partition(|(c, _)| c.reply_to.is_some());
     if entries.is_empty() {
         return container(
@@ -450,6 +453,25 @@ fn entry<'a>(
         (None, Some(id)) if comment.editable.is_some() => Some(annotate::Picked::Saved(id)),
         _ => None,
     };
+    if let Some(Annotation {
+        kind: panna_core::Kind::Sound { sound, .. },
+        ..
+    }) = &comment.editable
+    {
+        // Comments told apart by their place in the list or in the file.
+        let what = match (unsaved, comment.id) {
+            (Some(index), _) => index as u64,
+            (None, Some(id)) => {
+                (1 << 40) | (u64::from(id.annot.number) << 16) | u64::from(id.annot.generation)
+            }
+            _ => u64::MAX,
+        };
+        heading = heading.push(icons::button(
+            Icon::Play,
+            format!("Play or stop ({})", crate::audio::clock(sound.seconds.max(1.0))),
+            Some(Message::PlaySound(what, sound.clone())),
+        ));
+    }
     if let Some(event) = delete_event(&comment, unsaved) {
         heading = heading.push(icons::button(
             Icon::Delete,
