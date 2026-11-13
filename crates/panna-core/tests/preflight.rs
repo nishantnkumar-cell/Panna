@@ -175,3 +175,41 @@ fn pdf_x_asks_for_a_printing_condition_and_trim_boxes() {
     // The same file isn't PDF/A.
     assert!(!doc.preflight().is_empty());
 }
+
+#[test]
+fn thin_lines_are_found_and_widened_and_spot_inks_listed() {
+    let bytes = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
+             /Resources << /XObject << /X1 5 0 R >> \
+             /ColorSpace << /CS0 [/Separation /PANTONE#20185#20C /DeviceCMYK 6 0 R] >> >> >>",
+            &stream("", "q 0 w 0 0 m 100 100 l S 1 w 0 100 m 100 0 l S /X1 Do Q"),
+            &stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 50 50]",
+                "0.1 w 0 0 m 50 50 l S",
+            ),
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 1 1 0] /N 1 >>",
+        ],
+        "/ID [<00> <00>]",
+    );
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    let thin: Vec<_> = doc
+        .preflight_x()
+        .into_iter()
+        .filter(|f| f.rule == Rule::ThinLines)
+        .collect();
+    assert_eq!(thin.len(), 1);
+    assert_eq!(thin[0].page, Some(0));
+    assert_eq!(thin[0].detail, "2 lines thinner than 0.25 pt");
+    assert_eq!(doc.info().unwrap().inks, ["PANTONE 185 C"]);
+
+    let (fixed, count) = doc.without_hairlines(panna_core::HAIRLINE).unwrap();
+    assert_eq!(count, 2);
+    let fixed = Document::from_bytes(fixed, None, Limits::default()).unwrap();
+    assert!(fixed.preflight_x().iter().all(|f| f.rule != Rule::ThinLines));
+    // Still draws.
+    let cache = fixed.new_cache();
+    assert!(fixed.render_page(&cache, 0, 1.0).is_ok());
+}

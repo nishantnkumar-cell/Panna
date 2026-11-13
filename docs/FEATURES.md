@@ -165,7 +165,7 @@ they're large for how often they're used. Each has a GitHub issue labelled
 
 | Feature | Issue |
 |---|---|
-| Print production tools: output preview, colour separations, ink coverage, fix hairlines | [#18](https://github.com/nishantnkumar-cell/Panna/issues/18) |
+| Print production tools: output preview, colour separations, ink coverage, fix hairlines | Done: Tools › Output preview shows the current page as printed with any of the four process inks turned off, how much of the page each ink covers, the inks under the pointer, and where the inks together pass a chosen limit, marked in green; the spot inks the document uses are listed. The inks are estimated from the colours on screen, without the printer's colour profile, and spot inks can't be shown as plates of their own. Check for PDF/X now lists lines thinner than 0.25 pt, and saves a copy with them widened to 0.25 pt, on the pages and in the drawings they use ([#18](https://github.com/nishantnkumar-cell/Panna/issues/18)) |
 | Page thumbnails and previews in Windows Explorer and macOS Finder | [#19](https://github.com/nishantnkumar-cell/Panna/issues/19) |
 | Interface translations and right-to-left languages | [#20](https://github.com/nishantnkumar-cell/Panna/issues/20) |
 | PDF Portfolios | [#21](https://github.com/nishantnkumar-cell/Panna/issues/21) |

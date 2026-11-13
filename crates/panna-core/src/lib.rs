@@ -49,7 +49,7 @@ pub use document::{
     Document, DocumentInfo, Leftovers, OpenError, PageSize, RedactLook, RenderError, RenderedPage,
 };
 pub use edit::{
-    Addition, Annotation, AttachedFile, Changes, Cleanup, Color, Corner, ExistingMarks, FontFamily,
+    Addition, Annotation, AttachedFile, Changes, Cleanup, Color, Corner, ExistingMarks, FontFamily, HAIRLINE,
     HeaderFooter, Kind, LINE_HEIGHT, LineEnd, MAX_ATTACHMENT_BYTES, MAX_BLANK_PAGES, MAX_PICTURES, Margins,
     NOTE_SIZE, NewField, NewFieldKind, ORDER_ROLES, OrderItem, PageSource, PictureChange, Protection,
     RadioButton, ReadingOrder, STAMPS, SaveError, SignOptions, StampImage, TextAlign, TextFont, Visible,

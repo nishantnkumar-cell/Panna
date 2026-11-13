@@ -4,6 +4,9 @@ pub(crate) mod annot;
 mod convert;
 pub(crate) mod crypt;
 mod field;
+mod hairlines;
+pub use hairlines::HAIRLINE;
+pub(crate) use hairlines::{fix as fix_hairlines, spot_inks, thin_lines};
 mod labels;
 pub(crate) mod lex;
 mod marks;
@@ -109,6 +112,8 @@ pub enum SaveError {
     Recognition(String),
     /// Another file to take pages from couldn't be used, and why, as a sentence.
     OtherFile(String),
+    /// Changing the lines of password-protected files isn't supported.
+    LinesProtected,
 }
 
 impl fmt::Display for SaveError {
@@ -153,6 +158,11 @@ impl fmt::Display for SaveError {
                  from Password protection in All tools."
             ),
             Self::AlreadyTagged => write!(f, "This PDF has tags already."),
+            Self::LinesProtected => write!(
+                f,
+                "Panna can't change the lines in a password-protected PDF. Remove the protection \
+                 first, from Password protection in All tools."
+            ),
             Self::NothingRecognised(true) => write!(
                 f,
                 "These pages have text already, so there's nothing to recognise."

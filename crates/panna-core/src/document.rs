@@ -32,6 +32,9 @@ pub struct DocumentInfo {
     /// Article threads, for the Articles panel.
     #[serde(default)]
     pub articles: Vec<crate::Article>,
+    /// Spot inks the pages use, beyond the four process inks, for the output preview.
+    #[serde(default)]
+    pub inks: Vec<String>,
     /// Comments already in the file, in page order.
     pub comments: Vec<crate::Comment>,
     /// The form's fields, if it has a form.
@@ -461,6 +464,8 @@ impl Document {
                 properties: properties.into_iter().map(|(l, v)| (l.into(), v)).collect(),
                 outline,
                 articles: catch_unwind(AssertUnwindSafe(|| crate::outline::articles(&self.pdf)))
+                    .unwrap_or_default(),
+                inks: catch_unwind(AssertUnwindSafe(|| crate::edit::spot_inks(&self.pdf)))
                     .unwrap_or_default(),
                 comments,
             }
@@ -938,6 +943,15 @@ impl Document {
     pub fn tagged(&self) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| crate::edit::tag(&self.pdf, &self.bytes)))
             .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The document with every line thinner than `min` points made `min` wide, and how many
+    /// lines were changed.
+    pub fn without_hairlines(&self, min: f32) -> Result<(Vec<u8>, usize), crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::fix_hairlines(&self.pdf, &self.bytes, min)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
     /// The tagged document's reading order (see [`crate::ReadingOrder`]).

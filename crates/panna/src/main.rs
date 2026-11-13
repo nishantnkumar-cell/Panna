@@ -31,6 +31,7 @@ mod loupe;
 mod measure;
 mod menu;
 mod order;
+mod output;
 mod pages;
 mod pictures;
 mod preferences;
@@ -274,6 +275,8 @@ enum Message {
     Spelling(spelling::Event),
     /// The Reading order panel.
     Order(order::Event),
+    /// The Output preview panel.
+    Output(output::Event),
     /// Opens `path` at `page` (or shows it, if open), searching it for `query`.
     OpenFoundAt {
         path: PathBuf,
@@ -458,6 +461,12 @@ enum Message {
     },
     ArchiveTo(Option<PathBuf>),
     TagTo(Option<PathBuf>),
+    FixLinesTo(Option<PathBuf>),
+    LinesFixed {
+        doc: u64,
+        path: PathBuf,
+        result: Result<usize, SaveError>,
+    },
     Tagged {
         doc: u64,
         name: String,
@@ -699,6 +708,8 @@ struct App {
     folder_search_open: bool,
     /// The Reading order panel, while open.
     ordering: Option<order::Ordering>,
+    /// The Output preview panel, while open.
+    output: Option<output::OutputPreview>,
     /// The Check spelling card, while open.
     spelling: Option<spelling::Spelling>,
     /// A file being opened at a page other than the one it asks for.
@@ -1308,6 +1319,7 @@ impl App {
             open_page: None,
             spelling: None,
             ordering: None,
+            output: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -3037,6 +3049,63 @@ impl App {
                     Message::TagTo,
                 )
             }
+            Message::Preflight(preflight::Event::FixLines) => {
+                self.preflight = None;
+                let name = format!("{} (print).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save with thin lines widened as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::FixLinesTo,
+                )
+            }
+            Message::FixLinesTo(None) => Task::none(),
+            Message::FixLinesTo(Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker
+                    .save_without_hairlines(path.clone(), panna_core::HAIRLINE, move |result| {
+                        let _ = tx.send(result);
+                    });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::LinesFixed {
+                    doc: id,
+                    path: path.clone(),
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::LinesFixed { doc, path, result } => {
+                if self.doc.as_ref().is_none_or(|d| d.id != doc) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(0) => {
+                        self.notice =
+                            Some("No lines thinner than 0.25 pt were found, so nothing was saved.".into());
+                        Task::none()
+                    }
+                    Ok(count) => {
+                        let lines = if count == 1 { "line was" } else { "lines were" };
+                        self.notice = Some(format!(
+                            "{count} {lines} widened to 0.25 pt in the copy, which is open now."
+                        ));
+                        self.update(Message::FileChosen(Some(path)))
+                    }
+                    Err(e) => {
+                        self.notice = Some(e.to_string());
+                        Task::none()
+                    }
+                }
+            }
             Message::TagTo(None) => Task::none(),
             Message::TagTo(Some(path)) => {
                 let Some(doc) = &self.doc else { return Task::none() };
@@ -4010,6 +4079,23 @@ impl App {
                 }
                 self.open_page = Some((path, page));
                 open
+            }
+            Message::Output(output::Event::Open) => {
+                self.all_tools = false;
+                if self.doc.is_some() {
+                    self.output = Some(output::OutputPreview::new());
+                }
+                Task::none()
+            }
+            Message::Output(output::Event::Close) => {
+                self.output = None;
+                Task::none()
+            }
+            Message::Output(event) => {
+                if let Some(state) = &mut self.output {
+                    state.update(&event);
+                }
+                Task::none()
             }
             Message::Order(order::Event::Open) => {
                 let Some(doc) = &self.doc else { return Task::none() };
@@ -6490,6 +6576,7 @@ impl App {
                 properties: Vec::new(),
                 outline: Vec::new(),
                 articles: Vec::new(),
+                inks: Vec::new(),
                 comments: Vec::new(),
                 fields: Vec::new(),
                 links: Vec::new(),
@@ -7846,6 +7933,12 @@ impl App {
                     on(Message::Preflight(preflight::Event::RunAccessibility)),
                 ),
                 item(
+                    Icon::OutputPreview,
+                    "Output preview…",
+                    "",
+                    on(Message::Output(output::Event::Open)),
+                ),
+                item(
                     Icon::ReadingOrder,
                     "Reading order…",
                     "",
@@ -8183,9 +8276,16 @@ impl App {
         if has_doc && (self.loupe_on || self.pan_zoom_on) {
             layers.push(self.zoom_panels());
         }
-        if let Some(state) = self.ordering.as_ref().filter(|_| has_doc) {
+        if has_doc && (self.ordering.is_some() || self.output.is_some()) {
+            let mut panels = column![].spacing(8).align_x(iced::Right);
+            if let Some(state) = &self.ordering {
+                panels = panels.push(opaque(order::panel(state, self.current_page())));
+            }
+            if let Some(state) = &self.output {
+                panels = panels.push(opaque(self.output_panel(state)));
+            }
             layers.push(
-                container(opaque(order::panel(state, self.current_page())))
+                container(panels)
                     .width(Fill)
                     .height(Fill)
                     .padding(16)
@@ -8230,6 +8330,34 @@ impl App {
             ));
         }
         Stack::with_children(layers).into()
+    }
+
+    /// The Output preview panel, for the current page.
+    fn output_panel<'a>(&'a self, state: &'a output::OutputPreview) -> Element<'a, Message> {
+        let page = self.current_page();
+        let Some(doc) = &self.doc else {
+            return column![].into();
+        };
+        let handle = doc.pages.get(page).and_then(|s| s.image.as_ref());
+        let hover = self.hover.filter(|(p, _)| *p == page).and_then(|(_, at)| {
+            doc.layout
+                .sizes()
+                .get(page)
+                .map(|s| (at, Size::new(s.width * self.zoom, s.height * self.zoom)))
+        });
+        container(output::panel(state, page, handle, hover, &doc.info.inks))
+            .padding(10)
+            .style(|theme: &iced::Theme| {
+                let palette = theme.extended_palette();
+                container::Style::default()
+                    .background(palette.background.base.color)
+                    .border(iced::Border {
+                        color: palette.background.strong.color,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    })
+            })
+            .into()
     }
 
     /// The loupe and the pan and zoom window, floating at the bottom right.
