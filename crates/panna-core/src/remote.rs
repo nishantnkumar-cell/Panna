@@ -504,6 +504,23 @@ impl Isolated {
         }
     }
 
+    /// Puts every page of another file's `bytes` before page `at`, and carries on with the
+    /// result; `name` is for messages.
+    pub fn insert_file(&mut self, at: usize, bytes: Vec<u8>, name: &str) -> Result<DocumentInfo, SaveError> {
+        match self.call(Op::InsertFile {
+            at,
+            bytes,
+            name: name.to_owned(),
+        }) {
+            Answer::Revised(Ok(revision)) => {
+                self.doc = Doc::new(revision.bytes, revision.password, self.doc.limits);
+                Ok(revision.info)
+            }
+            Answer::Revised(Err(e)) => Err(e),
+            _ => Err(SaveError::EngineCrashed),
+        }
+    }
+
     /// Makes the file smaller (see [`Document::compacted`]), and carries on with it.
     pub fn compact(&mut self, pictures: Option<u32>) -> Result<(), SaveError> {
         match self.call(Op::Compacted(pictures)) {

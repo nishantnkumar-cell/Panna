@@ -9,6 +9,7 @@ mod access;
 mod attachments;
 pub mod batch;
 mod calc;
+pub mod combine;
 mod commentdata;
 mod comments;
 mod compare;

@@ -11,6 +11,7 @@ mod bookmarks;
 mod certstore;
 mod clipboard;
 mod colors;
+mod combine;
 mod comments;
 mod compare;
 mod create;
@@ -261,6 +262,8 @@ enum Message {
     Preferences(preferences::Event),
     /// The Batch actions card.
     Batch(batch::Event),
+    /// The Combine files card.
+    Combine(combine::Event),
     /// Prints it with each page that has comments followed by a list of them.
     PrintWithComments,
     /// Asks where to save a list of the comments, by page, as a PDF.
@@ -666,6 +669,8 @@ struct App {
     preferences: bool,
     /// The Batch actions card, while open.
     batch: Option<batch::Batch>,
+    /// The Combine files card, while open.
+    combining: Option<combine::Combining>,
     /// The account's name, shown in Preferences as the name used when none is set.
     account: String,
     /// What happened after asking to be the default PDF app, shown on the card.
@@ -1260,6 +1265,7 @@ impl App {
             blank: None,
             preferences: false,
             batch: None,
+            combining: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -1403,6 +1409,7 @@ impl App {
                 | Message::Blank(create::Event::Open)
                 | Message::Preferences(preferences::Event::Open)
                 | Message::Batch(batch::Event::Open)
+                | Message::Combine(combine::Event::Open)
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
                 | Message::Signing(signing::Event::Open)
@@ -3888,6 +3895,18 @@ impl App {
                     }
                 ));
                 Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
+            }
+            Message::Combine(combine::Event::Open) => {
+                self.combining.get_or_insert_with(combine::Combining::default);
+                Task::none()
+            }
+            Message::Combine(event) => {
+                let Some(state) = self.combining.take() else {
+                    return Task::none();
+                };
+                let (state, task) = state.update(event);
+                self.combining = state;
+                task
             }
             Message::Batch(batch::Event::Open) => {
                 self.batch.get_or_insert_with(batch::Batch::default);
@@ -7005,6 +7024,12 @@ impl App {
                     on(Message::ToggleProperties),
                 ),
                 item(
+                    Icon::Combine,
+                    "Combine files…",
+                    "",
+                    Some(Message::Combine(combine::Event::Open)),
+                ),
+                item(
                     Icon::Batch,
                     "Batch actions on a folder…",
                     "",
@@ -7736,6 +7761,12 @@ impl App {
         }
         if let Some(state) = &self.batch {
             dialogs.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
+        }
+        if let Some(state) = &self.combining {
+            dialogs.push(modal(
+                combine::card(state),
+                Message::Combine(combine::Event::Close),
+            ));
         }
         if self.preferences {
             dialogs.push(modal(
