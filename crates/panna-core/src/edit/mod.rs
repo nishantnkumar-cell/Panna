@@ -653,6 +653,13 @@ pub enum PictureChange {
     /// With this picture, keeping its shape, in the old one's place.
     Replace(StampImage),
     Delete,
+    /// Turned clockwise as shown by this many quarter turns, about its middle.
+    Turn(u8),
+    /// Mirrored about its middle: left to right when `true`, else top to bottom.
+    Flip(bool),
+    /// Cut down to the part inside this box, in the same space as [`crate::TextBox`]. Only
+    /// 8-bit grey and colour pictures can be cut; others are left as they are.
+    Crop(crate::TextBox),
 }
 
 /// `doc` with the pictures page `page` draws changed: each by its place in the page's list
@@ -805,6 +812,9 @@ pub enum Addition {
         font: TextFont,
         #[serde(default)]
         align: TextAlign,
+        /// Line spacing, as a multiple of single spacing; `None` for single.
+        #[serde(default)]
+        spacing: Option<f32>,
     },
     /// A picture filling `rect`.
     Picture { rect: crate::TextBox, image: StampImage },
@@ -851,6 +861,7 @@ pub(crate) fn add(
                 color,
                 font,
                 align,
+                spacing,
             } => {
                 let lines: Vec<String> = text.lines().map(str::to_owned).collect();
                 if lines.iter().all(|l| l.trim().is_empty()) {
@@ -864,7 +875,9 @@ pub(crate) fn add(
                     top: f64::from(at.1),
                     lines,
                     size,
-                    leading: size * f64::from(annot::LINE_HEIGHT),
+                    leading: size
+                        * f64::from(annot::LINE_HEIGHT)
+                        * f64::from(spacing.unwrap_or(1.0).clamp(0.5, 4.0)),
                     color: *color,
                     font: *font,
                     align: *align,

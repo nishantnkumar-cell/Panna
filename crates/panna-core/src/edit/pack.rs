@@ -113,6 +113,69 @@ fn compress(body: &[u8]) -> Option<Vec<u8>> {
     (packed.len() + 20 < data.len()).then(|| stream(dict, true, &packed))
 }
 
+/// A picture's samples as RGBA, with its soft mask as alpha, when it's 8-bit grey or RGB
+/// (plain, Flate or JPEG, the kinds [`shrink_picture`] can redo): its width, height and
+/// samples.
+pub(crate) fn picture_rgba(source: &hayro::hayro_syntax::object::Stream<'_>) -> Option<(u32, u32, Vec<u8>)> {
+    use hayro::hayro_syntax::object::{Object, Stream};
+    let decode = |s: &Stream<'_>, want_channels: Option<usize>| -> Option<(u32, u32, usize, Vec<u8>)> {
+        let dict = s.dict();
+        if dict.get::<bool>(b"ImageMask") == Some(true) || dict.get::<u8>(b"BitsPerComponent") != Some(8) {
+            return None;
+        }
+        let (width, height) = (dict.get::<u32>(b"Width")?, dict.get::<u32>(b"Height")?);
+        if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
+            return None;
+        }
+        let channels = match want_channels {
+            Some(c) => c,
+            None => components(&dict.get::<Object<'_>>(b"ColorSpace")?)?,
+        };
+        let params = hayro::hayro_syntax::object::stream::ImageDecodeParams {
+            is_indexed: false,
+            bpc: Some(8),
+            num_components: u8::try_from(channels).ok(),
+            target_dimension: None,
+            width,
+            height,
+        };
+        let pixels = s.decoded_image(&params).ok()?.data;
+        (pixels.len() == width as usize * height as usize * channels)
+            .then(|| (width, height, channels, pixels.into_owned()))
+    };
+    let dict = source.dict();
+    if dict.contains_key(b"Mask") {
+        return None;
+    }
+    let (width, height, channels, pixels) = decode(source, None)?;
+    let alpha = match dict.get::<Stream<'_>>(b"SMask") {
+        Some(mask) => {
+            let (mw, mh, _, a) = decode(&mask, Some(1))?;
+            if (mw, mh) != (width, height) {
+                return None;
+            }
+            Some(a)
+        }
+        None => None,
+    };
+    let count = width as usize * height as usize;
+    let mut rgba = Vec::with_capacity(count * 4);
+    for i in 0..count {
+        let a = alpha.as_ref().and_then(|a| a.get(i).copied()).unwrap_or(255);
+        if channels == 1 {
+            let g = pixels.get(i).copied().unwrap_or(255);
+            rgba.extend_from_slice(&[g, g, g, a]);
+        } else {
+            let [r, g, b] = pixels
+                .get(i * 3..i * 3 + 3)
+                .and_then(|p| <[u8; 3]>::try_from(p).ok())
+                .unwrap_or([255; 3]);
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+    }
+    Some((width, height, rgba))
+}
+
 /// Compresses every stream that gets smaller for it.
 pub(crate) fn compress_streams(objects: &mut [Option<Vec<u8>>]) {
     for body in objects.iter_mut().flatten() {

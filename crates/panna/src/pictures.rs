@@ -1,6 +1,6 @@
 //! Editing the pictures a page draws: picking one, then moving it, resizing it from a
-//! corner, replacing it with another picture or deleting it, each as a page change that can
-//! be undone from the page tools.
+//! corner, turning, flipping or cropping it, replacing it with another picture or deleting
+//! it, each as a page change that can be undone from the page tools.
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +24,12 @@ pub enum Event {
     Toggle,
     Replace,
     Delete,
+    /// A quarter turn: clockwise when `true`.
+    Turn(bool),
+    /// Mirror: left to right when `true`, else top to bottom.
+    Flip(bool),
+    /// Turns cropping on or off: a drag over the picked picture then keeps that part.
+    Crop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,6 +37,8 @@ enum Grip {
     Move,
     /// From the corner at the box's end (`x1`, `y1`), keeping its shape.
     Resize,
+    /// Out from a point, for the part to keep.
+    Crop,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +59,8 @@ pub struct PictureEditor {
     drag: Option<Drag>,
     /// A replacement picture is being chosen for the picked one.
     replacing: bool,
+    /// A drag over the picked picture marks the part to keep.
+    cropping: bool,
 }
 
 /// What the main view does next.
@@ -73,6 +83,7 @@ impl PictureEditor {
         self.drag = None;
         self.selected = None;
         self.replacing = false;
+        self.cropping = false;
     }
 
     pub fn stop(&mut self) {
@@ -128,6 +139,25 @@ impl PictureEditor {
                     };
                 }
             }
+            Event::Turn(clockwise) => {
+                if let Some((page, index)) = self.selected {
+                    self.cropping = false;
+                    return Outcome::Change {
+                        page,
+                        changes: vec![(index, PictureChange::Turn(if clockwise { 1 } else { 3 }))],
+                    };
+                }
+            }
+            Event::Flip(across) => {
+                if let Some((page, index)) = self.selected {
+                    self.cropping = false;
+                    return Outcome::Change {
+                        page,
+                        changes: vec![(index, PictureChange::Flip(across))],
+                    };
+                }
+            }
+            Event::Crop => self.cropping = !self.cropping && self.selected.is_some(),
         }
         Outcome::Nothing
     }
@@ -153,6 +183,21 @@ impl PictureEditor {
     /// A press at `at` on page `page`; `slop` is how near the handle counts, in points.
     pub fn press(&mut self, page: usize, at: (f32, f32), slop: f32) {
         if self.replacing {
+            return;
+        }
+        if self.cropping {
+            if self
+                .selected_box()
+                .is_some_and(|(p, b)| p == page && b.contains(at.0, at.1))
+            {
+                self.drag = Some(Drag {
+                    grip: Grip::Crop,
+                    from: at,
+                    to: at,
+                });
+            } else {
+                self.cropping = false;
+            }
             return;
         }
         if let Some((p, b)) = self.selected_box()
@@ -205,6 +250,13 @@ impl PictureEditor {
                 x1: b.x1 + dx,
                 y1: b.y1 + dy,
             },
+            // The part to keep, inside the picture.
+            Grip::Crop => TextBox {
+                x0: drag.from.0.min(drag.to.0).max(b.x0),
+                y0: drag.from.1.min(drag.to.1).max(b.y0),
+                x1: drag.from.0.max(drag.to.0).min(b.x1),
+                y1: drag.from.1.max(drag.to.1).min(b.y1),
+            },
             Grip::Resize => {
                 let (w, h) = (b.width().max(f32::EPSILON), b.height().max(f32::EPSILON));
                 let scale = ((w + dx) / w).max((h + dy) / h).max(MIN_SIDE / w.min(h));
@@ -223,7 +275,25 @@ impl PictureEditor {
             .drag
             .is_some_and(|d| (d.to.0 - d.from.0).abs().max((d.to.1 - d.from.1).abs()) >= CLICK_SLOP);
         let to = self.dragged();
+        let grip = self.drag.map(|d| d.grip);
         self.drag = None;
+        if grip == Some(Grip::Crop) {
+            self.cropping = false;
+            return match (moved, to, self.selected) {
+                (true, Some((page, keep)), Some((_, index)))
+                    if keep.width() >= 1.0 && keep.height() >= 1.0 =>
+                {
+                    if let Some(b) = self.found.get_mut(&page).and_then(|v| v.get_mut(index)) {
+                        *b = keep;
+                    }
+                    Outcome::Change {
+                        page,
+                        changes: vec![(index, PictureChange::Crop(keep))],
+                    }
+                }
+                _ => Outcome::Nothing,
+            };
+        }
         match (moved, to, self.selected) {
             (true, Some((page, rect)), Some((_, index))) => {
                 // Shown where it went until the page comes back.
@@ -308,13 +378,41 @@ impl PictureEditor {
     pub fn bar(&self) -> Element<'_, Message> {
         let ev = Message::EditPictures;
         let picked = self.selected.is_some() && !self.replacing;
-        let hint = if self.selected.is_some() {
+        let hint = if self.cropping {
+            "Drag over the part of the picture to keep."
+        } else if self.selected.is_some() {
             "Drag to move it, or its corner to resize it."
         } else {
             "Click a picture to pick it."
         };
         let content = row![
             text(hint).size(13).width(290),
+            icons::button(
+                Icon::RotateCcw,
+                "Turn left",
+                picked.then_some(ev(Event::Turn(false)))
+            ),
+            icons::button(
+                Icon::RotateCw,
+                "Turn right",
+                picked.then_some(ev(Event::Turn(true)))
+            ),
+            icons::button(
+                Icon::FlipAcross,
+                "Flip left to right",
+                picked.then_some(ev(Event::Flip(true)))
+            ),
+            icons::button(
+                Icon::FlipDown,
+                "Flip upside down",
+                picked.then_some(ev(Event::Flip(false)))
+            ),
+            icons::toggle(
+                Icon::Crop,
+                "Crop: drag over the part to keep",
+                self.cropping,
+                ev(Event::Crop)
+            ),
             icons::button(
                 Icon::ReplacePicture,
                 "Replace with another picture…",
@@ -382,6 +480,30 @@ mod tests {
         e.press(0, (12.0, 12.0), 3.0);
         assert!(matches!(e.release(), Outcome::Nothing));
         assert_eq!(e.selected, Some((0, 0)));
+    }
+
+    #[test]
+    fn turning_flipping_and_cropping_the_picked_picture() {
+        let mut e = editor();
+        e.press(0, (12.0, 12.0), 3.0);
+        e.release();
+        let Outcome::Change { changes, .. } = e.update(Event::Turn(false)) else {
+            panic!("not turned");
+        };
+        assert_eq!(changes, [(0, PictureChange::Turn(3))]);
+        let Outcome::Change { changes, .. } = e.update(Event::Flip(true)) else {
+            panic!("not flipped");
+        };
+        assert_eq!(changes, [(0, PictureChange::Flip(true))]);
+        e.update(Event::Crop);
+        // The drag is kept inside the picture.
+        e.press(0, (20.0, 15.0), 3.0);
+        e.hover(0, (80.0, 30.0));
+        let Outcome::Change { changes, .. } = e.release() else {
+            panic!("not cropped");
+        };
+        assert_eq!(changes, [(0, PictureChange::Crop(b(20.0, 15.0, 60.0, 30.0)))]);
+        assert!(!e.cropping);
     }
 
     #[test]
