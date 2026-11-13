@@ -19,6 +19,12 @@ pub enum ExportFormat {
     PowerPoint,
     /// One Excel workbook (.xlsx): a sheet for each page, its lines as rows.
     Excel,
+    /// One web page (.html): the text, in paragraphs and headings.
+    Html,
+    /// One Rich Text file (.rtf): the text, in paragraphs and headings.
+    Rtf,
+    /// One e-book (.epub): the text, a chapter for each page.
+    Epub,
 }
 
 impl ExportFormat {
@@ -26,7 +32,13 @@ impl ExportFormat {
     pub fn one_file(self) -> bool {
         matches!(
             self,
-            ExportFormat::Text | ExportFormat::Word | ExportFormat::PowerPoint
+            ExportFormat::Text
+                | ExportFormat::Word
+                | ExportFormat::PowerPoint
+                | ExportFormat::Excel
+                | ExportFormat::Html
+                | ExportFormat::Rtf
+                | ExportFormat::Epub
         )
     }
 

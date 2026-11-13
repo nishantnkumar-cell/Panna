@@ -41,6 +41,35 @@ pub enum FieldKind {
         editable: bool,
         options: Vec<ChoiceOption>,
     },
+    /// A push button that does `action` when pressed, showing `caption`.
+    Button {
+        caption: String,
+        action: ButtonAction,
+    },
+    /// An image field: a button whose picture is chosen by clicking it (Acrobat's Image
+    /// Field, a button that imports an icon).
+    Image,
+    /// A place for a digital signature; `signed` once one is in it.
+    Signature {
+        signed: bool,
+    },
+}
+
+/// What pressing a push button does. Only actions that stay inside the document are kept:
+/// buttons that submit forms, open addresses or run scripts do nothing here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ButtonAction {
+    #[default]
+    Nothing,
+    /// Puts every field back to its default.
+    ResetForm,
+    /// Goes to a page, from 0.
+    GoTo(usize),
+    Print,
+    NextPage,
+    PreviousPage,
+    FirstPage,
+    LastPage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -58,6 +87,8 @@ pub enum FieldValue {
     Text(String),
     /// Checkboxes and radio buttons: the on state that is set, or none when off.
     State(Option<String>),
+    /// Image fields: the picture chosen for it.
+    Picture(crate::StampImage),
 }
 
 /// One place a field shows on a page.
@@ -180,13 +211,56 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<Field> {
         da: None,
         q: None,
     };
+    let dests = crate::outline::Ctx::new(pdf);
     for field in fields.iter::<Dict<'_>>() {
-        walk(&mut ctx, &field, &root, 0);
+        walk(&mut ctx, &field, &root, 0, dests.as_ref());
         if ctx.out.len() >= MAX_FIELDS {
             break;
         }
     }
     ctx.out
+}
+
+/// What a button's action (/A) does, when it's one kept here.
+fn button_action(dict: &Dict<'_>, dests: Option<&crate::outline::Ctx<'_>>) -> Option<ButtonAction> {
+    let action = dict.get::<Dict<'_>>(b"A")?;
+    match action.get::<Name<'_>>(b"S")?.as_str() {
+        "ResetForm" => Some(ButtonAction::ResetForm),
+        "GoTo" => Some(ButtonAction::GoTo(crate::outline::destination(dests?, dict)?)),
+        "Named" => match action.get::<Name<'_>>(b"N")?.as_str() {
+            "Print" => Some(ButtonAction::Print),
+            "NextPage" => Some(ButtonAction::NextPage),
+            "PrevPage" => Some(ButtonAction::PreviousPage),
+            "FirstPage" => Some(ButtonAction::FirstPage),
+            "LastPage" => Some(ButtonAction::LastPage),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether a button's mouse-up or action script imports a picture, as Acrobat's image fields
+/// do (`event.target.buttonImportIcon()`). The script is only looked at, never run.
+fn imports_picture(dict: &Dict<'_>) -> bool {
+    let script = |action: Dict<'_>| -> bool {
+        if action
+            .get::<Name<'_>>(b"S")
+            .is_none_or(|s| s.as_str() != "JavaScript")
+        {
+            return false;
+        }
+        let js = match action.get::<Object<'_>>(b"JS") {
+            Some(Object::String(s)) => s.as_bytes().to_vec(),
+            Some(Object::Stream(s)) => s.decoded().map(|d| d.to_vec()).unwrap_or_default(),
+            _ => return false,
+        };
+        js.windows(16).any(|w| w == b"buttonImportIcon")
+    };
+    dict.get::<Dict<'_>>(b"A").is_some_and(script)
+        || dict
+            .get::<Dict<'_>>(b"AA")
+            .and_then(|aa| aa.get::<Dict<'_>>(b"U"))
+            .is_some_and(script)
 }
 
 fn text(dict: &Dict<'_>, key: &[u8]) -> Option<String> {
@@ -199,7 +273,13 @@ fn text(dict: &Dict<'_>, key: &[u8]) -> Option<String> {
     })
 }
 
-fn walk(ctx: &mut Ctx, node: &Dict<'_>, parent: &Inherited, depth: u8) {
+fn walk(
+    ctx: &mut Ctx,
+    node: &Dict<'_>,
+    parent: &Inherited,
+    depth: u8,
+    dests: Option<&crate::outline::Ctx<'_>>,
+) {
     if depth > MAX_DEPTH || ctx.out.len() >= MAX_FIELDS {
         return;
     }
@@ -236,15 +316,22 @@ fn walk(ctx: &mut Ctx, node: &Dict<'_>, parent: &Inherited, depth: u8) {
         .unwrap_or_default();
     if kids.iter().any(|k| k.contains_key(b"T")) {
         for kid in &kids {
-            walk(ctx, kid, &here, depth + 1);
+            walk(ctx, kid, &here, depth + 1, dests);
         }
         return;
     }
     let widgets: Vec<Dict<'_>> = if kids.is_empty() { vec![node.clone()] } else { kids };
-    terminal(ctx, node, id, &here, &widgets);
+    terminal(ctx, node, id, &here, &widgets, dests);
 }
 
-fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widgets: &[Dict<'_>]) {
+fn terminal(
+    ctx: &mut Ctx,
+    node: &Dict<'_>,
+    id: ObjRef,
+    here: &Inherited,
+    widgets: &[Dict<'_>],
+    dests: Option<&crate::outline::Ctx<'_>>,
+) {
     let flags = here.flags;
     let kind = match here.ft.as_deref() {
         Some("Tx") => FieldKind::Text {
@@ -255,8 +342,25 @@ fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widget
                 .and_then(|m| usize::try_from(m).ok())
                 .filter(|m| *m > 0),
         },
-        // Push buttons do nothing without scripts, which Panna never runs.
-        Some("Btn") if flags & (1 << 16) != 0 => return,
+        // Push buttons: only their in-document actions are kept, and scripts never run. A
+        // button whose script imports a picture is an image field.
+        Some("Btn") if flags & (1 << 16) != 0 => {
+            if widgets.iter().chain(std::iter::once(node)).any(imports_picture) {
+                FieldKind::Image
+            } else {
+                FieldKind::Button {
+                    caption: widgets
+                        .iter()
+                        .find_map(|w| w.get::<Dict<'_>>(b"MK").and_then(|mk| text(&mk, b"CA")))
+                        .unwrap_or_default(),
+                    action: widgets
+                        .iter()
+                        .chain(std::iter::once(node))
+                        .find_map(|d| button_action(d, dests))
+                        .unwrap_or_default(),
+                }
+            }
+        }
         Some("Btn") if flags & (1 << 15) != 0 => FieldKind::Radio,
         Some("Btn") => FieldKind::CheckBox,
         Some("Ch") => FieldKind::Choice {
@@ -264,7 +368,10 @@ fn terminal(ctx: &mut Ctx, node: &Dict<'_>, id: ObjRef, here: &Inherited, widget
             editable: flags & (1 << 18) != 0,
             options: options(node),
         },
-        // Signatures and unknown kinds aren't fillable here.
+        Some("Sig") => FieldKind::Signature {
+            signed: node.contains_key(b"V"),
+        },
+        // Unknown kinds aren't fillable here.
         _ => return,
     };
     let button = matches!(kind, FieldKind::CheckBox | FieldKind::Radio);

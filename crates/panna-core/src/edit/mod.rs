@@ -8,6 +8,7 @@ mod labels;
 pub(crate) mod lex;
 mod marks;
 mod new_field;
+mod order;
 mod outline;
 pub(crate) use labels::with_page_labels;
 pub(crate) use outline::with_outline;
@@ -44,6 +45,8 @@ pub use picture::StampImage;
 pub use convert::{MAX_BLANK_PAGES, MAX_PICTURES, blank_pdf, pictures_to_pdf, rgba_to_pdf};
 pub use crypt::Protection;
 pub use marks::{ExistingMarks, HeaderFooter, Watermark, fill as fill_header_footer, today};
+pub use order::{OrderItem, ROLES as ORDER_ROLES, ReadingOrder};
+pub(crate) use order::{read as reading_order, write as reordered};
 pub use rebuild::{Cleanup, Margins, PageSource};
 pub(crate) use sign::prepare as prepare_signature;
 pub use sign::{Corner, SignOptions, Visible};
@@ -653,6 +656,13 @@ pub enum PictureChange {
     /// With this picture, keeping its shape, in the old one's place.
     Replace(StampImage),
     Delete,
+    /// Turned clockwise as shown by this many quarter turns, about its middle.
+    Turn(u8),
+    /// Mirrored about its middle: left to right when `true`, else top to bottom.
+    Flip(bool),
+    /// Cut down to the part inside this box, in the same space as [`crate::TextBox`]. Only
+    /// 8-bit grey and colour pictures can be cut; others are left as they are.
+    Crop(crate::TextBox),
 }
 
 /// `doc` with the pictures page `page` draws changed: each by its place in the page's list
@@ -714,6 +724,15 @@ pub enum NewFieldKind {
     /// A group of radio buttons, one per choice, on the field's page; only one can be on.
     /// The field's own `rect` isn't used.
     Radio(Vec<RadioButton>),
+    /// A push button showing `caption` that does `action` when pressed.
+    Button {
+        caption: String,
+        action: crate::ButtonAction,
+    },
+    /// An image field: a button whose picture is chosen by clicking it.
+    Image,
+    /// A place for a digital signature.
+    Signature,
 }
 
 /// One button of a new radio group.
@@ -796,6 +815,9 @@ pub enum Addition {
         font: TextFont,
         #[serde(default)]
         align: TextAlign,
+        /// Line spacing, as a multiple of single spacing; `None` for single.
+        #[serde(default)]
+        spacing: Option<f32>,
     },
     /// A picture filling `rect`.
     Picture { rect: crate::TextBox, image: StampImage },
@@ -842,6 +864,7 @@ pub(crate) fn add(
                 color,
                 font,
                 align,
+                spacing,
             } => {
                 let lines: Vec<String> = text.lines().map(str::to_owned).collect();
                 if lines.iter().all(|l| l.trim().is_empty()) {
@@ -855,7 +878,9 @@ pub(crate) fn add(
                     top: f64::from(at.1),
                     lines,
                     size,
-                    leading: size * f64::from(annot::LINE_HEIGHT),
+                    leading: size
+                        * f64::from(annot::LINE_HEIGHT)
+                        * f64::from(spacing.unwrap_or(1.0).clamp(0.5, 4.0)),
                     color: *color,
                     font: *font,
                     align: *align,
@@ -1139,10 +1164,13 @@ fn fill_fields(
         let Some(f) = fields.iter().find(|f| f.id == *id) else {
             continue;
         };
-        edits
-            .entry((id.number, id.generation))
-            .or_default()
-            .push(("V", field::value(f, value)));
+        // A picture is what an image field's buttons show; buttons have no value.
+        if !matches!(value, FieldValue::Picture(_)) {
+            edits
+                .entry((id.number, id.generation))
+                .or_default()
+                .push(("V", field::value(f, value)));
+        }
         for w in &f.widgets {
             let entry = match value {
                 FieldValue::State(state) => {
@@ -1161,6 +1189,31 @@ fn fill_fields(
                     };
                     let ap = out.alloc();
                     out.put(ap, 0, stream)?;
+                    ("AP", format!("<< /N {ap} 0 R >>"))
+                }
+                FieldValue::Picture(picture) => {
+                    let Some(widget) = get(w.annot) else { continue };
+                    let Some(rect) = widget.get::<hayro::hayro_syntax::object::Rect>(b"Rect") else {
+                        continue;
+                    };
+                    let mask = picture.has_mask().then(|| out.alloc());
+                    let (image, mask_body) = picture.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
+                    if let (Some(m), Some(body)) = (mask, mask_body) {
+                        out.put(m, 0, body)?;
+                    }
+                    let image_id = out.alloc();
+                    out.put(image_id, 0, image)?;
+                    let ap = out.alloc();
+                    out.put(
+                        ap,
+                        0,
+                        field::picture_appearance(
+                            (rect.x1 - rect.x0).abs(),
+                            (rect.y1 - rect.y0).abs(),
+                            (picture.width, picture.height),
+                            image_id,
+                        ),
+                    )?;
                     ("AP", format!("<< /N {ap} 0 R >>"))
                 }
             };

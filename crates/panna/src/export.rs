@@ -65,6 +65,9 @@ pub fn extension(format: ExportFormat) -> &'static str {
         ExportFormat::Word => "docx",
         ExportFormat::PowerPoint => "pptx",
         ExportFormat::Excel => "xlsx",
+        ExportFormat::Html => "html",
+        ExportFormat::Rtf => "rtf",
+        ExportFormat::Epub => "epub",
     }
 }
 
@@ -90,6 +93,24 @@ pub fn card<'a>(state: &Exporting, count: usize) -> Element<'a, Message> {
         Ok((pages, _)) if state.format == ExportFormat::Excel => text(format!(
             "{} into one Excel workbook: a sheet for each page, a row for each line, and columns \
              where the words line up",
+            plural(pages.len())
+        ))
+        .size(13),
+        Ok((pages, _)) if state.format == ExportFormat::Html => text(format!(
+            "{} into one web page: the text, in paragraphs and headings, which fits any screen. \
+             Pictures and layout aren't kept.",
+            plural(pages.len())
+        ))
+        .size(13),
+        Ok((pages, _)) if state.format == ExportFormat::Rtf => text(format!(
+            "{} into one Rich Text file, which most word processors open: the text, in paragraphs \
+             and headings. Pictures and layout aren't kept.",
+            plural(pages.len())
+        ))
+        .size(13),
+        Ok((pages, _)) if state.format == ExportFormat::Epub => text(format!(
+            "{} into one e-book, a chapter for each page, with the headings as its contents. \
+             Pictures and layout aren't kept.",
             plural(pages.len())
         ))
         .size(13),
@@ -136,6 +157,15 @@ pub fn card<'a>(state: &Exporting, count: usize) -> Element<'a, Message> {
                 format,
                 move |v| ev(Event::Format(v))
             ),
+            radio("Web page (.html)", ExportFormat::Html, format, move |v| ev(
+                Event::Format(v)
+            )),
+            radio("Rich Text (.rtf)", ExportFormat::Rtf, format, move |v| ev(
+                Event::Format(v)
+            )),
+            radio("E-book (.epub)", ExportFormat::Epub, format, move |v| ev(
+                Event::Format(v)
+            )),
             radio(
                 "PNG pictures (sharp, larger)",
                 ExportFormat::Png,

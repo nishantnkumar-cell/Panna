@@ -170,3 +170,57 @@ fn several_changes_at_once() {
         .unwrap();
     assert_boxes(&new.pictures(0), &[to]);
 }
+
+/// A 2 by 2 picture, red and green on top, blue and black below, drawn 100 by 60 at
+/// 100..200 by 90..150 as shown.
+fn quarters() -> Document {
+    let bytes = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] /Contents 5 0 R \
+         /Resources << /XObject << /Q 4 0 R >> >> >>",
+        &stream(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB \
+             /BitsPerComponent 8 /Filter /ASCIIHexDecode",
+            "FF000000FF000000FF000000>",
+        ),
+        &stream("", "q 100 0 0 60 100 50 cm /Q Do Q"),
+    ]);
+    Document::from_bytes(bytes, None, Limits::default()).unwrap()
+}
+
+const GREEN: [u8; 3] = [0, 255, 0];
+const BLUE: [u8; 3] = [0, 0, 255];
+const BLACK: [u8; 3] = [0, 0, 0];
+
+#[test]
+fn pictures_turn_flip_and_crop_about_their_middle() {
+    let doc = quarters();
+    assert_boxes(&doc.pictures(0), &[b(100.0, 90.0, 200.0, 150.0)]);
+    let changed = |change: PictureChange| {
+        doc.reopen(doc.with_pictures_changed(0, &[(0, change)]).unwrap())
+            .unwrap()
+    };
+
+    // A quarter turn clockwise: 60 wide and 100 tall about the same middle, red at top right.
+    let turned = changed(PictureChange::Turn(1));
+    assert_boxes(&turned.pictures(0), &[b(120.0, 70.0, 180.0, 170.0)]);
+    assert_eq!(color(&turned, 0, 165, 95), RED);
+    assert_eq!(color(&turned, 0, 135, 95), BLUE);
+    assert_eq!(color(&turned, 0, 165, 145), GREEN);
+    assert_eq!(color(&turned, 0, 135, 145), BLACK);
+
+    let flipped = changed(PictureChange::Flip(true));
+    assert_boxes(&flipped.pictures(0), &[b(100.0, 90.0, 200.0, 150.0)]);
+    assert_eq!(color(&flipped, 0, 125, 105), GREEN);
+    assert_eq!(color(&flipped, 0, 175, 105), RED);
+    let upside = changed(PictureChange::Flip(false));
+    assert_eq!(color(&upside, 0, 125, 105), BLUE);
+
+    // Cropped to its left half: only red and blue are left, and the box is that half.
+    let cropped = changed(PictureChange::Crop(b(100.0, 90.0, 150.0, 150.0)));
+    assert_boxes(&cropped.pictures(0), &[b(100.0, 90.0, 150.0, 150.0)]);
+    assert_eq!(color(&cropped, 0, 125, 105), RED);
+    assert_eq!(color(&cropped, 0, 125, 135), BLUE);
+    assert_eq!(color(&cropped, 0, 175, 105), WHITE);
+}

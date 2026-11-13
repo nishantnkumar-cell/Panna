@@ -145,6 +145,15 @@ impl PageText {
         out.trim_end().to_owned()
     }
 
+    /// The page's text as paragraphs in reading order, each with its type size in points,
+    /// for showing reflowed to fit the window.
+    pub fn reflowed(&self) -> Vec<(String, f32)> {
+        crate::office::paragraphs(&self.lines())
+            .into_iter()
+            .map(|p| (p.text, p.size))
+            .collect()
+    }
+
     /// Every phone number, card number, email address or such, as `pattern` says, as
     /// character ranges.
     pub fn find_pattern(&self, pattern: crate::Pattern) -> Vec<Range<usize>> {

@@ -12,6 +12,7 @@ const REQUIRED: u32 = 1 << 1;
 const MULTILINE: u32 = 1 << 12;
 const NO_TOGGLE_TO_OFF: u32 = 1 << 14;
 const RADIO: u32 = 1 << 15;
+const PUSH_BUTTON: u32 = 1 << 16;
 const COMBO: u32 = 1 << 17;
 
 /// A string in PDF syntax: a literal for plain ASCII, UTF-16 otherwise.
@@ -50,6 +51,7 @@ pub(crate) fn widget(
     field: &super::NewField,
     rect: [f64; 4],
     page: u32,
+    pages: &[u32],
     rotate: i64,
     store: &mut dyn FnMut(Vec<u8>) -> u32,
 ) -> Vec<u8> {
@@ -123,11 +125,45 @@ pub(crate) fn widget(
         }
         // Radio groups are written by `radio_group` and `radio_widget`.
         super::NewFieldKind::Radio(_) => "/Btn",
+        super::NewFieldKind::Button { caption, action } => {
+            flags |= PUSH_BUTTON;
+            let face = store(form_stream(width, height, &button_face(width, height, caption)));
+            extra.push_str(&format!("/AP << /N {face} 0 R >> /DA (/Helv 0 Tf 0 g) "));
+            if let Some(a) = action_dict(*action, pages) {
+                extra.push_str(&a);
+            }
+            "/Btn"
+        }
+        super::NewFieldKind::Image => {
+            // As Acrobat makes them: a button showing only its picture, which a script
+            // asks for when it's clicked (Panna asks without running it).
+            flags |= PUSH_BUTTON;
+            extra.push_str(&format!(
+                "/AP << /N {off} 0 R >> /DA (/Helv 0 Tf 0 g) /AA << /U << /S /JavaScript \
+                 /JS (event.target.buttonImportIcon\\(\\);) >> >> "
+            ));
+            "/Btn"
+        }
+        super::NewFieldKind::Signature => {
+            let face = store(form_stream(width, height, &signature_face(width, height)));
+            extra.push_str(&format!("/AP << /N {face} 0 R >> "));
+            "/Sig"
+        }
     };
     let tooltip = tooltip(field);
     let mk = match &field.kind {
-        super::NewFieldKind::CheckBox => "/MK << /BC [0.6 0.6 0.6] /BG [1 1 1] /CA (4) /R ROT >>",
-        _ => "/MK << /BC [0.6 0.6 0.6] /BG [1 1 1] /R ROT >>",
+        super::NewFieldKind::CheckBox => "/MK << /BC [0.6 0.6 0.6] /BG [1 1 1] /CA (4) /R ROT >>".to_owned(),
+        super::NewFieldKind::Button { caption, .. } => {
+            format!(
+                "/MK << /BC [0.5 0.5 0.5] /BG [0.85 0.85 0.85] /CA {} /R ROT >>",
+                string(caption)
+            )
+        }
+        // Icon only, scaled to fit (Acrobat's image field layout).
+        super::NewFieldKind::Image => {
+            "/MK << /BC [0.6 0.6 0.6] /BG [1 1 1] /TP 1 /IF << /SW /A /S /P >> /R ROT >>".to_owned()
+        }
+        _ => "/MK << /BC [0.6 0.6 0.6] /BG [1 1 1] /R ROT >>".to_owned(),
     }
     .replace("ROT", &rotate.to_string());
     format!(
@@ -139,6 +175,65 @@ pub(crate) fn widget(
         n(y1),
     )
     .into_bytes()
+}
+
+/// A raised grey button with `caption` centred on it.
+fn button_face(width: f64, height: f64, caption: &str) -> String {
+    let caption = caption.replace(['\r', '\n'], " ");
+    let size = ((height - 4.0) * 0.6)
+        .min((width - 6.0) / super::annot::text_width(&caption).max(0.01))
+        .clamp(1.0, 12.0);
+    let x = (width - super::annot::text_width(&caption) * size) / 2.0;
+    format!(
+        "0.85 g 0 0 {w} {h} re f 1 g 1 1 m 1 {h1} l {w1} {h1} l {w2} {h2} l 2 {h2} l 2 2 l f \
+         0.6 g {w1} {h1} m {w1} 1 l 1 1 l 2 2 l {w2} 2 l {w2} {h2} l f \
+         0.5 G 1 w 0.5 0.5 {iw} {ih} re S \
+         BT /Helv {size} Tf 0 g {x} {y} Td ({text}) Tj ET",
+        w = n(width),
+        h = n(height),
+        w1 = n(width - 1.0),
+        h1 = n(height - 1.0),
+        w2 = n(width - 2.0),
+        h2 = n(height - 2.0),
+        iw = n((width - 1.0).max(0.0)),
+        ih = n((height - 1.0).max(0.0)),
+        size = n(size),
+        x = n(x.max(2.0)),
+        y = n((height - size * 0.7) / 2.0),
+        text = literal(&super::annot::win_ansi(&caption)),
+    )
+}
+
+/// An empty signature field: a pale box with a line to sign on.
+fn signature_face(width: f64, height: f64) -> String {
+    let size = (height * 0.25).clamp(4.0, 9.0);
+    format!(
+        "{} 0.55 G 0.75 w 6 {line} m {right} {line} l S \
+         BT /Helv {} Tf 0.45 g 6 {} Td (Sign here) Tj ET",
+        border(width, height),
+        n(size),
+        n(height * 0.3 + 2.0),
+        line = n(height * 0.3),
+        right = n((width - 6.0).max(6.0)),
+    )
+}
+
+/// The /A entry doing `action`, with pages named by their objects in `pages`.
+fn action_dict(action: crate::ButtonAction, pages: &[u32]) -> Option<String> {
+    use crate::ButtonAction as A;
+    let named = |n: &str| Some(format!("/A << /S /Named /N /{n} >> "));
+    match action {
+        A::Nothing => None,
+        A::ResetForm => Some("/A << /S /ResetForm >> ".into()),
+        A::GoTo(page) => pages
+            .get(page)
+            .map(|num| format!("/A << /S /GoTo /D [{num} 0 R /Fit] >> ")),
+        A::Print => named("Print"),
+        A::NextPage => named("NextPage"),
+        A::PreviousPage => named("PrevPage"),
+        A::FirstPage => named("FirstPage"),
+        A::LastPage => named("LastPage"),
+    }
 }
 
 fn tooltip(field: &super::NewField) -> String {

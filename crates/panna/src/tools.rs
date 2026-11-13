@@ -41,6 +41,16 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             Message::FromClipboard,
         ),
         tool(
+            Icon::Combine,
+            "Combine files into one PDF…",
+            Message::Combine(crate::combine::Event::Open),
+        ),
+        tool(
+            Icon::FolderSearch,
+            "Search a folder of PDFs…",
+            Message::FolderSearch(crate::folder_search::Event::Open),
+        ),
+        tool(
             Icon::Batch,
             "Batch actions on a folder of PDFs…",
             Message::Batch(crate::batch::Event::Open),
@@ -52,7 +62,7 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
         ),
         tool(
             Icon::Export,
-            "Export as text, Office files or pictures…",
+            "Export as text, Office, web, e-book or pictures…",
             Message::Export(export::Event::Open),
         ),
     ];
@@ -117,6 +127,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                 Icon::Accessibility,
                 "Check accessibility",
                 Message::Preflight(crate::preflight::Event::RunAccessibility),
+            ),
+            tool(
+                Icon::ReadingOrder,
+                "Reading order of a tagged document",
+                Message::Order(crate::order::Event::Open),
             ),
             tool(
                 Icon::Redact,

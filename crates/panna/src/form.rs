@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use iced::widget::{button, container, pick_list, pin, svg, text_editor, text_input};
+use iced::widget::{button, container, image, pick_list, pin, svg, text_editor, text_input};
 use iced::{Border, Center, Color, Element, Fill, Length, Theme};
 use panna_core::{Field, FieldKind, FieldValue, ObjRef};
 
@@ -25,6 +25,8 @@ pub enum Event {
     /// A checkbox or radio button was clicked: the state it turns on.
     Press(usize, Option<String>),
     Choose(usize, String),
+    /// A picture was chosen for an image field.
+    Picture(usize, panna_core::StampImage),
 }
 
 #[derive(Default)]
@@ -36,6 +38,16 @@ pub struct Form {
     editors: HashMap<usize, text_editor::Content>,
     /// The field being typed in, shown as typed; the others show their formatted values.
     active: Option<usize>,
+    /// What image fields given a new picture show, by field index.
+    previews: HashMap<usize, image::Handle>,
+}
+
+/// Whether a field holds a value (buttons and signature fields don't).
+fn has_value(kind: &FieldKind) -> bool {
+    !matches!(
+        kind,
+        FieldKind::Button { .. } | FieldKind::Image | FieldKind::Signature { .. }
+    )
 }
 
 /// A choice in a drop-down: what it shows, and the value it saves.
@@ -52,6 +64,30 @@ impl std::fmt::Display for Choice {
 }
 
 impl Form {
+    /// Every text field's index, name and text, for checking spelling.
+    pub fn texts(&self) -> Vec<(usize, String, String)> {
+        self.fields
+            .iter()
+            .zip(&self.values)
+            .enumerate()
+            .filter(|(_, (f, _))| matches!(f.kind, FieldKind::Text { .. }) && !f.read_only)
+            .filter_map(|(i, (f, v))| match v {
+                FieldValue::Text(t) if !t.trim().is_empty() => Some((i, f.name.clone(), t.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Gives text field `index` new text, its editor too when it has several lines.
+    pub fn set_text(&mut self, index: usize, text: String) {
+        if let Some(editor) = self.editors.get_mut(&index) {
+            *editor = text_editor::Content::with_text(&text);
+        }
+        if let Some(value) = self.values.get_mut(index) {
+            *value = FieldValue::Text(text);
+        }
+    }
+
     /// Takes a newly opened (or just saved) document's fields.
     pub fn load(&mut self, fields: &[Field]) {
         self.fields = fields.to_vec();
@@ -63,11 +99,12 @@ impl Form {
             .map(|(i, f)| {
                 let text = match &f.value {
                     FieldValue::Text(t) => t.as_str(),
-                    FieldValue::State(_) => "",
+                    FieldValue::State(_) | FieldValue::Picture(_) => "",
                 };
                 (i, text_editor::Content::with_text(text))
             })
             .collect();
+        self.previews.clear();
     }
 
     /// The current values become the saved ones.
@@ -93,13 +130,13 @@ impl Form {
         self.fields
             .iter()
             .zip(&self.values)
-            .any(|(f, v)| f.editable() && f.default != *v)
+            .any(|(f, v)| f.editable() && has_value(&f.kind) && f.default != *v)
     }
 
     /// Puts every field back to its default, as Acrobat's Reset Form does.
     pub fn reset(&mut self) {
         for (i, (field, value)) in self.fields.iter().zip(&mut self.values).enumerate() {
-            if !field.editable() {
+            if !field.editable() || !has_value(&field.kind) {
                 continue;
             }
             *value = field.default.clone();
@@ -138,7 +175,7 @@ impl Form {
                     .map(|(_, v)| match v {
                         FieldValue::Text(t) => panna_core::calc_number(t),
                         FieldValue::State(Some(s)) => panna_core::calc_number(s),
-                        FieldValue::State(None) => 0.0,
+                        FieldValue::State(None) | FieldValue::Picture(_) => 0.0,
                     })
                     .collect()
             };
@@ -181,7 +218,7 @@ impl Form {
         self.fields
             .iter()
             .zip(&self.values)
-            .filter(|(f, _)| !f.name.is_empty())
+            .filter(|(f, _)| !f.name.is_empty() && has_value(&f.kind))
             .map(|(f, v)| (f.name.as_str(), v))
             .collect()
     }
@@ -234,7 +271,11 @@ impl Form {
     /// Applies an edit. Returns whether a value changed.
     pub fn update(&mut self, event: Event) -> bool {
         let index = match &event {
-            Event::Text(i, _) | Event::Edit(i, _) | Event::Press(i, _) | Event::Choose(i, _) => *i,
+            Event::Text(i, _)
+            | Event::Edit(i, _)
+            | Event::Press(i, _)
+            | Event::Choose(i, _)
+            | Event::Picture(i, _) => *i,
         };
         let Some(field) = self.fields.get(index).filter(|f| f.editable()) else {
             return false;
@@ -274,6 +315,16 @@ impl Form {
                 }
             }
             Event::Choose(_, export) => FieldValue::Text(export),
+            Event::Picture(_, picture) => {
+                if field.kind != FieldKind::Image {
+                    return false;
+                }
+                self.previews.insert(
+                    index,
+                    image::Handle::from_rgba(picture.width, picture.height, picture.rgba()),
+                );
+                FieldValue::Picture(picture)
+            }
         };
         match self.values.get_mut(index) {
             Some(value) if *value != new => {
@@ -297,6 +348,10 @@ impl Form {
             let Some(value) = self.values.get(index) else {
                 continue;
             };
+            // A signed signature field shows its signature, drawn by the page.
+            if matches!(field.kind, FieldKind::Signature { signed: true }) {
+                continue;
+            }
             for widget in field.widgets.iter().filter(|w| w.page == page) {
                 let (x, y, w, h) = map.rect(&widget.at);
                 if w < 2.0 || h < 2.0 {
@@ -334,7 +389,7 @@ impl Form {
         let ink = Color::from_rgb(field.color.0[0], field.color.0[1], field.color.0[2]);
         let text = match value {
             FieldValue::Text(t) => t.as_str(),
-            FieldValue::State(_) => "",
+            FieldValue::State(_) | FieldValue::Picture(_) => "",
         };
         let valid = field.format.as_ref().is_none_or(|f| f.accepts(text));
         // Formatted once typing has moved on: "1234.5" becomes "$1,234.50".
@@ -441,6 +496,115 @@ impl Form {
                     .on_press_maybe(press)
                     .into()
             }
+            FieldKind::Button { caption, action } => {
+                let label = iced::widget::text(caption.clone())
+                    .size(auto)
+                    .color(Color::BLACK)
+                    .wrapping(iced::widget::text::Wrapping::None);
+                let press = Message::FormButton(*action);
+                iced::widget::tooltip(
+                    button(container(label).center(Fill))
+                        .padding(1)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(|_: &Theme, status| button::Style {
+                            background: Some(
+                                match status {
+                                    button::Status::Hovered => Color::from_rgb(0.9, 0.9, 0.92),
+                                    button::Status::Pressed => Color::from_rgb(0.7, 0.7, 0.74),
+                                    _ => Color::from_rgb(0.84, 0.84, 0.86),
+                                }
+                                .into(),
+                            ),
+                            border: Border {
+                                color: Color::from_rgb(0.5, 0.5, 0.55),
+                                width: 1.0,
+                                radius: 2.0.into(),
+                            },
+                            ..button::Style::default()
+                        })
+                        .on_press(press),
+                    container(iced::widget::text(button_tip(field, *action)).size(12))
+                        .padding(4)
+                        .style(container::rounded_box),
+                    iced::widget::tooltip::Position::Bottom,
+                )
+                .into()
+            }
+            FieldKind::Image => {
+                let shown: Element<'a, Message> = match self.previews.get(&index) {
+                    Some(handle) => image(handle.clone())
+                        .width(Fill)
+                        .height(Fill)
+                        .content_fit(iced::ContentFit::Contain)
+                        .into(),
+                    None => svg(svg::Handle::from_memory(Icon::AddPicture.bytes()))
+                        .width((height * 0.5).clamp(8.0, 32.0))
+                        .height((height * 0.5).clamp(8.0, 32.0))
+                        .opacity(0.6_f32)
+                        .into(),
+                };
+                let press = editable.then_some(Message::FieldPicture(index));
+                iced::widget::tooltip(
+                    button(container(shown).center(Fill))
+                        .padding(1)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(|_: &Theme, status| button::Style {
+                            background: Some(Color::from_rgba(0.86, 0.9, 1.0, 0.45).into()),
+                            border: Border {
+                                color: FIELD_EDGE,
+                                width: if matches!(status, button::Status::Hovered) {
+                                    1.5
+                                } else {
+                                    1.0
+                                },
+                                radius: 0.0.into(),
+                            },
+                            ..button::Style::default()
+                        })
+                        .on_press_maybe(press),
+                    container(iced::widget::text("Choose a picture for this field").size(12))
+                        .padding(4)
+                        .style(container::rounded_box),
+                    iced::widget::tooltip::Position::Bottom,
+                )
+                .into()
+            }
+            FieldKind::Signature { .. } => {
+                let mark = svg(svg::Handle::from_memory(Icon::Signature.bytes()))
+                    .width((height * 0.6).clamp(8.0, 28.0))
+                    .height((height * 0.6).clamp(8.0, 28.0))
+                    .style(|_: &Theme, _| svg::Style {
+                        color: Some(Color::from_rgb(0.25, 0.3, 0.55)),
+                    });
+                let press = editable.then_some(Message::SignField(field.id));
+                iced::widget::tooltip(
+                    button(container(mark).center(Fill))
+                        .padding(1)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(|_: &Theme, status| button::Style {
+                            background: Some(FIELD_FILL.into()),
+                            border: Border {
+                                color: FIELD_EDGE,
+                                width: if matches!(status, button::Status::Hovered) {
+                                    1.5
+                                } else {
+                                    1.0
+                                },
+                                radius: 0.0.into(),
+                            },
+                            ..button::Style::default()
+                        })
+                        .on_press_maybe(press),
+                    container(iced::widget::text("Sign here with a certificate").size(12))
+                        .padding(4)
+                        .style(container::rounded_box),
+                    iced::widget::tooltip::Position::Bottom,
+                )
+                .into()
+            }
             FieldKind::Choice { options, .. } => {
                 let choices: Vec<Choice> = options
                     .iter()
@@ -474,6 +638,26 @@ impl Form {
                 }
             }
         }
+    }
+}
+
+/// What a push button's tip says it does.
+fn button_tip(field: &Field, action: panna_core::ButtonAction) -> String {
+    use panna_core::ButtonAction as A;
+    let does = match action {
+        A::Nothing => "Does nothing here (it needs a script)".to_owned(),
+        A::ResetForm => "Clears the form".to_owned(),
+        A::GoTo(page) => format!("Goes to page {}", page + 1),
+        A::Print => "Prints the document".to_owned(),
+        A::NextPage => "Goes to the next page".to_owned(),
+        A::PreviousPage => "Goes to the previous page".to_owned(),
+        A::FirstPage => "Goes to the first page".to_owned(),
+        A::LastPage => "Goes to the last page".to_owned(),
+    };
+    if field.tooltip.trim().is_empty() {
+        does
+    } else {
+        format!("{} ({})", field.tooltip.trim(), does.to_lowercase())
     }
 }
 
@@ -526,7 +710,7 @@ mod tests {
             tooltip: String::new(),
             kind,
             default: match &value {
-                FieldValue::Text(_) => FieldValue::Text(String::new()),
+                FieldValue::Text(_) | FieldValue::Picture(_) => FieldValue::Text(String::new()),
                 FieldValue::State(_) => FieldValue::State(None),
             },
             value,

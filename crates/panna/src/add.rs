@@ -41,6 +41,7 @@ pub enum Event {
     Bold,
     Italic,
     Align(TextAlign),
+    Spacing(Spacing),
     Address(String),
     Done,
     Cancel,
@@ -80,6 +81,30 @@ impl std::fmt::Display for FontChoice {
     }
 }
 
+/// Line spacing, as a multiple of single spacing (in tenths, so it compares exactly).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spacing(u8);
+
+impl Spacing {
+    pub const ALL: [Spacing; 4] = [Spacing(10), Spacing(12), Spacing(15), Spacing(20)];
+    const SINGLE: Spacing = Spacing(10);
+
+    fn factor(self) -> f32 {
+        f32::from(self.0) / 10.0
+    }
+}
+
+impl std::fmt::Display for Spacing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            10 => f.write_str("Single spacing"),
+            15 => f.write_str("1.5 lines"),
+            20 => f.write_str("Double spacing"),
+            n => write!(f, "{} lines", f32::from(n) / 10.0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Drag {
     page: usize,
@@ -98,6 +123,7 @@ pub struct Adder {
     bold: bool,
     italic: bool,
     align: TextAlign,
+    spacing: Spacing,
     drag: Option<Drag>,
     pub pending: Option<Pending>,
 }
@@ -114,6 +140,7 @@ impl Default for Adder {
             bold: false,
             italic: false,
             align: TextAlign::Left,
+            spacing: Spacing::SINGLE,
             drag: None,
             pending: None,
         }
@@ -210,6 +237,7 @@ impl Adder {
             Event::Bold => self.bold = !self.bold,
             Event::Italic => self.italic = !self.italic,
             Event::Align(align) => self.align = align,
+            Event::Spacing(spacing) => self.spacing = spacing,
             Event::Address(value) => {
                 if let Some(Pending {
                     details: Details::Link(typed),
@@ -238,6 +266,7 @@ impl Adder {
                             color: self.color_value(),
                             font: self.font().unwrap_or_default(),
                             align: self.align,
+                            spacing: (self.spacing != Spacing::SINGLE).then(|| self.spacing.factor()),
                         }
                     }
                     Details::Link(typed) => match link_target(&typed) {
@@ -268,9 +297,15 @@ impl Adder {
                     } => {
                         let text = content.text();
                         let text = text.trim_end();
-                        if text == was && self.font().is_none() {
+                        // A paragraph keeps its own spacing unless another is picked.
+                        let spaced = self.spacing != Spacing::SINGLE;
+                        if text == was && self.font().is_none() && !(spaced && leading.is_some()) {
                             return Outcome::Nothing;
                         }
+                        let leading = match leading {
+                            Some(_) if spaced => Some(size * panna_core::LINE_HEIGHT * self.spacing.factor()),
+                            other => other,
+                        };
                         Addition::ReplaceText {
                             area: pending.rect,
                             text: text.to_owned(),
@@ -512,6 +547,28 @@ impl Adder {
             .spacing(4)
             .align_y(Center)
         };
+        // Line spacing, for text of more than one line.
+        let spacing = |own: bool| {
+            row![
+                text("Line spacing").size(12),
+                iced::widget::tooltip(
+                    pick_list(Spacing::ALL, Some(self.spacing), move |v| ev(Event::Spacing(v))).text_size(13),
+                    container(
+                        text(if own {
+                            "\u{201c}Single spacing\u{201d} keeps the paragraph's own spacing"
+                        } else {
+                            "How far apart the lines are"
+                        })
+                        .size(12)
+                    )
+                    .padding(4)
+                    .style(container::rounded_box),
+                    iced::widget::tooltip::Position::Bottom,
+                ),
+            ]
+            .spacing(6)
+            .align_y(Center)
+        };
         let body: Element<'_, Message> = match &pending.details {
             Details::Picture => return None,
             Details::Text(content) => {
@@ -531,6 +588,7 @@ impl Adder {
                         .on_action(move |a| ev(Event::Edit(a)))
                         .height(120),
                     style(false),
+                    spacing(false),
                     row![
                         pick_list(SIZES, Some(self.size), move |s| ev(Event::Size(s))).text_size(13),
                         text("pt").size(13),
@@ -562,6 +620,11 @@ impl Adder {
                     .on_action(move |a| ev(Event::Edit(a)))
                     .height(if leading.is_some() { 160 } else { 80 }),
                 style(true),
+                if leading.is_some() {
+                    Element::from(spacing(true))
+                } else {
+                    space().height(0).into()
+                },
                 text(match (leading.is_some(), self.font()) {
                     (true, font) => format!(
                         "The old paragraph is taken out, and the new text drawn in its place at \

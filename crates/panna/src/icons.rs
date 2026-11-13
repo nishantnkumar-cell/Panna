@@ -155,6 +155,18 @@ pub enum Icon {
     Pause,
     Play,
     Dashed,
+    FitVisible,
+    ButtonField,
+    ImageField,
+    FlipAcross,
+    FlipDown,
+    NewWindow,
+    Combine,
+    FolderSearch,
+    Reflow,
+    Articles,
+    SpellCheck,
+    ReadingOrder,
 }
 
 impl Icon {
@@ -305,6 +317,18 @@ impl Icon {
             Icon::PrevView => include_bytes!("../icons/arrow-big-left.svg"),
             Icon::NextView => include_bytes!("../icons/arrow-big-right.svg"),
             Icon::FitHeight => include_bytes!("../icons/move-vertical.svg"),
+            Icon::FitVisible => include_bytes!("../icons/scan-line.svg"),
+            Icon::ButtonField => include_bytes!("../icons/rectangle-ellipsis.svg"),
+            Icon::ImageField => include_bytes!("../icons/image.svg"),
+            Icon::FlipAcross => include_bytes!("../icons/flip-horizontal-2.svg"),
+            Icon::FlipDown => include_bytes!("../icons/flip-vertical-2.svg"),
+            Icon::NewWindow => include_bytes!("../icons/app-window.svg"),
+            Icon::Combine => include_bytes!("../icons/combine.svg"),
+            Icon::FolderSearch => include_bytes!("../icons/folder-search.svg"),
+            Icon::Reflow => include_bytes!("../icons/wrap-text.svg"),
+            Icon::Articles => include_bytes!("../icons/newspaper.svg"),
+            Icon::SpellCheck => include_bytes!("../icons/spell-check.svg"),
+            Icon::ReadingOrder => include_bytes!("../icons/list-ordered.svg"),
         }
     }
 }
@@ -413,7 +437,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 145] = [
+    const ALL: [Icon; 157] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -559,6 +583,18 @@ mod tests {
         Icon::Pause,
         Icon::Play,
         Icon::Dashed,
+        Icon::FitVisible,
+        Icon::ButtonField,
+        Icon::ImageField,
+        Icon::FlipAcross,
+        Icon::FlipDown,
+        Icon::NewWindow,
+        Icon::Combine,
+        Icon::FolderSearch,
+        Icon::Reflow,
+        Icon::Articles,
+        Icon::SpellCheck,
+        Icon::ReadingOrder,
     ];
 
     #[test]

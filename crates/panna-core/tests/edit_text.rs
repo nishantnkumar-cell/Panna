@@ -268,6 +268,7 @@ fn added_text_can_be_centred_in_another_font() {
                 color: Color::BLACK,
                 font: courier,
                 align: TextAlign::Centre,
+                spacing: None,
             }],
         )
         .unwrap();

@@ -68,6 +68,8 @@ pub(crate) enum Op {
     CommentSummary(String),
     Compacted(Option<u32>),
     Pictures(usize),
+    /// How much white surrounds what's drawn on a page (see [`Document::white_margins`]).
+    WhiteMargins(usize),
     Leftovers(Vec<(usize, Vec<TextBox>)>),
     DetectFields,
     Preflight(Standard),
@@ -76,6 +78,8 @@ pub(crate) enum Op {
     Tagged,
     /// Figures given these descriptions, by object number and generation.
     Described(Vec<((u32, u16), String)>),
+    ReadingOrder,
+    Reordered(Vec<(ObjRef, String)>),
     CommentsFromFile(Vec<u8>),
     /// Compared with another file's bytes.
     Compare(Vec<u8>),
@@ -119,12 +123,14 @@ pub(crate) enum Answer {
     /// The files an export makes, in the order of [`destinations`].
     Files(Result<Vec<Vec<u8>>, SaveError>),
     Boxes(Vec<TextBox>),
+    Margins(Option<crate::Margins>),
     Leftovers(Leftovers),
     Fields(Result<Vec<NewField>, RenderError>),
     Findings(Vec<Finding>),
     Access(Vec<AccessFinding>),
     Archived(Result<(Vec<u8>, Vec<Finding>), SaveError>),
     Tagged(Result<(Vec<u8>, Vec<AccessFinding>), SaveError>),
+    Order(crate::ReadingOrder),
     Annotations(Result<(Vec<Annotation>, usize), String>),
     Changes(Result<Vec<Change>, String>),
     Revised(Result<Revision, SaveError>),
@@ -157,12 +163,14 @@ impl Op {
             | Self::Rearranged(_) => Answer::Bytes(Err(save)),
             Self::Export(_) => Answer::Files(Err(save)),
             Self::Pictures(_) => Answer::Boxes(Vec::new()),
+            Self::WhiteMargins(_) => Answer::Margins(None),
             Self::Leftovers(_) => Answer::Leftovers(Leftovers::default()),
             Self::DetectFields => Answer::Fields(Err(render)),
             Self::Preflight(_) => Answer::Findings(Vec::new()),
             Self::Accessibility => Answer::Access(Vec::new()),
             Self::Archived => Answer::Archived(Err(save)),
-            Self::Tagged | Self::Described(_) => Answer::Tagged(Err(save)),
+            Self::Tagged | Self::Described(_) | Self::Reordered(_) => Answer::Tagged(Err(save)),
+            Self::ReadingOrder => Answer::Order(crate::ReadingOrder::default()),
             Self::CommentsFromFile(_) => Answer::Annotations(Err(message())),
             Self::Compare(_) => Answer::Changes(Err(message())),
             Self::InsertFile { .. } | Self::ReplaceFromFile { .. } | Self::Edit(_) | Self::WithChanges(_) => {
@@ -228,6 +236,7 @@ pub(crate) fn perform<'a>(
         Op::CommentsFile(format, name) => Answer::Bytes(Ok(doc.comments_file(format, &name))),
         Op::Compacted(pictures) => Answer::Bytes(doc.compacted(pictures)),
         Op::Pictures(page) => Answer::Boxes(doc.pictures(page)),
+        Op::WhiteMargins(page) => Answer::Margins(view.white_margins(page)),
         Op::Leftovers(areas) => Answer::Leftovers(doc.leftovers(&areas)),
         Op::DetectFields => Answer::Fields(doc.detect_fields()),
         Op::Preflight(Standard::PdfA) => Answer::Findings(doc.preflight()),
@@ -239,6 +248,12 @@ pub(crate) fn perform<'a>(
             Ok((copy.bytes().to_vec(), findings))
         })),
         Op::Tagged => Answer::Tagged(doc.tagged().and_then(|bytes| {
+            let copy = doc.reopen(bytes).map_err(|_| SaveError::Damaged)?;
+            let findings = copy.accessibility();
+            Ok((copy.bytes().to_vec(), findings))
+        })),
+        Op::ReadingOrder => Answer::Order(doc.reading_order()),
+        Op::Reordered(order) => Answer::Tagged(doc.reordered(&order).and_then(|bytes| {
             let copy = doc.reopen(bytes).map_err(|_| SaveError::Damaged)?;
             let findings = copy.accessibility();
             Ok((copy.bytes().to_vec(), findings))
@@ -499,6 +514,23 @@ impl Isolated {
         }
     }
 
+    /// Puts every page of another file's `bytes` before page `at`, and carries on with the
+    /// result; `name` is for messages.
+    pub fn insert_file(&mut self, at: usize, bytes: Vec<u8>, name: &str) -> Result<DocumentInfo, SaveError> {
+        match self.call(Op::InsertFile {
+            at,
+            bytes,
+            name: name.to_owned(),
+        }) {
+            Answer::Revised(Ok(revision)) => {
+                self.doc = Doc::new(revision.bytes, revision.password, self.doc.limits);
+                Ok(revision.info)
+            }
+            Answer::Revised(Err(e)) => Err(e),
+            _ => Err(SaveError::EngineCrashed),
+        }
+    }
+
     /// Makes the file smaller (see [`Document::compacted`]), and carries on with it.
     pub fn compact(&mut self, pictures: Option<u32>) -> Result<(), SaveError> {
         match self.call(Op::Compacted(pictures)) {
@@ -508,6 +540,14 @@ impl Isolated {
             }
             Answer::Bytes(Err(e)) => Err(e),
             _ => Err(SaveError::EngineCrashed),
+        }
+    }
+
+    /// The text of page `index`.
+    pub fn page_text(&mut self, index: usize) -> Result<PageText, RenderError> {
+        match self.call(Op::Text(index)) {
+            Answer::Text(result) => result,
+            _ => Err(RenderError::EngineCrashed),
         }
     }
 

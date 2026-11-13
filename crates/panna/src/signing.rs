@@ -34,6 +34,8 @@ pub struct Signing {
     pub page: usize,
     /// The document has no signatures yet, so it can be certified.
     pub can_certify: bool,
+    /// The empty signature field being signed, with its name, in place of a new signature.
+    pub field: Option<(panna_core::ObjRef, String)>,
     pub error: Option<String>,
 }
 
@@ -99,10 +101,11 @@ impl Signing {
             reason: self.reason.clone(),
             location: self.location.clone(),
             certify: self.certify && self.can_certify,
-            visible: self.shown.then_some(Visible {
+            visible: (self.shown && self.field.is_none()).then_some(Visible {
                 page: self.page,
                 corner: self.corner.0,
             }),
+            field: self.field.as_ref().map(|(id, _)| *id),
         }
     }
 }
@@ -164,18 +167,30 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
             .on_input(move |v| ev(Event::Location(v)))
             .on_submit(ev(Event::Go))
             .into(),
-        row![
-            checkbox(state.shown)
-                .label(format!("Show on page {}, at the", state.page + 1))
-                .on_toggle(move |v| ev(Event::Shown(v))),
-            pick_list(Place::ALL, Some(state.corner), move |v| ev(Event::Corner(v)))
-                .text_size(13)
-                .padding([2, 6]),
-        ]
-        .spacing(6)
-        .align_y(iced::Center)
-        .into(),
     ]);
+    if let Some((_, name)) = &state.field {
+        body = body.push(
+            text(if name.is_empty() {
+                "The signature goes in the signature field you clicked, and shows there.".to_owned()
+            } else {
+                format!("The signature goes in the field \u{201c}{name}\u{201d}, and shows there.")
+            })
+            .size(13),
+        );
+    } else {
+        body = body.push(
+            row![
+                checkbox(state.shown)
+                    .label(format!("Show on page {}, at the", state.page + 1))
+                    .on_toggle(move |v| ev(Event::Shown(v))),
+                pick_list(Place::ALL, Some(state.corner), move |v| ev(Event::Corner(v)))
+                    .text_size(13)
+                    .padding([2, 6]),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+        );
+    }
     let certify = checkbox(state.certify && state.can_certify)
         .label("Certify: later changes other than filling in forms and signing will show as not allowed");
     body = body.push(if state.can_certify {

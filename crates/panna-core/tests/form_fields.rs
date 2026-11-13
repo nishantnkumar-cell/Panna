@@ -308,3 +308,89 @@ fn date_fields_carry_their_date_format() {
         Some(panna_core::Format::Date("dd/mm/yyyy".into()))
     );
 }
+
+#[test]
+fn buttons_image_fields_and_signature_fields_are_made_and_read_back() {
+    use panna_core::ButtonAction;
+    let doc = blank();
+    let add = vec![
+        field(
+            0,
+            b(20.0, 20.0, 120.0, 44.0),
+            "Clear",
+            NewFieldKind::Button {
+                caption: "Clear form".into(),
+                action: ButtonAction::ResetForm,
+            },
+        ),
+        field(
+            0,
+            b(140.0, 20.0, 240.0, 44.0),
+            "Next",
+            NewFieldKind::Button {
+                caption: "Go on".into(),
+                action: ButtonAction::GoTo(1),
+            },
+        ),
+        field(0, b(20.0, 60.0, 120.0, 160.0), "Photo", NewFieldKind::Image),
+        field(0, b(140.0, 60.0, 280.0, 110.0), "Signed", NewFieldKind::Signature),
+        field(
+            0,
+            b(140.0, 120.0, 280.0, 140.0),
+            "Print it",
+            NewFieldKind::Button {
+                caption: "Print".into(),
+                action: ButtonAction::Print,
+            },
+        ),
+    ];
+    let new = doc.reopen(doc.with_form_fields(&add, &[]).unwrap()).unwrap();
+    let fields = new.info().unwrap().fields;
+    assert_eq!(fields.len(), 5);
+    assert_eq!(
+        fields[0].kind,
+        FieldKind::Button {
+            caption: "Clear form".into(),
+            action: ButtonAction::ResetForm
+        }
+    );
+    assert_eq!(
+        fields[1].kind,
+        FieldKind::Button {
+            caption: "Go on".into(),
+            action: ButtonAction::GoTo(1)
+        }
+    );
+    assert_eq!(fields[2].kind, FieldKind::Image);
+    assert_eq!(fields[3].kind, FieldKind::Signature { signed: false });
+    assert!(matches!(
+        fields[4].kind,
+        FieldKind::Button {
+            action: ButtonAction::Print,
+            ..
+        }
+    ));
+    for (f, a) in fields.iter().zip(&add) {
+        assert!(close(f.widgets[0].at, a.rect), "{}", f.name);
+    }
+
+    // A picture chosen for the image field is what it shows once saved.
+    let mut rgba = Vec::new();
+    for _ in 0..40 * 40 {
+        rgba.extend_from_slice(&[200, 20, 20, 255]);
+    }
+    let picture = panna_core::StampImage::from_rgba(40, 40, &rgba).unwrap();
+    let filled = new
+        .with_changes(&Changes {
+            fields: vec![(fields[2].id, FieldValue::Picture(picture))],
+            ..Changes::default()
+        })
+        .unwrap();
+    let filled = new.reopen(filled).unwrap();
+    assert_eq!(filled.info().unwrap().fields[2].kind, FieldKind::Image);
+    let page = filled.render_page(&filled.new_cache(), 0, 1.0).unwrap();
+    let w = page.width as usize;
+    // The field is 100 points square at (20, 60) from the top left: its middle is red.
+    let px = &page.rgba[(110 * w + 70) * 4..][..3];
+    assert!(px[0] > 150 && px[1] < 80 && px[2] < 80, "{px:?}");
+}

@@ -74,6 +74,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     if modifiers.command() && modifiers.shift() {
         return match key.as_ref() {
             Key::Character("g" | "G") => Some(Message::Find(Event::Prev)),
+            // Acrobat's Advanced Search.
+            Key::Character("f" | "F") => Some(Message::FolderSearch(crate::folder_search::Event::Open)),
             Key::Character("z" | "Z") => Some(Message::Annotate(annotate::Event::Redo)),
             Key::Character("s" | "S") => Some(Message::SaveAs),
             Key::Character("=" | "+") => Some(Message::RotateCw),
@@ -87,6 +89,8 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("r" | "R") => Some(Message::Pages(crate::pages::Op::RotatePages)),
             // Automatic scrolling.
             Key::Character("h" | "H") => Some(Message::AutoScroll),
+            // Snap to grid, as in Acrobat.
+            Key::Character("u" | "U") => Some(Message::ToggleSnap),
             // Acrobat's Read Out Loud keys.
             Key::Character("y" | "Y") => Some(Message::ReadAloudToggle),
             Key::Character("v" | "V") => Some(Message::ReadAloud(crate::speech::Event::Page)),
@@ -111,6 +115,10 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
             Key::Character("0") => Some(Message::FitPage),
             Key::Character("1") => Some(Message::ZoomReset),
             Key::Character("2") => Some(Message::FitWidth),
+            Key::Character("3") => Some(Message::FitVisible),
+            Key::Character("4") => Some(Message::ToggleReflow),
+            Key::Character("r") => Some(Message::ToggleRulers),
+            Key::Character("u") => Some(Message::ToggleGrid),
             Key::Character("f") => Some(Message::Find(Event::Open)),
             Key::Character("g") => Some(Message::Find(Event::Next)),
             Key::Character("c") => Some(Message::Copy),
@@ -137,6 +145,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
         Key::Named(Named::Enter) => Some(Message::EnterKey(false)),
         // F4 shows or hides the navigation pane, as in Acrobat.
         Key::Named(Named::F3) => Some(Message::Find(Event::Next)),
+        Key::Named(Named::F7) => Some(Message::Spelling(crate::spelling::Event::Open)),
         Key::Named(Named::F4) => Some(Message::Sidebar(crate::sidebar::Event::Toggle)),
         Key::Named(Named::F11) => Some(Message::ToggleFullScreen),
         // Left and Right turn pages; Up and Down scroll (and turn pages while presenting).

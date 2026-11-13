@@ -44,6 +44,7 @@ type PreflightReply = Box<dyn FnOnce(Vec<crate::Finding>) + Send>;
 type AccessReply = Box<dyn FnOnce(Vec<crate::AccessFinding>) + Send>;
 type DetectReply = Box<dyn FnOnce(Result<Vec<crate::NewField>, RenderError>) + Send>;
 type PicturesReply = Box<dyn FnOnce(Vec<crate::TextBox>) + Send>;
+type MarginsReply = Box<dyn FnOnce(Option<crate::Margins>) + Send>;
 type LeftoversReply = Box<dyn FnOnce(crate::Leftovers) + Send>;
 type CompareReply = Box<dyn FnOnce(Result<Vec<crate::Change>, String>) + Send>;
 type PrintReply = Box<dyn FnOnce(Result<Vec<u8>, SaveError>) + Send>;
@@ -187,6 +188,8 @@ enum Reply {
     Compare(PathBuf, CompareReply),
     /// Where the pictures on a page are.
     Pictures(usize, PicturesReply),
+    /// The white around what's drawn on a page.
+    WhiteMargins(usize, MarginsReply),
     /// What redacting these areas would leave in bookmarks and comments.
     Leftovers(Vec<(usize, Vec<crate::TextBox>)>, LeftoversReply),
     /// Where form fields could go.
@@ -562,6 +565,16 @@ impl RenderWorker {
         });
     }
 
+    /// How much white surrounds what's drawn on `page` as shown (top, right, bottom, left, in
+    /// points), for Fit Visible; `None` for a blank page.
+    pub fn white_margins(&self, page: usize, reply: impl FnOnce(Option<crate::Margins>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::WhiteMargins(page, Box::new(reply)),
+        });
+    }
+
     /// What redacting `areas` would leave in bookmarks and comments (see
     /// [`Document::leftovers`]).
     pub fn leftovers(
@@ -658,6 +671,25 @@ pub(crate) fn export_files<'a>(
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
             Ok(vec![(path.clone(), crate::office::xlsx(doc, &pages)?)])
         }
+        ExportFormat::Html | ExportFormat::Rtf | ExportFormat::Epub => {
+            let Some((_, path)) = export.pages.first() else {
+                return Ok(Vec::new());
+            };
+            let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
+            // The document's title, or else the file's name.
+            let title = doc
+                .info()
+                .ok()
+                .and_then(|i| i.title)
+                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "Document".to_owned());
+            let bytes = match export.format {
+                ExportFormat::Html => crate::ebook::html(doc, &pages, &title)?,
+                ExportFormat::Rtf => crate::ebook::rtf(doc, &pages)?,
+                _ => crate::ebook::epub(doc, &pages, &title)?,
+            };
+            Ok(vec![(path.clone(), bytes)])
+        }
         ExportFormat::PowerPoint => {
             let Some((_, path)) = export.pages.first() else {
                 return Ok(Vec::new());
@@ -698,6 +730,37 @@ pub fn describe_file(
     let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
     let (mut doc, _) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
     match doc.call(Op::Described(alts.to_vec())) {
+        Answer::Tagged(result) => result.and_then(|(bytes, findings)| {
+            write_atomically(target, &bytes)?;
+            Ok(findings)
+        }),
+        _ => Err(SaveError::EngineCrashed),
+    }
+}
+
+/// The reading order of the tagged file at `source` (see [`crate::ReadingOrder`]), read in
+/// the locked-down process. Blocks; call it off the interface's thread.
+pub fn reading_order_file(source: &Path) -> Result<crate::ReadingOrder, SaveError> {
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, _) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    match doc.call(Op::ReadingOrder) {
+        Answer::Order(order) => Ok(order),
+        _ => Err(SaveError::EngineCrashed),
+    }
+}
+
+/// Puts the file at `source` in a new reading order, with roles, writes it to `target`, and
+/// gives the accessibility check of what was written. Blocks.
+pub fn reorder_file(
+    source: &Path,
+    target: &Path,
+    order: &[(crate::ObjRef, String)],
+) -> Result<Vec<crate::AccessFinding>, SaveError> {
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, _) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    match doc.call(Op::Reordered(order.to_vec())) {
         Answer::Tagged(result) => result.and_then(|(bytes, findings)| {
             write_atomically(target, &bytes)?;
             Ok(findings)
@@ -847,6 +910,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     }))
                 }
                 Reply::Pictures(page, reply) => reply(ask!(Op::Pictures(page), Boxes)),
+                Reply::WhiteMargins(page, reply) => reply(ask!(Op::WhiteMargins(page), Margins)),
                 Reply::Leftovers(areas, reply) => reply(ask!(Op::Leftovers(areas), Leftovers)),
                 Reply::DetectFields(reply) => reply(ask!(Op::DetectFields, Fields)),
                 Reply::Preflight(standard, reply) => reply(ask!(Op::Preflight(standard), Findings)),

@@ -1134,6 +1134,179 @@ pub(crate) fn text_blocks(content: &[u8]) -> Option<Vec<TextBlock>> {
     Some(out)
 }
 
+/// What a page draws in one marked-content sequence (`/Tag <</MCID n>> BDC … EMC`): the
+/// bytes of the text it shows, and about where, in user space (x0, y0, x1, y1). Widths of
+/// letters aren't known here, so the right edges are guesses.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Marked {
+    pub(crate) text: Vec<u8>,
+    pub(crate) area: Option<[f64; 4]>,
+}
+
+/// Most marked-content sequences read from one page.
+const MAX_MARKED: usize = 100_000;
+
+/// The MCID in a marked-content property list's bytes.
+fn mcid_in(dict: &[u8]) -> Option<i64> {
+    let at = dict.windows(5).position(|w| w == b"/MCID")?;
+    let rest = dict.get(at + 5..)?;
+    let digits: String = rest
+        .iter()
+        .skip_while(|b| is_white(**b))
+        .take_while(|b| b.is_ascii_digit())
+        .map(|b| char::from(*b))
+        .collect();
+    digits.parse().ok()
+}
+
+/// Each marked-content sequence in `content`, by its MCID.
+pub(crate) fn marked_content(content: &[u8]) -> std::collections::HashMap<i64, Marked> {
+    let mut lex = Lexer {
+        data: content,
+        pos: 0,
+    };
+    let mut out: std::collections::HashMap<i64, Marked> = std::collections::HashMap::new();
+    let mut stack: Vec<(Matrix, f64)> = Vec::new();
+    let mut marks: Vec<Option<i64>> = Vec::new();
+    let (mut ctm, mut font_size) = (IDENTITY, 0.0);
+    let (mut tm, mut tlm) = (IDENTITY, IDENTITY);
+    let mut leading = 0.0;
+    let mut operands: Vec<Operand> = Vec::new();
+    let scale = |m: Matrix| (m[0] * m[3] - m[1] * m[2]).abs().sqrt();
+    let grow = |area: &mut Option<[f64; 4]>, [x0, y0, x1, y1]: [f64; 4]| {
+        let a = area.get_or_insert([x0, y0, x1, y1]);
+        *a = [a[0].min(x0), a[1].min(y0), a[2].max(x1), a[3].max(y1)];
+    };
+    loop {
+        lex.skip();
+        let Some(token) = lex.token(0) else { break };
+        let range = match token {
+            Token::Operand(o) => {
+                operands.push(o);
+                continue;
+            }
+            Token::ArrayEnd | Token::DictEnd => {
+                operands.push(Operand::Other);
+                continue;
+            }
+            Token::Operator(range) => range,
+        };
+        let nums: Vec<f64> = operands.iter().filter_map(Operand::number).collect();
+        let current = marks.iter().rev().find_map(|m| *m);
+        let op = content.get(range).unwrap_or_default();
+        match Some(op) {
+            Some(b"BDC") => {
+                let mcid = operands.iter().find_map(|o| match o {
+                    Operand::Dict(r) => content.get(r.clone()).and_then(mcid_in),
+                    _ => None,
+                });
+                if marks.len() < MAX_STACK {
+                    marks.push(mcid);
+                }
+            }
+            Some(b"BMC") if marks.len() < MAX_STACK => marks.push(None),
+            Some(b"EMC") => {
+                marks.pop();
+            }
+            Some(b"q") if stack.len() < MAX_STACK => stack.push((ctm, font_size)),
+            Some(b"Q") => (ctm, font_size) = stack.pop().unwrap_or((ctm, font_size)),
+            Some(b"cm") => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    ctm = concat([a, b, c, d, e, f], ctm);
+                }
+            }
+            Some(b"BT") => (tm, tlm) = (IDENTITY, IDENTITY),
+            Some(b"Tf") => {
+                if let Some(v) = nums.last() {
+                    font_size = v.abs();
+                }
+            }
+            Some(b"TL") => leading = nums.first().copied().unwrap_or(leading),
+            Some(b"Tm") => {
+                if let [a, b, c, d, e, f] = nums[..] {
+                    tm = [a, b, c, d, e, f];
+                    tlm = tm;
+                }
+            }
+            Some(b"Td" | b"TD") => {
+                if let [x, y] = nums[..] {
+                    if op == b"TD" {
+                        leading = -y;
+                    }
+                    tlm = concat([1.0, 0.0, 0.0, 1.0, x, y], tlm);
+                    tm = tlm;
+                }
+            }
+            Some(op @ (b"Tj" | b"TJ" | b"'" | b"\"" | b"T*")) => {
+                if matches!(op, b"'" | b"\"" | b"T*") {
+                    tlm = concat([1.0, 0.0, 0.0, 1.0, 0.0, -leading], tlm);
+                    tm = tlm;
+                }
+                let mut bytes = Vec::new();
+                for o in &operands {
+                    match o {
+                        Operand::String(s) => bytes.extend_from_slice(s),
+                        Operand::Array(items) => {
+                            for i in items {
+                                match i {
+                                    Operand::String(s) => bytes.extend_from_slice(s),
+                                    // A wide gap stands for a space.
+                                    Operand::Number(n) if *n < -200.0 => bytes.push(b' '),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let Some(mcid) = current else {
+                    operands.clear();
+                    continue;
+                };
+                if out.len() >= MAX_MARKED && !out.contains_key(&mcid) {
+                    operands.clear();
+                    continue;
+                }
+                // About half an em a byte.
+                let advance = bytes.len() as f64 * font_size * 0.5;
+                let m = concat(tm, ctm);
+                let (x0, y0) = apply(m, 0.0, -font_size * 0.2);
+                let (x1, y1) = apply(m, advance, font_size * 0.8);
+                let entry = out.entry(mcid).or_default();
+                if !entry.text.is_empty() && !bytes.is_empty() && !entry.text.ends_with(b" ") {
+                    entry.text.push(b' ');
+                }
+                entry.text.extend(bytes.iter().take(4_000));
+                if [x0, y0, x1, y1].iter().all(|v| v.is_finite()) && scale(m) > 0.0 {
+                    grow(&mut entry.area, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
+                }
+                tm = concat([1.0, 0.0, 0.0, 1.0, advance, 0.0], tm);
+            }
+            Some(b"Do") => {
+                if let Some(mcid) = current {
+                    let corners =
+                        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].map(|(x, y)| apply(ctm, x, y));
+                    let xs = corners.map(|c| c.0);
+                    let ys = corners.map(|c| c.1);
+                    let area = [
+                        xs.iter().copied().fold(f64::INFINITY, f64::min),
+                        ys.iter().copied().fold(f64::INFINITY, f64::min),
+                        xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                        ys.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                    ];
+                    if area.iter().all(|v| v.is_finite()) {
+                        grow(&mut out.entry(mcid).or_default().area, area);
+                    }
+                }
+            }
+            Some(b"ID") if lex.inline_image().is_none() => break,
+            _ => {}
+        }
+        operands.clear();
+    }
+    out
+}
+
 /// The inverse of `m`, unless it squashes everything flat.
 pub(crate) fn invert(m: Matrix) -> Option<Matrix> {
     let det = m[0] * m[3] - m[1] * m[2];

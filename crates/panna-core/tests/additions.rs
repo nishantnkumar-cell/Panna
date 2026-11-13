@@ -56,6 +56,7 @@ fn text_pictures_and_links_become_part_of_the_page() {
                 color: Color::BLACK,
                 font: Default::default(),
                 align: Default::default(),
+                spacing: None,
             },
             Addition::Picture {
                 rect: b(100.0, 100.0, 140.0, 140.0),
@@ -129,4 +130,29 @@ fn unsafe_addresses_and_missing_pages_are_left_out() {
     let new = doc.reopen(doc.with_additions(0, &additions).unwrap()).unwrap();
     assert!(new.info().unwrap().links.is_empty());
     assert!(doc.with_additions(5, &additions).is_err());
+}
+
+#[test]
+fn added_text_takes_its_line_spacing() {
+    let doc = blank();
+    let bytes = doc
+        .with_additions(
+            0,
+            &[Addition::Text {
+                at: (20.0, 30.0),
+                text: "One\nTwo".into(),
+                size: 10.0,
+                color: Color::BLACK,
+                font: Default::default(),
+                align: Default::default(),
+                spacing: Some(2.0),
+            }],
+        )
+        .unwrap();
+    let new = doc.reopen(bytes).unwrap();
+    let text = new.page_text(0).unwrap();
+    let one = text.rects(text.find("One", Default::default())[0].clone())[0];
+    let two = text.rects(text.find("Two", Default::default())[0].clone())[0];
+    // Single spacing is 1.2 times the size; double is twice that.
+    assert!(((two.y0 - one.y0) - 24.0).abs() < 1.0, "{one:?} {two:?}");
 }

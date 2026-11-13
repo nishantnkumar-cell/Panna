@@ -33,6 +33,8 @@ fn value_text(value: &FieldValue) -> &str {
         FieldValue::Text(t) => t,
         FieldValue::State(Some(s)) => s,
         FieldValue::State(None) => "Off",
+        // Pictures aren't form data.
+        FieldValue::Picture(_) => "",
     }
 }
 

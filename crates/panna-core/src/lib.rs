@@ -9,13 +9,16 @@ mod access;
 mod attachments;
 pub mod batch;
 mod calc;
+pub mod combine;
 mod commentdata;
 mod comments;
 mod compare;
 mod detect;
 mod document;
+mod ebook;
 mod edit;
 mod export;
+pub mod folder;
 mod formats;
 mod formdata;
 mod forms;
@@ -32,6 +35,7 @@ mod patterns;
 mod preflight;
 mod remote;
 mod sig;
+pub mod spell;
 mod text;
 mod view;
 mod worker;
@@ -47,23 +51,24 @@ pub use document::{
 pub use edit::{
     Addition, Annotation, AttachedFile, Changes, Cleanup, Color, Corner, ExistingMarks, FontFamily,
     HeaderFooter, Kind, LINE_HEIGHT, LineEnd, MAX_ATTACHMENT_BYTES, MAX_BLANK_PAGES, MAX_PICTURES, Margins,
-    NOTE_SIZE, NewField, NewFieldKind, PageSource, PictureChange, Protection, RadioButton, STAMPS, SaveError,
-    SignOptions, StampImage, TextAlign, TextFont, Visible, Watermark, blank_pdf, fill_header_footer,
-    pictures_to_pdf, rgba_to_pdf, stamp_label, text_width, today, wrap,
+    NOTE_SIZE, NewField, NewFieldKind, ORDER_ROLES, OrderItem, PageSource, PictureChange, Protection,
+    RadioButton, ReadingOrder, STAMPS, SaveError, SignOptions, StampImage, TextAlign, TextFont, Visible,
+    Watermark, blank_pdf, fill_header_footer, pictures_to_pdf, rgba_to_pdf, stamp_label, text_width, today,
+    wrap,
 };
 pub use export::{Export, ExportFormat};
 pub use formats::Format;
 pub use formdata::{DataFormat, export as export_form_data, import as import_form_data};
-pub use forms::{ChoiceOption, Field, FieldKind, FieldValue, Widget};
+pub use forms::{ButtonAction, ChoiceOption, Field, FieldKind, FieldValue, Widget};
 pub use labels::{LabelRange, LabelStyle, page_label};
 pub use layers::Layer;
 pub use limits::Limits;
 pub use links::{Link, LinkTarget, safe_uri};
-pub use outline::OutlineItem;
+pub use outline::{Article, OutlineItem};
 pub use patterns::Pattern;
 pub use preflight::{Finding, Rule, Standard};
 pub use remote::Isolated;
 pub use sig::{Cert, DigitalId, HeldKey, SigStatus, SignDigest, Signature, trusted_by};
 pub use text::{FindOptions, PageText, Paragraph, TextBox};
 pub use view::{InitialView, OpenLayout, OpenPanel, OpenZoom};
-pub use worker::{PageEdit, RenderWorker, describe_file};
+pub use worker::{PageEdit, RenderWorker, describe_file, reading_order_file, reorder_file};

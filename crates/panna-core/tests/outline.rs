@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)] // test helpers
+#![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test helpers
 use panna_core::{Document, Limits, ObjRef, OutlineItem};
 
 /// Assembles numbered objects (1-based) into a PDF with a correct xref table.
@@ -291,4 +291,29 @@ fn how_a_file_opens_is_read_and_saved() {
     let bytes = doc.with_initial_view(&InitialView::default()).unwrap();
     let again = doc.reopen(bytes).unwrap().info().unwrap().initial_view;
     assert_eq!(again, InitialView::default());
+}
+
+#[test]
+fn article_threads_are_read_with_their_boxes_pages_in_order() {
+    // Objects 1-5: catalog and three pages; 6 a thread through pages 3 then 1, whose last
+    // bead points back at the first; 7 an untitled thread with one bead; 8-10 the beads.
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /Threads [6 0 R 7 0 R] >>",
+        PAGES[0],
+        PAGES[1],
+        PAGES[2],
+        PAGES[3],
+        "<< /Type /Thread /I << /Title (The Story) >> /F 8 0 R >>",
+        "<< /Type /Thread /F 10 0 R >>",
+        "<< /Type /Bead /T 6 0 R /P 5 0 R /R [0 0 100 100] /N 9 0 R /V 9 0 R >>",
+        "<< /Type /Bead /P 3 0 R /R [0 0 100 100] /N 8 0 R /V 8 0 R >>",
+        "<< /Type /Bead /T 7 0 R /P 4 0 R /R [0 0 100 100] /N 10 0 R /V 10 0 R >>",
+    ];
+    let doc = Document::from_bytes(build(&objects), None, Limits::default()).unwrap();
+    let articles = doc.info().unwrap().articles;
+    assert_eq!(articles.len(), 2);
+    assert_eq!(articles[0].title, "The Story");
+    assert_eq!(articles[0].pages, [2, 0]);
+    assert_eq!(articles[1].title, "Article 2");
+    assert_eq!(articles[1].pages, [1]);
 }

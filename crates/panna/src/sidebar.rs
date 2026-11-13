@@ -34,6 +34,7 @@ pub enum Tab {
     Layers,
     Changes,
     Signatures,
+    Articles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,6 +72,7 @@ impl Tab {
             Tab::Layers => "layers",
             Tab::Changes => "changes",
             Tab::Signatures => "signatures",
+            Tab::Articles => "articles",
         }
     }
 
@@ -82,6 +84,7 @@ impl Tab {
             "comments" => Some(Tab::Comments),
             "files" => Some(Tab::Files),
             "layers" => Some(Tab::Layers),
+            "articles" => Some(Tab::Articles),
             "changes" => Some(Tab::Changes),
             "signatures" => Some(Tab::Signatures),
             _ => None,
@@ -223,6 +226,7 @@ pub struct ViewData<'a> {
     pub signatures: &'a [panna_core::Signature],
     pub trusted: &'a [panna_core::Cert],
     pub layers: &'a [Layer],
+    pub articles: &'a [panna_core::Article],
     /// Whether each layer is shown.
     pub layers_shown: &'a [bool],
     /// The comparison with another file, if one was made.
@@ -239,6 +243,7 @@ impl Sidebar {
         // Word-style text tabs; the open one is underlined in the accent colour.
         let has_files = !data.attachments.is_empty();
         let has_layers = !data.layers.is_empty();
+        let has_articles = !data.articles.is_empty();
         let has_signatures = !data.signatures.is_empty();
         let tab_button = |tab: Tab, label: &'static str| {
             let active = self.tab == tab;
@@ -289,6 +294,7 @@ impl Sidebar {
                 Tab::Changes,
             ))
             .push(icon_tab(has_layers, Icon::Layers, "Layers", Tab::Layers))
+            .push(icon_tab(has_articles, Icon::Articles, "Articles", Tab::Articles))
             .push(icon_tab(has_files, Icon::Paperclip, "Attached files", Tab::Files))
             .push(icon_tab(
                 has_signatures,
@@ -325,11 +331,12 @@ impl Sidebar {
         let content = match self.tab {
             Tab::Files if has_files => files(data.attachments),
             Tab::Layers if has_layers => layers(data.layers, data.layers_shown),
+            Tab::Articles if has_articles => articles(data.articles),
             Tab::Changes if data.comparison.is_some() => data
                 .comparison
                 .map_or_else(|| space().into(), crate::compare::Comparison::panel),
             Tab::Signatures if has_signatures => crate::signatures::panel(data.signatures, data.trusted),
-            Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes | Tab::Signatures => {
+            Tab::Thumbnails | Tab::Files | Tab::Layers | Tab::Changes | Tab::Signatures | Tab::Articles => {
                 self.thumbnails(&data)
             }
             Tab::Bookmarks => data.bookmarks.view(
@@ -452,6 +459,43 @@ fn section(outline: &[OutlineItem], i: usize) -> Option<std::ops::Range<usize>> 
 }
 
 /// Layers, each with a box to show or hide it. Hiding one changes only the view.
+/// Article threads: each one's title goes to where it starts, and each of its boxes' pages
+/// can be gone to in reading order.
+fn articles(articles: &[panna_core::Article]) -> Element<'_, Message> {
+    let items = articles.iter().map(|article| {
+        let start = article.pages.first().copied();
+        let title = button(text(article.title.as_str()).size(13))
+            .style(button::text)
+            .width(Fill)
+            .padding([4, 6])
+            .on_press_maybe(start.map(Message::GoToPage));
+        let mut steps = row![text("Pages").size(12).style(text::secondary)]
+            .spacing(4)
+            .align_y(Center);
+        let mut last = None;
+        for &page in article.pages.iter().take(40) {
+            // A box after another on the same page adds nothing to step through.
+            if last == Some(page) {
+                continue;
+            }
+            last = Some(page);
+            steps = steps.push(
+                button(text(format!("{}", page + 1)).size(12))
+                    .style(button::secondary)
+                    .padding([1, 6])
+                    .on_press(Message::GoToPage(page)),
+            );
+        }
+        column![title, steps.wrap()].spacing(2).into()
+    });
+    let note = text("Articles run through boxes on several pages. Pick one to start reading it.")
+        .size(12)
+        .style(text::secondary);
+    scrollable(column![note].extend(items).spacing(10).padding(PAD).width(Fill))
+        .height(Fill)
+        .into()
+}
+
 fn layers<'a>(layers: &'a [Layer], shown: &[bool]) -> Element<'a, Message> {
     let items = layers.iter().enumerate().map(|(index, layer)| {
         let on = shown.get(index).copied().unwrap_or(layer.shown);

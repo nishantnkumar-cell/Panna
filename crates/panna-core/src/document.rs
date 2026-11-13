@@ -29,6 +29,9 @@ pub struct DocumentInfo {
     pub properties: Vec<(std::borrow::Cow<'static, str>, String)>,
     /// Bookmarks, flattened in reading order.
     pub outline: Vec<crate::OutlineItem>,
+    /// Article threads, for the Articles panel.
+    #[serde(default)]
+    pub articles: Vec<crate::Article>,
     /// Comments already in the file, in page order.
     pub comments: Vec<crate::Comment>,
     /// The form's fields, if it has a form.
@@ -457,6 +460,8 @@ impl Document {
                 title,
                 properties: properties.into_iter().map(|(l, v)| (l.into(), v)).collect(),
                 outline,
+                articles: catch_unwind(AssertUnwindSafe(|| crate::outline::articles(&self.pdf)))
+                    .unwrap_or_default(),
                 comments,
             }
         }))
@@ -933,6 +938,19 @@ impl Document {
     pub fn tagged(&self) -> Result<Vec<u8>, crate::SaveError> {
         catch_unwind(AssertUnwindSafe(|| crate::edit::tag(&self.pdf, &self.bytes)))
             .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
+    /// The tagged document's reading order (see [`crate::ReadingOrder`]).
+    pub fn reading_order(&self) -> crate::ReadingOrder {
+        catch_unwind(AssertUnwindSafe(|| crate::edit::reading_order(&self.pdf))).unwrap_or_default()
+    }
+
+    /// The document with its top-level structure elements in `order`, each with its role.
+    pub fn reordered(&self, order: &[(crate::ObjRef, String)]) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::reordered(&self.pdf, &self.bytes, order)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
     /// The document with descriptions (alternate text) given to figures, by the structure

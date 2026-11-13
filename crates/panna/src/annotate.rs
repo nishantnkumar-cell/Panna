@@ -819,6 +819,40 @@ impl Annotate {
         true
     }
 
+    /// The text of every comment, saved or not, with its page, for checking spelling.
+    pub fn texts(&self) -> Vec<(Picked, usize, String)> {
+        let new = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (Picked::New(i), a.page, a.contents.clone()));
+        let saved = self
+            .saved
+            .iter()
+            .filter(|(id, _)| !self.removed.contains(id))
+            .map(|(id, a)| (Picked::Saved(*id), a.page, a.contents.clone()));
+        new.chain(saved)
+            .filter(|(_, _, text)| !text.trim().is_empty())
+            .collect()
+    }
+
+    /// Gives comment `target` new text, as one undo step. A saved comment becomes a new one,
+    /// as when it's edited by hand.
+    /// Gives back what the comment is now known by.
+    pub fn replace_text(&mut self, target: Picked, text: String) -> (Outcome, Picked) {
+        self.picked = Some(target);
+        let changed = self.edit(true, |a| set_text(a, text));
+        let now = self.picked.take().unwrap_or(target);
+        (
+            if changed {
+                Outcome::Changed
+            } else {
+                Outcome::Nothing
+            },
+            now,
+        )
+    }
+
     /// Everything not yet saved, for the renderer and for saving.
     pub fn changes(&self) -> Changes {
         Changes {

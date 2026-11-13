@@ -995,7 +995,8 @@ pub(crate) fn rebuild(
                             w.set(at, body);
                             at
                         };
-                        let body = super::new_field::widget(field, rect, *num, rotate, &mut store);
+                        let body =
+                            super::new_field::widget(field, rect, *num, &page_nums, rotate, &mut store);
                         let widget = w.alloc();
                         w.set(widget, body);
                         new_fields.push(widget);
@@ -1149,6 +1150,106 @@ pub(crate) fn rebuild(
                                 }
                             };
                             match change {
+                                super::PictureChange::Turn(_) | super::PictureChange::Flip(_) => {
+                                    let (Some(shown_of), Some(undo)) =
+                                        (super::redact::invert(inv), super::redact::invert(place.ctm))
+                                    else {
+                                        out.extend_from_slice(raw);
+                                        continue;
+                                    };
+                                    // About the middle of the picture as shown.
+                                    let a = super::redact::apply(shown_of, from[0], from[1]);
+                                    let b = super::redact::apply(shown_of, from[2], from[3]);
+                                    let (cx, cy) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+                                    let turn = match change {
+                                        super::PictureChange::Turn(t) => match t % 4 {
+                                            1 => [0.0, -1.0, 1.0, 0.0, 0.0, 0.0],
+                                            2 => [-1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+                                            3 => [0.0, 1.0, -1.0, 0.0, 0.0, 0.0],
+                                            _ => super::redact::IDENTITY,
+                                        },
+                                        super::PictureChange::Flip(true) => [-1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                                        _ => [1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+                                    };
+                                    let about = super::redact::concat(
+                                        super::redact::concat([1.0, 0.0, 0.0, 1.0, -cx, -cy], turn),
+                                        [1.0, 0.0, 0.0, 1.0, cx, cy],
+                                    );
+                                    // Page space to shown, turned there, and back.
+                                    let x =
+                                        super::redact::concat(super::redact::concat(shown_of, about), inv);
+                                    let m = super::redact::concat(super::redact::concat(place.ctm, x), undo);
+                                    let mut op = format!("q {} cm ", m.map(n).join(" ")).into_bytes();
+                                    op.extend_from_slice(raw);
+                                    op.extend_from_slice(b" Q");
+                                    out.extend(op);
+                                }
+                                super::PictureChange::Crop(keep) => {
+                                    let cut = super::redact::invert(place.ctm).and_then(|undo| {
+                                        // The kept box in the picture's own unit square.
+                                        let [x0, y0, x1, y1] = user(keep);
+                                        let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
+                                            .map(|(x, y)| super::redact::apply(undo, x, y));
+                                        let lo = |f: fn(&(f64, f64)) -> f64| {
+                                            corners.iter().map(f).fold(f64::MAX, f64::min).clamp(0.0, 1.0)
+                                        };
+                                        let hi = |f: fn(&(f64, f64)) -> f64| {
+                                            corners.iter().map(f).fold(f64::MIN, f64::max).clamp(0.0, 1.0)
+                                        };
+                                        let (u0, v0, u1, v1) =
+                                            (lo(|p| p.0), lo(|p| p.1), hi(|p| p.0), hi(|p| p.1));
+                                        if u1 - u0 < 1e-3 || v1 - v0 < 1e-3 {
+                                            return None;
+                                        }
+                                        let (stream, _) = lookup.stream(&place.name)?;
+                                        let (pw, ph, rgba) = super::pack::picture_rgba(&stream)?;
+                                        // Samples run from the top row down; the unit square
+                                        // from the bottom up.
+                                        let px = |u: f64, side: u32| {
+                                            ((u * f64::from(side)).round() as u32).min(side)
+                                        };
+                                        let (c0, c1) = (px(u0, pw), px(u1, pw).max(px(u0, pw) + 1).min(pw));
+                                        let (r0, r1) = (
+                                            px(1.0 - v1, ph),
+                                            px(1.0 - v0, ph).max(px(1.0 - v1, ph) + 1).min(ph),
+                                        );
+                                        let mut kept =
+                                            Vec::with_capacity(((c1 - c0) * (r1 - r0) * 4) as usize);
+                                        for row in r0..r1 {
+                                            let start = ((row * pw + c0) * 4) as usize;
+                                            kept.extend_from_slice(
+                                                rgba.get(start..start + ((c1 - c0) * 4) as usize)?,
+                                            );
+                                        }
+                                        let image =
+                                            crate::StampImage::from_rgba(c1 - c0, r1 - r0, &kept).ok()?;
+                                        // Drawn over exactly the part kept.
+                                        let (fu0, fu1) =
+                                            (f64::from(c0) / f64::from(pw), f64::from(c1) / f64::from(pw));
+                                        let (fv0, fv1) = (
+                                            1.0 - f64::from(r1) / f64::from(ph),
+                                            1.0 - f64::from(r0) / f64::from(ph),
+                                        );
+                                        Some((image, [fu1 - fu0, 0.0, 0.0, fv1 - fv0, fu0, fv0]))
+                                    });
+                                    let Some((image, m)) = cut else {
+                                        out.extend_from_slice(raw);
+                                        continue;
+                                    };
+                                    let mask = image.has_mask().then(|| w.alloc());
+                                    let (body, mask_body) =
+                                        image.objects(mask.map(|m| format!("{m} 0 R")).as_deref());
+                                    let num = w.alloc();
+                                    w.set(num, body);
+                                    if let (Some(m), Some(b)) = (mask, mask_body) {
+                                        w.set(m, b);
+                                    }
+                                    let name = format!("PannaPicture{num}");
+                                    forms.push((name.clone(), num));
+                                    out.extend_from_slice(
+                                        format!("q {} cm /{name} Do Q", m.map(n).join(" ")).as_bytes(),
+                                    );
+                                }
                                 super::PictureChange::Delete => {}
                                 super::PictureChange::Move(rect) => out.extend(wrap(user(rect), raw)),
                                 super::PictureChange::Replace(image) => {

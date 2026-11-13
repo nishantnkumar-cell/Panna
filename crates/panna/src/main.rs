@@ -11,6 +11,7 @@ mod bookmarks;
 mod certstore;
 mod clipboard;
 mod colors;
+mod combine;
 mod comments;
 mod compare;
 mod create;
@@ -18,14 +19,18 @@ mod export;
 mod find;
 #[cfg(target_os = "macos")]
 mod finder;
+mod folder_search;
 mod form;
+mod guides;
 mod icons;
 mod initial;
 mod labels;
 mod layout;
 mod links;
+mod loupe;
 mod measure;
 mod menu;
+mod order;
 mod pages;
 mod pictures;
 mod preferences;
@@ -35,6 +40,7 @@ mod print;
 mod protect;
 mod ranges;
 mod redact;
+mod reflow;
 mod scan;
 mod selection;
 mod settings;
@@ -45,6 +51,7 @@ mod sign;
 mod signatures;
 mod signing;
 mod speech;
+mod spelling;
 mod toolbar;
 mod tools;
 mod trust;
@@ -59,8 +66,8 @@ use iced::widget::{
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
-    Changes, Comment, DocumentInfo, Limits, LinkTarget, OpenError, PageEdit, PageSize, PageText, RenderError,
-    RenderWorker, RenderedPage, SaveError, TextBox,
+    Changes, Comment, DocumentInfo, Limits, LinkTarget, ObjRef, OpenError, PageEdit, PageSize, PageText,
+    RenderError, RenderWorker, RenderedPage, SaveError, TextBox,
 };
 
 use icons::Icon;
@@ -259,6 +266,21 @@ enum Message {
     Preferences(preferences::Event),
     /// The Batch actions card.
     Batch(batch::Event),
+    /// The Combine files card.
+    Combine(combine::Event),
+    /// The Search a folder card.
+    FolderSearch(folder_search::Event),
+    /// The Check spelling card.
+    Spelling(spelling::Event),
+    /// The Reading order panel.
+    Order(order::Event),
+    /// Opens `path` at `page` (or shows it, if open), searching it for `query`.
+    OpenFoundAt {
+        path: PathBuf,
+        page: usize,
+        query: String,
+        options: panna_core::FindOptions,
+    },
     /// Prints it with each page that has comments followed by a list of them.
     PrintWithComments,
     /// Asks where to save a list of the comments, by page, as a PDF.
@@ -293,12 +315,46 @@ enum Message {
     ArrowScroll(bool),
     /// Enter finishes a polygon, or else moves a screen on (Shift+Enter, back).
     EnterKey(bool),
+    /// A form's push button was pressed.
+    FormButton(panna_core::ButtonAction),
+    /// An image field was clicked: choose its picture.
+    FieldPicture(usize),
+    FieldPictureLoaded(usize, Result<panna_core::StampImage, String>),
+    /// An empty signature field was clicked: sign in it.
+    SignField(ObjRef),
     /// Fits the page's height to the window.
     FitHeight,
+    /// Fits the width of what's drawn on the page (its white margins left out) to the window.
+    FitVisible,
+    /// The white margins of a page, found for Fit Visible.
+    VisibleMargins {
+        doc: u64,
+        page: usize,
+        margins: Option<panna_core::Margins>,
+    },
     /// Read mode: toolbars and panels hidden, a small bar to move and zoom.
     ToggleReadMode,
     /// Shows the document in a second pane below the first, or takes it away.
     ToggleSplit,
+    /// Opens the document in a second window, as Acrobat's Window › New Window.
+    NewWindow,
+    /// Shows the text of a page at a time reflowed to fit the window, or goes back.
+    ToggleReflow,
+    /// Shows or hides the loupe, which magnifies the page around the pointer.
+    ToggleLoupe,
+    LoupeMagnify(loupe::Magnify),
+    /// Shows or hides the pan and zoom window.
+    TogglePanZoom,
+    /// Moves the view so this point of the current page, as fractions across and down,
+    /// is in the middle of the window.
+    PanTo(f32, f32),
+    ToggleRulers,
+    ToggleGrid,
+    ToggleSnap,
+    ClearGuides,
+    /// A ruler was clicked: along the top (`true`) or the left, this far in points from the
+    /// page's edge. Adds a guide there, or takes away the one there.
+    RulerClick(bool, f32),
     SplitScrolled(Viewport),
     /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
     AutoScroll,
@@ -603,6 +659,16 @@ struct App {
     /// Choosing password protection.
     protecting: Option<protect::Protecting>,
     signing: Option<signing::Signing>,
+    /// Rulers, grid and guides.
+    guides: guides::Guides,
+    /// Reflow is on, showing this page.
+    reflow: Option<usize>,
+    /// The reflowed page's paragraphs: the document, the page, and its paragraphs once read.
+    reflowed: Option<reflow::Reflowed>,
+    /// The loupe and the pan and zoom window are shown.
+    loupe_on: bool,
+    pan_zoom_on: bool,
+    magnify: loupe::Magnify,
     /// Choosing hidden information to remove.
     cleaning: Option<panna_core::Cleanup>,
     /// The Save a smaller copy card.
@@ -626,6 +692,17 @@ struct App {
     preferences: bool,
     /// The Batch actions card, while open.
     batch: Option<batch::Batch>,
+    /// The Combine files card, while open.
+    combining: Option<combine::Combining>,
+    /// The Search a folder card, while open; kept when closed so it opens as it was left.
+    folder_search: Option<folder_search::FolderSearch>,
+    folder_search_open: bool,
+    /// The Reading order panel, while open.
+    ordering: Option<order::Ordering>,
+    /// The Check spelling card, while open.
+    spelling: Option<spelling::Spelling>,
+    /// A file being opened at a page other than the one it asks for.
+    open_page: Option<(PathBuf, usize)>,
     /// The account's name, shown in Preferences as the name used when none is set.
     account: String,
     /// What happened after asking to be the default PDF app, shown on the card.
@@ -968,7 +1045,7 @@ fn properties_view<'a>(
 /// The keyboard shortcuts, in two columns.
 fn shortcuts_card<'a>() -> Element<'a, Message> {
     let m = icons::MOD;
-    let keys: [(String, &str); 35] = [
+    let keys: [(String, &str); 38] = [
         (format!("{m}O"), "Open"),
         (format!("{m}S"), "Save"),
         (format!("{m}Shift+S"), "Save as"),
@@ -977,12 +1054,18 @@ fn shortcuts_card<'a>() -> Element<'a, Message> {
         (format!("{m}Tab"), "Next tab"),
         (format!("{m}D"), "Document properties"),
         (format!("{m}F, F3, Shift+F3"), "Find, next, previous"),
+        (format!("{m}Shift+F"), "Search a folder of PDFs"),
+        (format!("{m}4"), "Reflow the text to fit the window"),
+        ("F7".to_owned(), "Check spelling in comments and form fields"),
         (format!("{m}Z, {m}Y"), "Undo, redo"),
         (format!("{m}C"), "Copy"),
         (format!("{m}K"), "Preferences"),
         ("F10, Alt+letter".into(), "Open a menu"),
         (format!("{m}+, {m}−"), "Zoom in, zoom out"),
-        (format!("{m}1, {m}2, {m}0"), "Actual size, fit width, fit page"),
+        (
+            format!("{m}1, {m}2, {m}3, {m}0"),
+            "Actual size, fit width, fit visible, fit page",
+        ),
         ("Page Up, Page Down".into(), "Previous, next page"),
         ("Left, Right".into(), "Previous, next page"),
         ("Enter, Shift+Enter".into(), "Next, previous screen"),
@@ -1201,6 +1284,12 @@ impl App {
             labelling: None,
             protecting: None,
             signing: None,
+            guides: guides::Guides::default(),
+            reflow: None,
+            reflowed: None,
+            loupe_on: false,
+            pan_zoom_on: false,
+            magnify: loupe::Magnify::default(),
             cleaning: None,
             shrinking: None,
             recognising: false,
@@ -1213,6 +1302,12 @@ impl App {
             blank: None,
             preferences: false,
             batch: None,
+            combining: None,
+            folder_search: None,
+            folder_search_open: false,
+            open_page: None,
+            spelling: None,
+            ordering: None,
             account: preferences::account_name(),
             default_app_note: None,
             new_pdf: None,
@@ -1356,6 +1451,8 @@ impl App {
                 | Message::Blank(create::Event::Open)
                 | Message::Preferences(preferences::Event::Open)
                 | Message::Batch(batch::Event::Open)
+                | Message::Combine(combine::Event::Open)
+                | Message::FolderSearch(folder_search::Event::Open)
                 | Message::Export(export::Event::Open)
                 | Message::Protect(protect::Event::Open)
                 | Message::Signing(signing::Event::Open)
@@ -1390,6 +1487,9 @@ impl App {
                         self.settings.save();
                         self.rotation = 0;
                         let mut view = info.initial_view;
+                        if let Some((_, page)) = self.open_page.take_if(|(p, _)| *p == doc.path) {
+                            view.page = page.min(info.pages.len().saturating_sub(1));
+                        }
                         if view.zoom == panna_core::OpenZoom::Default {
                             view.zoom = self.settings.open_zoom.zoom();
                         }
@@ -1717,6 +1817,147 @@ impl App {
                 let zoom = (self.viewport.height - 2.0 * PAGE_GAP).max(100.0) / row_height.max(1.0);
                 let zoom_task = self.set_zoom(zoom);
                 Task::batch([zoom_task, self.go_to_page(page)])
+            }
+            Message::FitVisible => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = self.current_page();
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.white_margins(page, move |margins| {
+                    let _ = tx.send(margins);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |margins| Message::VisibleMargins {
+                    doc: id,
+                    page,
+                    margins: margins.ok().flatten(),
+                })
+            }
+            Message::VisibleMargins { doc, page, margins } => {
+                let Some(open) = &self.doc else {
+                    return Task::none();
+                };
+                if open.id != doc {
+                    return Task::none();
+                }
+                // A blank page has nothing to fit: fit the page's width instead.
+                let Some(margins) = margins else {
+                    return self.update(Message::FitWidth);
+                };
+                let Some((row_width, pages, _)) = open.layout.row_size(page) else {
+                    return Task::none();
+                };
+                let [_, right, _, left] = shown_margins(margins, self.rotation);
+                let visible = (row_width - left - right).max(1.0);
+                let room = (self.viewport.width - 2.0 * PAGE_GAP - 16.0).max(100.0)
+                    - pages.saturating_sub(1) as f32 * PAGE_GAP;
+                let zoom_task = self.set_zoom(room / visible);
+                let page_task = self.go_to_page(page);
+                // Scroll across so what's drawn starts at the window's left edge.
+                let Some(open) = &self.doc else {
+                    return Task::none();
+                };
+                let content_w = open.layout.content_width(self.zoom, self.viewport.width);
+                let x = (open.layout.page_left(page, self.zoom, content_w) + left * self.zoom - PAGE_GAP)
+                    .max(0.0);
+                self.viewport.offset_x = x;
+                Task::batch([
+                    zoom_task,
+                    page_task,
+                    operation::scroll_to(
+                        scroll_id(),
+                        AbsoluteOffset {
+                            x,
+                            y: self.viewport.offset_y,
+                        },
+                    ),
+                ])
+            }
+            Message::ToggleReflow => {
+                if let Some(page) = self.reflow.take() {
+                    self.reflowed = None;
+                    return self.go_to_page(page);
+                }
+                if self.doc.as_ref().is_none_or(|d| d.pages.is_empty()) {
+                    return Task::none();
+                }
+                let page = self.current_page();
+                self.reflow = Some(page);
+                self.refresh_reflow()
+            }
+            Message::ToggleLoupe => {
+                self.loupe_on = !self.loupe_on;
+                Task::none()
+            }
+            Message::LoupeMagnify(magnify) => {
+                self.magnify = magnify;
+                Task::none()
+            }
+            Message::TogglePanZoom => {
+                self.pan_zoom_on = !self.pan_zoom_on;
+                Task::none()
+            }
+            Message::PanTo(fx, fy) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let page = self.current_page();
+                let Some(size) = doc.layout.sizes().get(page).copied() else {
+                    return Task::none();
+                };
+                let content_w = doc.layout.content_width(self.zoom, self.viewport.width);
+                let left = doc.layout.page_left(page, self.zoom, content_w);
+                let top = doc.layout.page_top(page, self.zoom);
+                let x = (left + fx * size.width * self.zoom - self.viewport.width / 2.0).max(0.0);
+                let y = (top + fy * size.height * self.zoom - self.viewport.height / 2.0).max(0.0);
+                self.viewport.offset_x = x;
+                self.viewport.offset_y = y;
+                Task::batch([
+                    operation::scroll_to(scroll_id(), AbsoluteOffset { x, y }),
+                    self.request_visible(),
+                ])
+            }
+            Message::ToggleRulers => {
+                self.guides.rulers = !self.guides.rulers;
+                Task::none()
+            }
+            Message::ToggleGrid => {
+                self.guides.grid = !self.guides.grid;
+                Task::none()
+            }
+            Message::ToggleSnap => {
+                self.guides.snap = !self.guides.snap;
+                Task::none()
+            }
+            Message::ClearGuides => {
+                self.guides.guides.clear();
+                Task::none()
+            }
+            Message::RulerClick(across, at) => {
+                // The top ruler places a guide running down the page, the left one across.
+                self.guides.toggle(across, at, self.zoom);
+                Task::none()
+            }
+            Message::NewWindow => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Another copy of Panna, given only the file's path: no shell, nothing else
+                // from the document.
+                let started = std::env::current_exe().and_then(|program| {
+                    std::process::Command::new(program)
+                        .arg(&doc.path)
+                        .stdin(std::process::Stdio::null())
+                        .spawn()
+                        // Reaped when it closes, so it doesn't linger as a zombie.
+                        .map(|mut child| {
+                            std::thread::spawn(move || child.wait());
+                        })
+                });
+                self.notice = match started {
+                    Err(e) => Some(format!("Couldn't open a new window: {e}")),
+                    Ok(_) if self.dirty() => Some(
+                        "The new window shows the document as last saved, without your unsaved changes."
+                            .into(),
+                    ),
+                    Ok(_) => None,
+                };
+                Task::none()
             }
             Message::ToggleSplit => {
                 if self.split.take().is_some() {
@@ -2167,6 +2408,9 @@ impl App {
                 let text = result.unwrap_or_default();
                 self.find.add_page(index, &text);
                 slot.text = Some(text);
+                if self.reflow == Some(index) {
+                    let _ = self.refresh_reflow();
+                }
                 if self.reader.waiting_for() == Some(index) {
                     return self.go_on_reading();
                 }
@@ -2177,6 +2421,20 @@ impl App {
             }
             Message::Find(event) => self.find_event(event),
             Message::PagePointer(page, position) => {
+                // Placing things snaps to the grid and guides, when that's on.
+                let placing = self.adder.on
+                    || self.preparer.on
+                    || self.measure.on
+                    || (self.annotate.open && !self.annotate.tool.marks_text());
+                let position = if placing && self.guides.snap {
+                    let zoom = self.zoom.max(0.01);
+                    let (x, y) =
+                        self.guides
+                            .snapped((position.x / zoom, position.y / zoom), self.settings.unit, zoom);
+                    Point::new(x * zoom, y * zoom)
+                } else {
+                    position
+                };
                 self.hover = Some((page, position));
                 if self.adder.on {
                     self.adder.hover(page, self.page_map(page).to_page(position));
@@ -3335,6 +3593,77 @@ impl App {
                     LinkChoice::Cancel => Task::none(),
                 }
             }
+            Message::FormButton(action) => {
+                use panna_core::ButtonAction as A;
+                let Some(doc) = &self.doc else { return Task::none() };
+                let last = doc.pages.len().saturating_sub(1);
+                match action {
+                    A::Nothing => {
+                        self.notice = Some("This button runs a script, which Panna doesn't run.".into());
+                        Task::none()
+                    }
+                    A::ResetForm => self.update(Message::ResetForm),
+                    A::GoTo(page) => self.go_to_page(page),
+                    A::Print => self.update(Message::Print),
+                    A::NextPage => self.step_page(true),
+                    A::PreviousPage => self.step_page(false),
+                    A::FirstPage => self.go_to_page(0),
+                    A::LastPage => self.go_to_page(last),
+                }
+            }
+            Message::FieldPicture(index) => Task::perform(
+                async {
+                    let path = rfd::AsyncFileDialog::new()
+                        .set_title("Choose a picture for the field")
+                        .add_filter(
+                            "Pictures",
+                            &[
+                                "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "tif", "TIF", "tiff", "TIFF",
+                            ],
+                        )
+                        .pick_file()
+                        .await?
+                        .path()
+                        .to_path_buf();
+                    Some(
+                        std::fs::read(&path)
+                            .map_err(|e| format!("Couldn't open the picture: {e}"))
+                            .and_then(|bytes| panna_core::StampImage::decode(&bytes)),
+                    )
+                },
+                move |result| {
+                    Message::FieldPictureLoaded(index, result.unwrap_or_else(|| Err(String::new())))
+                },
+            ),
+            Message::FieldPictureLoaded(index, result) => {
+                match result {
+                    Ok(picture) => {
+                        self.form.update(form::Event::Picture(index, picture));
+                    }
+                    Err(e) if !e.is_empty() => self.notice = Some(e),
+                    Err(_) => {}
+                }
+                Task::none()
+            }
+            Message::SignField(id) => {
+                let name = self
+                    .form
+                    .fields()
+                    .iter()
+                    .find(|f| f.id == id)
+                    .map(|f| f.name.clone())
+                    .unwrap_or_default();
+                if self.dirty() {
+                    self.notice =
+                        Some("Save your changes before signing, so the signature covers them.".into());
+                    return Task::none();
+                }
+                let task = self.update(Message::Signing(signing::Event::Open));
+                if let Some(state) = &mut self.signing {
+                    state.field = Some((id, name));
+                }
+                task
+            }
             Message::ResetForm => {
                 self.confirm_reset = self.form.can_reset() && !self.saving;
                 Task::none()
@@ -3627,6 +3956,207 @@ impl App {
                     }
                 ));
                 Task::perform(make_pdf_from_pictures(files, target), Message::PicturesMade)
+            }
+            Message::FolderSearch(folder_search::Event::Open) => {
+                let state = self
+                    .folder_search
+                    .get_or_insert_with(folder_search::FolderSearch::default);
+                if state.query.is_empty() {
+                    state.query = self.find.query.clone();
+                }
+                self.folder_search_open = true;
+                operation::focus(folder_search::input_id())
+            }
+            Message::FolderSearch(event) => {
+                let Some(state) = self.folder_search.take() else {
+                    return Task::none();
+                };
+                let kept = state.clone();
+                let (state, task) = state.update(event);
+                match state {
+                    Some(state) => self.folder_search = Some(state),
+                    None => {
+                        // Closed: keep what was typed and found, for next time.
+                        self.folder_search = Some(kept);
+                        self.folder_search_open = false;
+                        if let Some(state) = &mut self.folder_search {
+                            state.stop();
+                        }
+                    }
+                }
+                task
+            }
+            Message::OpenFoundAt {
+                path,
+                page,
+                query,
+                options,
+            } => {
+                self.find.open = true;
+                self.find.query = query;
+                self.find.pattern = None;
+                self.find.options = options;
+                self.sidebar.open = true;
+                self.sidebar.tab = sidebar::Tab::Results;
+                self.save_sidebar();
+                let open = self.open(path.clone(), None);
+                if self
+                    .doc
+                    .as_ref()
+                    .is_some_and(|d| d.path == path && !d.info.pages.is_empty())
+                {
+                    self.rescan_find();
+                    return Task::batch([open, self.request_search_text(), self.go_to_page(page)]);
+                }
+                self.open_page = Some((path, page));
+                open
+            }
+            Message::Order(order::Event::Open) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                if self.dirty() {
+                    self.notice = Some(
+                        "Save your changes first: the reading order is read from the saved file.".into(),
+                    );
+                    return Task::none();
+                }
+                let source = doc.path.clone();
+                self.ordering = Some(order::Ordering::new(source.clone()));
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(panna_core::reading_order_file(&source).map_err(|e| e.to_string()));
+                });
+                Task::perform(rx, |result| {
+                    Message::Order(order::Event::Loaded(
+                        result.unwrap_or_else(|_| Err("Reading the tags stopped unexpectedly.".into())),
+                    ))
+                })
+            }
+            Message::Order(order::Event::Loaded(result)) => {
+                if let Some(state) = &mut self.ordering {
+                    match result {
+                        Ok(order) => state.load(order),
+                        Err(e) => state.fail(e),
+                    }
+                }
+                Task::none()
+            }
+            Message::Order(order::Event::Close) => {
+                self.ordering = None;
+                Task::none()
+            }
+            Message::Order(order::Event::Save) => {
+                let name = format!("{} (reading order).pdf", self.file_stem());
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a copy in the new reading order as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    |to| Message::Order(order::Event::SaveTo(to)),
+                )
+            }
+            Message::Order(order::Event::SaveTo(None)) => Task::none(),
+            Message::Order(order::Event::SaveTo(Some(target))) => {
+                let Some(state) = &mut self.ordering else {
+                    return Task::none();
+                };
+                state.busy = true;
+                let (source, order) = (state.source.clone(), state.order());
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let result = panna_core::reorder_file(&source, &target, &order)
+                        .map(|_| target)
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, |result| {
+                    Message::Order(order::Event::Saved(
+                        result.unwrap_or_else(|_| Err("Saving stopped unexpectedly.".into())),
+                    ))
+                })
+            }
+            Message::Order(order::Event::Saved(Ok(path))) => {
+                self.ordering = None;
+                self.update(Message::FileChosen(Some(path)))
+            }
+            Message::Order(order::Event::Saved(Err(e))) => {
+                if let Some(state) = &mut self.ordering {
+                    state.fail(e);
+                }
+                Task::none()
+            }
+            Message::Order(event) => {
+                let page = self.ordering.as_mut().and_then(|state| state.update(&event));
+                match page {
+                    Some(page) if page != self.current_page() => self.go_to_page(page),
+                    _ => Task::none(),
+                }
+            }
+            Message::Spelling(spelling::Event::Open) => {
+                if self.doc.is_none() {
+                    return Task::none();
+                }
+                let mut sources: Vec<(spelling::Source, String)> = self
+                    .annotate
+                    .texts()
+                    .into_iter()
+                    .map(|(picked, page, text)| (spelling::Source::Comment(picked, page), text))
+                    .collect();
+                sources.extend(
+                    self.form
+                        .texts()
+                        .into_iter()
+                        .map(|(index, name, text)| (spelling::Source::Field(index, name), text)),
+                );
+                self.spelling = Some(spelling::Spelling::new(sources, &self.settings.words));
+                operation::focus(spelling::input_id())
+            }
+            Message::Spelling(event) => {
+                let Some(state) = self.spelling.take() else {
+                    return Task::none();
+                };
+                let (state, action) = state.update(event);
+                self.spelling = state;
+                match action {
+                    spelling::Action::Nothing => Task::none(),
+                    spelling::Action::AddWord(word) => {
+                        if !self.settings.words.contains(&word)
+                            && self.settings.words.len() < settings::MAX_WORDS
+                        {
+                            self.settings.words.push(word);
+                            self.settings.save();
+                        }
+                        Task::none()
+                    }
+                    spelling::Action::Replace(spelling::Source::Field(index, _), text) => {
+                        self.form.set_text(index, text);
+                        Task::none()
+                    }
+                    spelling::Action::Replace(spelling::Source::Comment(picked, _), text) => {
+                        let (outcome, now) = self.annotate.replace_text(picked, text);
+                        // A saved comment is now a new one: point the card at it.
+                        if let Some(state) = &mut self.spelling {
+                            state.renumber(picked, now);
+                        }
+                        self.after_annotate(outcome)
+                    }
+                }
+            }
+            Message::Combine(combine::Event::Open) => {
+                self.combining.get_or_insert_with(combine::Combining::default);
+                Task::none()
+            }
+            Message::Combine(event) => {
+                let Some(state) = self.combining.take() else {
+                    return Task::none();
+                };
+                let (state, task) = state.update(event);
+                self.combining = state;
+                task
             }
             Message::Batch(batch::Event::Open) => {
                 self.batch.get_or_insert_with(batch::Batch::default);
@@ -5105,6 +5635,9 @@ impl App {
                         panna_core::ExportFormat::Excel => {
                             ("Export as an Excel workbook", "Excel workbooks", "xlsx")
                         }
+                        panna_core::ExportFormat::Html => ("Export as a web page", "Web pages", "html"),
+                        panna_core::ExportFormat::Rtf => ("Export as Rich Text", "Rich Text files", "rtf"),
+                        panna_core::ExportFormat::Epub => ("Export as an e-book", "EPUB e-books", "epub"),
                         _ => ("Export text as", "Text files", "txt"),
                     };
                     Task::perform(
@@ -5956,6 +6489,7 @@ impl App {
                 title: None,
                 properties: Vec::new(),
                 outline: Vec::new(),
+                articles: Vec::new(),
                 comments: Vec::new(),
                 fields: Vec::new(),
                 links: Vec::new(),
@@ -6133,7 +6667,43 @@ impl App {
         Task::batch([mode, self.go_to_page(page)])
     }
 
+    /// Reads the reflowed page's text, or makes its paragraphs from the text already read.
+    fn refresh_reflow(&mut self) -> Task<Message> {
+        let Some(page) = self.reflow else {
+            self.reflowed = None;
+            return Task::none();
+        };
+        let Some(doc) = &self.doc else { return Task::none() };
+        let id = doc.id;
+        if self
+            .reflowed
+            .as_ref()
+            .is_some_and(|(d, p, _)| *d == id && *p == page)
+        {
+            return Task::none();
+        }
+        match doc.texts.get(page).and_then(|t| t.text.clone()) {
+            Some(text) => {
+                self.reflowed = Some((id, page, Arc::new(text.reflowed())));
+                Task::none()
+            }
+            None => {
+                self.reflowed = None;
+                self.request_text(page..page + 1)
+            }
+        }
+    }
+
     fn step_page(&mut self, forward: bool) -> Task<Message> {
+        if let Some(page) = self.reflow {
+            let count = self.doc.as_ref().map_or(0, |d| d.pages.len());
+            let target = if forward {
+                (page + 1).min(count.saturating_sub(1))
+            } else {
+                page.saturating_sub(1)
+            };
+            return self.go_to_page(target);
+        }
         let page = self.current_page();
         let target = self.doc.as_ref().map_or(page, |d| d.layout.step(page, forward));
         self.go_to_page(target)
@@ -6241,6 +6811,10 @@ impl App {
         if doc.pages.is_empty() {
             return Task::none();
         }
+        if self.reflow.is_some() {
+            self.reflow = Some(index.min(doc.pages.len() - 1));
+            return self.refresh_reflow();
+        }
         let index = index.min(doc.pages.len() - 1);
         let y = doc.layout.page_top(index, self.zoom);
         // Going to another page is a new view: remember this one for Previous View.
@@ -6282,6 +6856,9 @@ impl App {
     }
 
     fn current_page(&self) -> usize {
+        if let Some(page) = self.reflow {
+            return page;
+        }
         self.doc.as_ref().map_or(0, |d| {
             d.layout
                 .page_at(self.viewport.offset_y + self.viewport.height * 0.3, self.zoom)
@@ -6719,7 +7296,7 @@ impl App {
                 ),
                 item(
                     Icon::Export,
-                    "Export as text, Office or pictures…",
+                    "Export as text, Office, web, e-book or pictures…",
                     "",
                     on(Message::Export(export::Event::Open)),
                 ),
@@ -6742,6 +7319,12 @@ impl App {
                     "Document properties…",
                     k("D"),
                     on(Message::ToggleProperties),
+                ),
+                item(
+                    Icon::Combine,
+                    "Combine files…",
+                    "",
+                    Some(Message::Combine(combine::Event::Open)),
                 ),
                 item(
                     Icon::Batch,
@@ -6788,6 +7371,18 @@ impl App {
                     "Find…",
                     k("F"),
                     on(Message::Find(find::Event::Open)),
+                ),
+                item(
+                    Icon::SpellCheck,
+                    "Check spelling…",
+                    "F7",
+                    on(Message::Spelling(spelling::Event::Open)),
+                ),
+                item(
+                    Icon::FolderSearch,
+                    "Search a folder of PDFs…",
+                    k("Shift+F"),
+                    Some(Message::FolderSearch(folder_search::Event::Open)),
                 ),
                 item(
                     Icon::BookmarkAdd,
@@ -6875,6 +7470,15 @@ impl App {
                     item(Icon::FitWidth, "Fit width", k("2"), on(Message::FitWidth)),
                     item(Icon::FitPage, "Fit page", k("0"), on(Message::FitPage)),
                     item(Icon::FitHeight, "Fit height", "", on(Message::FitHeight)),
+                    item(Icon::FitVisible, "Fit visible", k("3"), on(Message::FitVisible)),
+                    check("Reflow", k("4"), self.reflow.is_some(), on(Message::ToggleReflow)),
+                    check("Loupe", "", self.loupe_on, on(Message::ToggleLoupe)),
+                    check(
+                        "Pan & zoom window",
+                        "",
+                        self.pan_zoom_on,
+                        on(Message::TogglePanZoom),
+                    ),
                     Separator,
                     sub(
                         Some(Icon::SinglePage),
@@ -6917,7 +7521,27 @@ impl App {
                     ),
                     item(Icon::RotateCw, "Rotate the view right", "", on(Message::RotateCw)),
                     Separator,
+                    sub(
+                        Some(Icon::Ruler),
+                        "Rulers & grids",
+                        vec![
+                            check("Rulers", k("R"), self.guides.rulers, on(Message::ToggleRulers)),
+                            check("Grid", k("U"), self.guides.grid, on(Message::ToggleGrid)),
+                            check(
+                                "Snap to grid and guides",
+                                k("Shift+U"),
+                                self.guides.snap,
+                                on(Message::ToggleSnap),
+                            ),
+                            plain(
+                                "Clear guides",
+                                "",
+                                (!self.guides.guides.is_empty()).then_some(Message::ClearGuides),
+                            ),
+                        ],
+                    ),
                     check("Split", "", self.split.is_some(), on(Message::ToggleSplit)),
+                    item(Icon::NewWindow, "New window", "", on(Message::NewWindow)),
                     check("Read mode", k("H"), self.read_mode, on(Message::ToggleReadMode)),
                     item(
                         Icon::Present,
@@ -7221,6 +7845,12 @@ impl App {
                     "",
                     on(Message::Preflight(preflight::Event::RunAccessibility)),
                 ),
+                item(
+                    Icon::ReadingOrder,
+                    "Reading order…",
+                    "",
+                    on(Message::Order(order::Event::Open)),
+                ),
             ],
             menu::Menu::Help => vec![
                 plain("Keyboard shortcuts", "", Some(Message::Shortcuts(true))),
@@ -7275,8 +7905,18 @@ impl App {
                 .align_x(Center),
             )
             .into(),
+            (Status::Idle, Some(doc)) if has_doc && self.reflow.is_some() => {
+                let page = self.reflow.unwrap_or_default();
+                let paragraphs = self
+                    .reflowed
+                    .as_ref()
+                    .filter(|(d, p, _)| *d == doc.id && *p == page)
+                    .map(|(_, _, paragraphs)| paragraphs.as_slice());
+                let pages = reflow::view(paragraphs, page, doc.pages.len(), self.zoom);
+                self.with_sidebar(doc, pages)
+            }
             (Status::Idle, Some(doc)) if has_doc => {
-                let pages = self.pages_view(doc);
+                let pages = self.with_rulers(doc, self.pages_view(doc));
                 // The same column with or without the second pane, so the first keeps its
                 // place in the widget tree, and its scroll position, when the window splits.
                 let mut panes = column![container(pages).height(Length::FillPortion(1))];
@@ -7448,6 +8088,24 @@ impl App {
         if let Some(state) = &self.batch {
             dialogs.push(modal(batch::card(state), Message::Batch(batch::Event::Close)));
         }
+        if let Some(state) = self.folder_search.as_ref().filter(|_| self.folder_search_open) {
+            dialogs.push(modal(
+                folder_search::card(state),
+                Message::FolderSearch(folder_search::Event::Close),
+            ));
+        }
+        if let Some(state) = &self.spelling {
+            dialogs.push(modal(
+                spelling::card(state),
+                Message::Spelling(spelling::Event::Close),
+            ));
+        }
+        if let Some(state) = &self.combining {
+            dialogs.push(modal(
+                combine::card(state),
+                Message::Combine(combine::Event::Close),
+            ));
+        }
         if self.preferences {
             dialogs.push(modal(
                 preferences::card(preferences::View {
@@ -7522,6 +8180,20 @@ impl App {
         if self.read_mode && has_doc {
             layers.push(self.read_mode_bar());
         }
+        if has_doc && (self.loupe_on || self.pan_zoom_on) {
+            layers.push(self.zoom_panels());
+        }
+        if let Some(state) = self.ordering.as_ref().filter(|_| has_doc) {
+            layers.push(
+                container(opaque(order::panel(state, self.current_page())))
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(16)
+                    .align_x(iced::Right)
+                    .align_y(iced::Top)
+                    .into(),
+            );
+        }
         if self.shortcuts {
             dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
         }
@@ -7558,6 +8230,59 @@ impl App {
             ));
         }
         Stack::with_children(layers).into()
+    }
+
+    /// The loupe and the pan and zoom window, floating at the bottom right.
+    fn zoom_panels(&self) -> Element<'_, Message> {
+        let mut panels = column![].spacing(8).align_x(iced::Right);
+        if let Some(doc) = &self.doc {
+            let sizes = doc.layout.sizes();
+            if self.loupe_on {
+                let (handle, shown, at) = match self.hover {
+                    Some((page, at)) => (
+                        doc.pages.get(page).and_then(|s| s.image.as_ref()),
+                        sizes.get(page).map_or(Size::ZERO, |s| {
+                            Size::new(s.width * self.zoom, s.height * self.zoom)
+                        }),
+                        at,
+                    ),
+                    None => (None, Size::ZERO, Point::ORIGIN),
+                };
+                panels = panels.push(opaque(loupe::loupe(handle, shown, at, self.magnify)));
+            }
+            if self.pan_zoom_on {
+                let page = self.current_page();
+                if let Some(size) = sizes.get(page).copied() {
+                    let content_w = doc.layout.content_width(self.zoom, self.viewport.width);
+                    let left = doc.layout.page_left(page, self.zoom, content_w);
+                    let top = doc.layout.page_top(page, self.zoom);
+                    let (w, h) = (
+                        (size.width * self.zoom).max(1.0),
+                        (size.height * self.zoom).max(1.0),
+                    );
+                    let visible = [
+                        (self.viewport.offset_x - left) / w,
+                        (self.viewport.offset_y - top) / h,
+                        (self.viewport.offset_x + self.viewport.width - left) / w,
+                        (self.viewport.offset_y + self.viewport.height - top) / h,
+                    ];
+                    let handle = doc.pages.get(page).and_then(|s| s.image.clone());
+                    panels = panels.push(opaque(loupe::pan_zoom(
+                        handle,
+                        Size::new(size.width, size.height),
+                        visible,
+                        self.zoom,
+                    )));
+                }
+            }
+        }
+        container(panels)
+            .width(Fill)
+            .height(Fill)
+            .padding(16)
+            .align_x(iced::Right)
+            .align_y(iced::Bottom)
+            .into()
     }
 
     /// Read mode's small bar at the bottom: pages, zoom, and leaving read mode.
@@ -7720,6 +8445,55 @@ impl App {
         center(scrollable(content)).into()
     }
 
+    /// The pages with rulers along the top and left, when they're shown. The rulers are
+    /// always there in the tree, with no size when hidden, so the pages keep their place.
+    fn with_rulers<'a>(&'a self, doc: &'a OpenDoc, pages: Element<'a, Message>) -> Element<'a, Message> {
+        let shown = self.guides.rulers && !self.read_mode;
+        if !shown {
+            return column![
+                row![space().width(0).height(0), space().width(0).height(0)],
+                row![space().width(0).height(0), pages]
+            ]
+            .into();
+        }
+        // Measured from the page under the pointer, else the current one.
+        let page = self.hover.map_or_else(|| self.current_page(), |(p, _)| p);
+        let content_w = doc.layout.content_width(self.zoom, self.viewport.width);
+        let left = doc.layout.page_left(page, self.zoom, content_w) - self.viewport.offset_x;
+        let top = doc.layout.page_top(page, self.zoom) - self.viewport.offset_y;
+        let pointer = self
+            .hover
+            .filter(|(p, _)| *p == page)
+            .map(|(_, at)| (at.x / self.zoom.max(0.01), at.y / self.zoom.max(0.01)));
+        let unit = self.settings.unit;
+        let corner = iced::widget::tooltip(
+            container(space())
+                .width(guides::RULER)
+                .height(guides::RULER)
+                .style(|theme: &iced::Theme| {
+                    container::Style::default().background(theme.extended_palette().background.weak.color)
+                }),
+            container(text("Click a ruler to add a guide there; click it again to take it away").size(12))
+                .padding(4)
+                .style(container::rounded_box),
+            iced::widget::tooltip::Position::Bottom,
+        );
+        column![
+            row![
+                corner,
+                self.guides
+                    .ruler(true, left, self.zoom, unit, pointer.map(|p| p.0))
+                    .readout(pointer.map(|at| guides::coordinates(at, unit)))
+            ],
+            row![
+                self.guides
+                    .ruler(false, top, self.zoom, unit, pointer.map(|p| p.1)),
+                pages
+            ]
+        ]
+        .into()
+    }
+
     fn with_sidebar<'a>(&'a self, doc: &'a OpenDoc, pages: Element<'a, Message>) -> Element<'a, Message> {
         // Closed, the bar is an empty space rather than missing, so toggling it doesn't move the
         // pages in the widget tree and reset their scroll position.
@@ -7742,6 +8516,7 @@ impl App {
                 signatures: &doc.info.signatures,
                 trusted: &self.trusted.certs,
                 layers: &doc.info.layers,
+                articles: &doc.info.articles,
                 layers_shown: &doc.layers_shown,
                 can_undo_pages: self.page_edits > 0,
                 pages_busy: self.pages_busy,
@@ -7952,6 +8727,24 @@ impl App {
                             Size::new(size.width * self.zoom, size.height * self.zoom),
                         );
                         let adding = self.adder.overlay(index, self.page_map(index));
+                        let mut lines = self.guides.overlay(
+                            Size::new(size.width * self.zoom, size.height * self.zoom),
+                            self.zoom,
+                            self.settings.unit,
+                        );
+                        if let Some(boxes) = self.ordering.as_ref().and_then(|o| {
+                            o.overlay(
+                                index,
+                                self.page_map(index),
+                                Size::new(size.width * self.zoom, size.height * self.zoom),
+                            )
+                        }) {
+                            // Both drawn over the page, one above the other.
+                            lines = Some(match lines {
+                                Some(grid) => iced::widget::Stack::with_children([grid, boxes]).into(),
+                                None => boxes,
+                            });
+                        }
                         let mut redacting = if self.redactor.on {
                             self.redactor.overlays(index, self.page_map(index))
                         } else {
@@ -8002,10 +8795,12 @@ impl App {
                             && measured.is_none()
                             && adding.is_none()
                             && redacting.is_empty()
+                            && lines.is_none()
                         {
                             image(handle.clone()).width(width).height(height).into()
                         } else {
                             let mut layers = vec![image(handle.clone()).width(width).height(height).into()];
+                            layers.extend(lines);
                             layers.extend(marks);
                             layers.extend(preview);
                             layers.extend(outline);
@@ -8165,6 +8960,12 @@ fn set_window_mode(mode: window::Mode) -> Task<Message> {
 }
 
 /// Page sizes as shown, turned by the view's rotation.
+/// Page margins (top, right, bottom, left) turned clockwise by `rotation` quarter turns.
+fn shown_margins(margins: panna_core::Margins, rotation: u8) -> panna_core::Margins {
+    let turns = usize::from(rotation % 4);
+    std::array::from_fn(|i| margins.get((i + 4 - turns) % 4).copied().unwrap_or_default())
+}
+
 fn rotated_sizes(pages: &[PageSize], rotation: u8) -> Vec<PageSize> {
     pages
         .iter()
