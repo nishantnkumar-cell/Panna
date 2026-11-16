@@ -119,6 +119,11 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
                 Message::Preflight(crate::preflight::Event::RunPrint),
             ),
             tool(
+                Icon::OutputPreview,
+                "Output preview: inks and their coverage",
+                Message::Output(crate::output::Event::Open),
+            ),
+            tool(
                 Icon::Signed,
                 "Sign with a certificate…",
                 Message::Signing(crate::signing::Event::Open),

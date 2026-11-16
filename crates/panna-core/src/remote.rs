@@ -79,11 +79,15 @@ pub(crate) enum Op {
     /// Figures given these descriptions, by object number and generation.
     Described(Vec<((u32, u16), String)>),
     ReadingOrder,
+    /// Lines thinner than this many points made this wide.
+    Hairlines(f32),
     Reordered(Vec<(ObjRef, String)>),
     CommentsFromFile(Vec<u8>),
     /// Compared with another file's bytes.
     Compare(Vec<u8>),
     Attachment(usize),
+    /// A spoken comment's sound, by its stream.
+    Sound(ObjRef),
     Rearranged(Vec<PageSource>),
     /// Of the document as shown.
     Export(Export),
@@ -131,6 +135,9 @@ pub(crate) enum Answer {
     Archived(Result<(Vec<u8>, Vec<Finding>), SaveError>),
     Tagged(Result<(Vec<u8>, Vec<AccessFinding>), SaveError>),
     Order(crate::ReadingOrder),
+    Sound(Option<crate::Sound>),
+    /// The new bytes, and how many lines changed.
+    Thickened(Result<(Vec<u8>, usize), SaveError>),
     Annotations(Result<(Vec<Annotation>, usize), String>),
     Changes(Result<Vec<Change>, String>),
     Revised(Result<Revision, SaveError>),
@@ -171,6 +178,8 @@ impl Op {
             Self::Archived => Answer::Archived(Err(save)),
             Self::Tagged | Self::Described(_) | Self::Reordered(_) => Answer::Tagged(Err(save)),
             Self::ReadingOrder => Answer::Order(crate::ReadingOrder::default()),
+            Self::Hairlines(_) => Answer::Thickened(Err(save)),
+            Self::Sound(_) => Answer::Sound(None),
             Self::CommentsFromFile(_) => Answer::Annotations(Err(message())),
             Self::Compare(_) => Answer::Changes(Err(message())),
             Self::InsertFile { .. } | Self::ReplaceFromFile { .. } | Self::Edit(_) | Self::WithChanges(_) => {
@@ -253,6 +262,7 @@ pub(crate) fn perform<'a>(
             Ok((copy.bytes().to_vec(), findings))
         })),
         Op::ReadingOrder => Answer::Order(doc.reading_order()),
+        Op::Hairlines(min) => Answer::Thickened(doc.without_hairlines(min)),
         Op::Reordered(order) => Answer::Tagged(doc.reordered(&order).and_then(|bytes| {
             let copy = doc.reopen(bytes).map_err(|_| SaveError::Damaged)?;
             let findings = copy.accessibility();
@@ -273,6 +283,7 @@ pub(crate) fn perform<'a>(
             }
             Err(e) => Err(format!("That file couldn't be opened: {e}")),
         }),
+        Op::Sound(stream) => Answer::Sound(doc.sound(stream)),
         Op::Attachment(index) => Answer::Bytes(
             doc.attachment(index)
                 .ok_or_else(|| SaveError::Io("the attached file couldn't be read".into())),

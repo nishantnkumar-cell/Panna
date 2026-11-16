@@ -18,6 +18,7 @@ type EditReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
 type SaveReply = Box<dyn FnOnce(Result<Vec<Comment>, SaveError>) + Send>;
 type PagesReply = Box<dyn FnOnce(Result<DocumentInfo, SaveError>) + Send>;
 type ExtractReply = Box<dyn FnOnce(Result<(), SaveError>) + Send>;
+type SoundReply = Box<dyn FnOnce(Option<crate::Sound>) + Send>;
 type SplitReply = Box<dyn FnOnce(Result<usize, SaveError>) + Send>;
 
 /// Splitting pages into files of at most a size.
@@ -32,6 +33,7 @@ type CommentsReply = Box<dyn FnOnce(Result<(Vec<crate::Annotation>, usize), Stri
 type CompactReply = Box<dyn FnOnce(Result<(u64, u64), SaveError>) + Send>;
 type ArchiveReply = Box<dyn FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send>;
 type TagReply = Box<dyn FnOnce(Result<Vec<crate::AccessFinding>, SaveError>) + Send>;
+type HairlinesReply = Box<dyn FnOnce(Result<usize, SaveError>) + Send>;
 /// What signing needs.
 pub(crate) struct SignJob {
     path: PathBuf,
@@ -176,6 +178,7 @@ enum Reply {
     SplitBySize(SizeSplit, SplitReply),
     Export(crate::Export, ExtractReply),
     Attachment(usize, PathBuf, ExtractReply),
+    Sound(crate::ObjRef, SoundReply),
     Print(bool, PrintReply),
     CommentSummary(PathBuf, String, ExtractReply),
     /// Writes a smaller copy of the document.
@@ -200,6 +203,8 @@ enum Reply {
     /// Writes a PDF/A copy.
     Archive(PathBuf, ArchiveReply),
     Tag(PathBuf, TagReply),
+    /// Writes a copy with thin lines widened.
+    Hairlines(PathBuf, f32, HairlinesReply),
     Sign(Box<SignJob>, SignReply),
     /// Hide these layers and show the rest, or `None` for the document's own choice.
     Layers(Option<Vec<crate::ObjRef>>),
@@ -356,6 +361,15 @@ impl RenderWorker {
                 },
                 Box::new(reply),
             ),
+        });
+    }
+
+    /// The sound of a spoken comment already in the document, by its stream.
+    pub fn sound(&self, stream: crate::ObjRef, reply: impl FnOnce(Option<crate::Sound>) + Send + 'static) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Sound(stream, Box::new(reply)),
         });
     }
 
@@ -525,6 +539,21 @@ impl RenderWorker {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
             reply: Reply::Tag(path, Box::new(reply)),
+        });
+    }
+
+    /// Writes a copy of the document, with unsaved changes, with every line thinner than
+    /// `min` points made `min` wide, to `path`; the reply says how many lines were changed.
+    pub fn save_without_hairlines(
+        &self,
+        path: PathBuf,
+        min: f32,
+        reply: impl FnOnce(Result<usize, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::Hairlines(path, min, Box::new(reply)),
         });
     }
 
@@ -925,6 +954,14 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                     write_atomically(&path, &bytes)?;
                     Ok(findings)
                 })),
+                Reply::Hairlines(path, min, reply) => {
+                    reply(ask!(Op::Hairlines(min), Thickened).and_then(|(bytes, count)| {
+                        if count > 0 {
+                            write_atomically(&path, &bytes)?;
+                        }
+                        Ok(count)
+                    }))
+                }
                 // Signing needs the key, which may be in the system's certificate store, so
                 // it's done here. Only on the user's request, for a file they chose to sign.
                 Reply::Sign(job, reply) => reply(
@@ -964,6 +1001,7 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                             .try_for_each(|(path, bytes)| write_atomically(path, bytes))
                     }));
                 }
+                Reply::Sound(stream, reply) => reply(ask!(Op::Sound(stream), Sound)),
                 Reply::Attachment(index, path, reply) => {
                     reply(
                         ask!(Op::Attachment(index), Bytes).and_then(|bytes| write_atomically(&path, &bytes)),

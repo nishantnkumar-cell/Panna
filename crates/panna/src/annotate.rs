@@ -33,6 +33,8 @@ pub enum Tool {
     Callout,
     /// Attaches a file where you click, shown as a paperclip.
     Attach,
+    /// Records a spoken comment where you click, shown as a speaker.
+    Record,
     Pen,
     /// Rubs out parts of freehand drawings.
     Eraser,
@@ -48,7 +50,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 21] = [
+    pub const ALL: [Tool; 22] = [
         Tool::Select,
         Tool::Highlight,
         Tool::Underline,
@@ -59,6 +61,7 @@ impl Tool {
         Tool::TextBox,
         Tool::Callout,
         Tool::Attach,
+        Tool::Record,
         Tool::Pen,
         Tool::Eraser,
         Tool::Rect,
@@ -86,6 +89,7 @@ impl Tool {
             Tool::TextBox => Icon::TextBox,
             Tool::Callout => Icon::Callout,
             Tool::Attach => Icon::Paperclip,
+            Tool::Record => Icon::Mic,
             Tool::Pen => Icon::Pen,
             Tool::Rect => Icon::Square,
             Tool::Ellipse => Icon::Circle,
@@ -112,6 +116,7 @@ impl Tool {
             Tool::TextBox => "Add a text box",
             Tool::Callout => "Add a callout: drag from what it points at to where the text goes",
             Tool::Attach => "Attach a file: click where its paperclip goes",
+            Tool::Record => "Record audio: click where its speaker goes, then speak",
             Tool::Pen => "Draw freehand",
             Tool::Rect => "Draw a rectangle",
             Tool::Ellipse => "Draw an ellipse",
@@ -145,6 +150,7 @@ impl Tool {
             Tool::TextBox => "Text box",
             Tool::Callout => "Callout",
             Tool::Attach => "Attach file",
+            Tool::Record => "Record audio",
             Tool::Pen => "Draw",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
@@ -175,7 +181,7 @@ impl Tool {
             | Tool::Line
             | Tool::PolyLine
             | Tool::Polygon => Some("Shift+D"),
-            Tool::Replace | Tool::InsertText | Tool::Callout | Tool::Attach => None,
+            Tool::Replace | Tool::InsertText | Tool::Callout | Tool::Attach | Tool::Record => None,
             Tool::Cloud => Some("Q"),
             Tool::Stamp => Some("K"),
             Tool::Sign => None,
@@ -392,6 +398,9 @@ pub enum Event {
     Fill(Option<Color>),
     /// The file chosen to attach where the page was clicked, or `None` when none was.
     Attach(Option<AttachedFile>),
+    /// A recording made where the page was clicked with the Record tool, or `None` when it
+    /// was cancelled.
+    Recorded(Option<panna_core::Recording>),
     /// How lines start (0) or end (1).
     End(usize, LineEnd),
     /// Deletes the selected comment.
@@ -519,6 +528,8 @@ pub struct Annotate {
     pub picked: Option<Picked>,
     /// Where a file is to be attached (page, point), while one is being chosen.
     pub attaching: Option<(usize, (f32, f32))>,
+    /// Where a spoken comment being recorded goes.
+    pub recording: Option<(usize, (f32, f32))>,
     moving: Option<Moving>,
     /// The opacity slider is being dragged; its undo step is already recorded.
     sliding: bool,
@@ -952,6 +963,15 @@ impl Annotate {
                     }
                 } else if let Some(slot) = self.dashes.get_mut(self.tool.index()) {
                     *slot = !*slot;
+                }
+            }
+            Event::Recorded(sound) => {
+                let place = self.recording.take();
+                if let (Some((page, (x, y))), Some(sound)) = (place, sound) {
+                    let name = format!("Sound clip, {}", crate::audio::clock(sound.seconds.max(1.0)));
+                    self.record();
+                    self.push(page, Kind::Sound { x, y, sound }, Tool::Record, name);
+                    return Outcome::Changed;
                 }
             }
             Event::Attach(file) => {
@@ -1784,6 +1804,10 @@ impl Annotate {
             }
             Tool::Attach => {
                 self.attaching = Some((draft.page, start));
+                return Outcome::Nothing;
+            }
+            Tool::Record => {
+                self.recording = Some((draft.page, start));
                 return Outcome::Nothing;
             }
             Tool::Pen => Kind::Ink(vec![draft.points]),

@@ -41,6 +41,8 @@ pub enum CommentKind {
     /// Text to insert, marked with a caret.
     Caret,
     Stamp,
+    /// A spoken comment.
+    Sound,
     /// A reply in another comment's thread, or a review status set on it.
     Reply,
     /// Any other markup, with its PDF subtype name (Caret, FileAttachment, …).
@@ -64,8 +66,9 @@ impl CommentKind {
             "Caret" => Self::Caret,
             "Stamp" => Self::Stamp,
             "FileAttachment" => Self::File,
+            "Sound" => Self::Sound,
             "Link" | "Widget" | "Popup" | "PrinterMark" | "TrapNet" | "Watermark" | "3D" | "RichMedia"
-            | "Screen" | "Movie" | "Sound" => return None,
+            | "Screen" | "Movie" => return None,
             other => Self::Other(other.to_owned()),
         })
     }
@@ -80,6 +83,7 @@ impl CommentKind {
             Self::TextBox => "Text box",
             Self::Callout => "Callout",
             Self::File => "Attached file",
+            Self::Sound => "Sound",
             Self::Ink => "Drawing",
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
@@ -233,6 +237,11 @@ impl From<&Annotation> for Comment {
                 add(*x, *y);
                 add(x + NOTE_SIZE, y + NOTE_SIZE);
                 CommentKind::File
+            }
+            Kind::Sound { x, y, .. } => {
+                add(*x, *y);
+                add(x + NOTE_SIZE, y + NOTE_SIZE);
+                CommentKind::Sound
             }
             Kind::FreeText { rect, pointer, .. } => {
                 add(rect.x0, rect.y0);
@@ -568,6 +577,19 @@ fn editable(
                 x: at.x0 + pad,
                 y: at.y0 + pad,
                 file: crate::edit::AttachedFile::saved(name, size, spec),
+            }
+        }
+        // A spoken comment can be moved by pointing at its sound stream, which stays.
+        "Sound" => {
+            let stream_ref = annot.get_ref(b"Sound")?;
+            let stream = ObjRef::new(stream_ref.obj_number, stream_ref.gen_number)?;
+            let (rate, channels, seconds) =
+                crate::edit::sound_seconds(&annot.get::<hayro::hayro_syntax::object::Stream<'_>>(b"Sound")?)?;
+            let pad = if made_by_panna(annot) { 1.0 } else { 0.0 };
+            Kind::Sound {
+                x: at.x0 + pad,
+                y: at.y0 + pad,
+                sound: crate::edit::Recording::saved(rate, channels, seconds, stream),
             }
         }
         "Text" => {

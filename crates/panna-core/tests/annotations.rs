@@ -685,3 +685,50 @@ fn attached_files_save_move_and_can_be_taken_out_again() {
     assert_eq!(info.attachments.len(), 1);
     assert_eq!(doc.attachment(0).unwrap(), bytes);
 }
+
+#[test]
+fn spoken_comments_save_move_and_play_back() {
+    let doc = reopen(build(&objects(false)));
+    let sound = panna_core::Sound {
+        rate: 8_000,
+        channels: 1,
+        samples: (0..8_000i32).map(|i| ((i % 200) * 300 - 30_000) as i16).collect(),
+    };
+    let recording = panna_core::Recording::new(&sound).unwrap();
+    let mut added = annotation(Kind::Sound {
+        x: 30.0,
+        y: 40.0,
+        sound: recording,
+    });
+    added.contents = "Sound clip".into();
+    let doc = reopen(doc.with_annotations(&[added]).unwrap());
+    let info = doc.info().unwrap();
+    let comment = &info.comments[0];
+    assert_eq!(comment.kind, CommentKind::Sound);
+    let mut moved = comment.editable.clone().unwrap();
+    let Kind::Sound { sound: saved, .. } = &moved.kind else {
+        panic!("came back as {:?}", moved.kind);
+    };
+    assert_eq!((saved.rate, saved.channels), (8_000, 1));
+    assert!((saved.seconds - 1.0).abs() < 1e-3);
+    let stream = saved.saved_stream().unwrap();
+    assert_eq!(doc.sound(stream).unwrap(), sound);
+    // Moving it redraws the comment, playing the same sound.
+    moved.translate(50.0, 10.0);
+    let doc = reopen(
+        doc.with_changes(&Changes {
+            add: vec![moved],
+            remove: vec![comment.id.unwrap()],
+            ..Changes::default()
+        })
+        .unwrap(),
+    );
+    let info = doc.info().unwrap();
+    assert_eq!(info.comments.len(), 1);
+    assert!(
+        (info.comments[0].at.x0 - 80.0).abs() < 1.5,
+        "{:?}",
+        info.comments[0].at
+    );
+    assert_eq!(doc.sound(stream).unwrap(), sound);
+}

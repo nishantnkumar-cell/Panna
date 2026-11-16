@@ -22,6 +22,8 @@ pub enum Event {
     Convert,
     /// Save a copy with tags added.
     Tag,
+    /// Save a copy with thin lines widened.
+    FixLines,
     /// Close the report and show this page.
     Show(usize),
     /// A figure's description typed.
@@ -56,6 +58,8 @@ pub struct Report {
     saved: Option<String>,
     /// The document has no tags, which Panna can add.
     untagged: bool,
+    /// The document has lines too thin to print, which Panna can widen.
+    thin: bool,
     /// Where the tagged copy just saved is, so descriptions go into it.
     pub copy: Option<PathBuf>,
     /// Descriptions typed for figures.
@@ -76,6 +80,7 @@ impl Report {
     fn of(kind: Kind, findings: Vec<Finding>) -> Self {
         Self {
             kind,
+            thin: findings.iter().any(|f| f.rule == panna_core::Rule::ThinLines),
             items: findings
                 .into_iter()
                 .map(|f| Item {
@@ -104,6 +109,7 @@ impl Report {
     pub fn accessibility(findings: Vec<AccessFinding>) -> Self {
         Self {
             kind: Kind::Accessibility,
+            thin: false,
             untagged: findings.iter().any(|f| f.rule == AccessRule::NotTagged),
             items: findings
                 .into_iter()
@@ -258,6 +264,13 @@ impl Report {
                     (!self.busy && !self.descriptions().is_empty())
                         .then_some(Message::Preflight(Event::Describe)),
                 ),
+            );
+        }
+        if self.thin {
+            buttons = buttons.push(
+                button("Save with thin lines widened…")
+                    .style(button::secondary)
+                    .on_press(Message::Preflight(Event::FixLines)),
             );
         }
         if self.untagged && self.saved.is_none() {

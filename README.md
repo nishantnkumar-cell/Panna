@@ -19,8 +19,10 @@ You need Rust 1.94 or newer (install it from [rustup.rs](https://rustup.rs)).
 cargo run --release -p panna -- path/to/file.pdf
 ```
 
-Linux builds need no system libraries to compile. At runtime the app uses Wayland, or X11
-with `libxkbcommon-x11`, which every desktop install already has.
+Linux builds need the ALSA headers to compile, for recording and playing spoken comments
+(`libasound2-dev` on Debian and Ubuntu, `alsa-lib-devel` on Fedora). At runtime the app uses
+Wayland, or X11 with `libxkbcommon-x11`, and ALSA's `libasound2`, which every desktop install
+already has.
 
 ### Keyboard shortcuts
 

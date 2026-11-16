@@ -35,6 +35,8 @@ pub enum Rule {
     NotMarkedPdfX,
     NoPrintingCondition,
     NoTrimBox,
+    /// Lines thinner than [`crate::HAIRLINE`], which may not print.
+    ThinLines,
 }
 
 /// Which standard to check against.
@@ -68,6 +70,7 @@ impl Rule {
                 "The file must name the printing condition it's made for (output intent)"
             }
             Rule::NoTrimBox => "Every page must give its trimmed size (trim box)",
+            Rule::ThinLines => "Lines should be at least 0.25 pt wide, or they may not print",
         }
     }
 }
@@ -404,6 +407,16 @@ pub(crate) fn check(pdf: &Pdf, encrypted: bool, has_id: bool, standard: Standard
             if flags & 4 == 0 || flags & (1 | 2 | 32) != 0 {
                 c.add(Rule::NotPrinted, format!("{what} ({subtype})"), Some(index));
             }
+        }
+    }
+    if !archive {
+        for (page, count) in crate::edit::thin_lines(pdf, crate::HAIRLINE) {
+            let lines = if count == 1 { "line" } else { "lines" };
+            c.add(
+                Rule::ThinLines,
+                format!("{count} {lines} thinner than 0.25 pt"),
+                Some(page),
+            );
         }
     }
     c.out.sort_by_key(|f| (f.rule, f.page));

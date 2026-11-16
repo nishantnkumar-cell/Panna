@@ -12,6 +12,7 @@
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Panna uses the microphone only while you record a spoken comment.</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>CFBundleDocumentTypes</key>
   <array>
