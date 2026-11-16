@@ -51,11 +51,28 @@ Install options:
 - **Local install** to `~/.local`: `packaging/linux/install-local.sh`.
 - **Tarball** for x86_64 and ARM64 from the CI artifacts.
 
-## Releases
+## Download
 
-CI builds Linux (x86_64 and ARM64), Windows (x86_64 and ARM64), a universal macOS app and a
-Flatpak on every push. The macOS app is ad-hoc signed. Opening it the first time needs
+Preview builds are on the [Releases page](https://github.com/nishantnkumar-cell/Panna/releases).
+No GitHub account is needed. They are marked **Pre-release**: Panna is an early preview, so
+keep a copy of any PDF you care about.
+
+| System | File |
+| --- | --- |
+| Windows, Intel or AMD | `panna-windows-x86_64-setup.exe` (installer) or `panna-windows-x86_64.zip` (portable) |
+| Windows, ARM | `panna-windows-aarch64-setup.exe` or `panna-windows-aarch64.zip` |
+| macOS, Apple Silicon and Intel | `panna-macos-universal.dmg` |
+| Linux, Flatpak | `panna.flatpak`: `flatpak install --user panna.flatpak` |
+| Linux, tarball | `panna-linux-x86_64.tar.gz` or `panna-linux-aarch64.tar.gz` |
+
+Check a download against `SHA256SUMS` from the same release:
+`sha256sum -c SHA256SUMS --ignore-missing` (`shasum -a 256 -c SHA256SUMS` on macOS).
+
+If Windows SmartScreen warns about an unsigned build, click **More info**, then
+**Run anyway**. The macOS app is ad-hoc signed. Opening it the first time needs
 right-click → Open until it's notarised with an Apple developer account.
+
+CI also builds every one of these on each push; see [docs/RELEASING.md](docs/RELEASING.md).
 
 To make Panna the default PDF app:
 
