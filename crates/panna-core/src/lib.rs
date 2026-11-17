@@ -38,6 +38,7 @@ mod sig;
 pub mod spell;
 mod text;
 mod view;
+mod word;
 mod worker;
 
 pub use access::{AccessFinding, AccessRule};

@@ -17,6 +17,8 @@ use hayro::kurbo::{Affine, BezPath, Point, Rect, Vec2};
 
 /// Characters kept per page. Pages beyond this are searchable only up to the cap.
 const MAX_CHARS: usize = 200_000;
+/// Pictures whose place is kept per page.
+const MAX_PICTURES: usize = 1_000;
 /// Advance used when a font doesn't report one, in glyph units (1000 per em).
 const FALLBACK_ADVANCE: f64 = 500.0;
 /// Glyph box above and below the baseline, in glyph units. Fonts rarely report these
@@ -66,6 +68,9 @@ impl TextBox {
 pub struct PageText {
     chars: Vec<char>,
     boxes: Vec<TextBox>,
+    /// Where pictures are drawn, in the same points as the boxes, in the order drawn.
+    #[serde(default)]
+    pictures: Vec<TextBox>,
 }
 
 /// A line of text: what it says, its left edge, its top and bottom (y down), and its font
@@ -121,8 +126,13 @@ impl PageText {
     pub fn plain(text: &str) -> Self {
         Self {
             chars: text.chars().collect(),
-            boxes: Vec::new(),
+            ..Self::default()
         }
+    }
+
+    /// Where pictures are drawn on the page, in the order drawn (see [`TextBox`]).
+    pub(crate) fn pictures(&self) -> &[TextBox] {
+        &self.pictures
     }
 
     /// The whole page's text.
@@ -480,6 +490,7 @@ enum Text {
 struct Collector {
     glyphs: Vec<RawGlyph>,
     chars: usize,
+    pictures: Vec<TextBox>,
 }
 
 impl Collector {
@@ -536,7 +547,10 @@ impl Collector {
     }
 
     fn finish(self) -> PageText {
-        let mut out = PageText::default();
+        let mut out = PageText {
+            pictures: self.pictures,
+            ..PageText::default()
+        };
         let mut prev: Option<&RawGlyph> = None;
         for g in &self.glyphs {
             if out.chars.len() >= MAX_CHARS {
@@ -662,7 +676,19 @@ impl<'a> Device<'a> for Collector {
             self.push(glyph, props.transform * glyph.transform());
         }
     }
-    fn draw_image(&mut self, _: Image<'a, '_>, _: ImageDrawProps<'a>) {}
+    fn draw_image(&mut self, image: Image<'a, '_>, props: ImageDrawProps<'a>) {
+        // The transform is in the image's pixels; its box on the page is where they land.
+        let pixels = Rect::new(0.0, 0.0, f64::from(image.width()), f64::from(image.height()));
+        let r = props.transform.transform_rect_bbox(pixels);
+        if self.pictures.len() < MAX_PICTURES && r.width().is_finite() && r.height().is_finite() {
+            self.pictures.push(TextBox {
+                x0: r.x0 as f32,
+                y0: r.y0 as f32,
+                x1: r.x1 as f32,
+                y1: r.y1 as f32,
+            });
+        }
+    }
     fn pop_clip(&mut self) {}
     fn pop_transparency_group(&mut self) {}
 }

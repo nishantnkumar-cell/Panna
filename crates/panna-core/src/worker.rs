@@ -708,7 +708,7 @@ pub(crate) fn export_files<'a>(
                 return Ok(Vec::new());
             };
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
-            Ok(vec![(path.clone(), crate::office::docx(doc, &pages)?)])
+            Ok(vec![(path.clone(), crate::word::docx(doc, cache, &pages)?)])
         }
         ExportFormat::Excel => {
             let Some((_, path)) = export.pages.first() else {
