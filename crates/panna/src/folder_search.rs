@@ -314,12 +314,14 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
                 .label("Keep an index on this computer for faster searches")
                 .on_toggle(move |v| ev(Event::UseIndex(v)))
                 .width(Fill),
-            button(text(if state.index_size.0 == 0 {
-                "Index is empty".to_owned()
-            } else {
-                format!("Clear index ({})", crate::sidebar::size_text(state.index_size.1))
-            })
-            .wrapping(text::Wrapping::None))
+            button(
+                text(if state.index_size.0 == 0 {
+                    "Index is empty".to_owned()
+                } else {
+                    format!("Clear index ({})", crate::sidebar::size_text(state.index_size.1))
+                })
+                .wrapping(text::Wrapping::None)
+            )
             .style(button::secondary)
             .on_press_maybe((state.index_size.0 > 0 && !running).then_some(ev(Event::ClearIndex))),
         ]
