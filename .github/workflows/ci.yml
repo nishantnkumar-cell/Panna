@@ -155,11 +155,12 @@ jobs:
         run: |
           ID=io.github.nishantnkumar_cell.Panna
           D=panna-${{ matrix.name }}
-          mkdir -p $D/share/applications $D/share/metainfo $D/share/icons/hicolor/scalable/apps $D/bin
+          mkdir -p $D/share/applications $D/share/metainfo $D/share/icons/hicolor/scalable/apps $D/share/thumbnailers $D/bin
           cp target/${{ matrix.target }}/release/panna $D/bin/
           cp packaging/linux/$ID.desktop $D/share/applications/
           cp packaging/linux/$ID.metainfo.xml $D/share/metainfo/
           cp packaging/linux/$ID.svg $D/share/icons/hicolor/scalable/apps/
+          cp packaging/linux/$ID.thumbnailer $D/share/thumbnailers/
           tar czf $D.tar.gz $D
 
       - name: Sign Windows executable

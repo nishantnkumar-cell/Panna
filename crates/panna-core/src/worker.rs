@@ -784,6 +784,19 @@ pub fn describe_file(
     }
 }
 
+/// The first page of the file at `source` as a PNG no more than `size` pixels on its longer
+/// side, drawn in the locked-down process, as file managers show it. Blocks.
+pub fn thumbnail_file(source: &Path, size: u32) -> Result<Vec<u8>, SaveError> {
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, info) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    let page = info.pages.first().ok_or(SaveError::NoSuchPage(0))?;
+    let longer = page.width.max(page.height).max(1.0);
+    let scale = size.clamp(16, 1024) as f32 / longer;
+    let drawn = doc.render(0, scale).map_err(|_| SaveError::NoSuchPage(0))?;
+    crate::export::picture(&drawn, crate::ExportFormat::Png)
+}
+
 /// The reading order of the tagged file at `source` (see [`crate::ReadingOrder`]), read in
 /// the locked-down process. Blocks; call it off the interface's thread.
 pub fn reading_order_file(source: &Path) -> Result<crate::ReadingOrder, SaveError> {

@@ -75,4 +75,4 @@ pub use remote::Isolated;
 pub use sig::{Cert, DigitalId, HeldKey, SigStatus, SignDigest, Signature, trusted_by};
 pub use text::{FindOptions, PageText, Paragraph, TextBox};
 pub use view::{InitialView, OpenLayout, OpenPanel, OpenZoom};
-pub use worker::{PageEdit, RenderWorker, describe_file, reading_order_file, reorder_file};
+pub use worker::{PageEdit, RenderWorker, describe_file, reading_order_file, reorder_file, thumbnail_file};

@@ -106,6 +106,25 @@ fn main() -> iced::Result {
     if let Ok(program) = std::env::current_exe() {
         panna_core::isolate::use_renderer(program);
     }
+    // `panna --thumbnail FILE OUT SIZE`: a file manager's thumbnail of FILE's first page,
+    // saved as a PNG at OUT (see packaging/linux).
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if let [_, flag, source, target, size] = args.as_slice()
+        && flag == "--thumbnail"
+    {
+        let size = size.to_str().and_then(|s| s.parse().ok()).unwrap_or(256);
+        let made = panna_core::thumbnail_file(source.as_ref(), size).and_then(|png| {
+            std::fs::write(target, png).map_err(|e| panna_core::SaveError::Io(e.to_string()))
+        });
+        if let Err(e) = made {
+            eprintln!(
+                "panna: no thumbnail for {}: {e}",
+                std::path::Path::new(source).display()
+            );
+            std::process::exit(1);
+        }
+        std::process::exit(0);
+    }
     #[cfg(target_os = "macos")]
     finder::install();
     iced::application(App::boot, App::update, App::view)
