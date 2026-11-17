@@ -436,7 +436,7 @@ mod tests {
         );
         // Ctrl+1 still zooms.
         assert_eq!(
-            auto_scroll_keys(&ev(Key::Character("1".into()), Modifiers::CTRL)),
+            auto_scroll_keys(&ev(Key::Character("1".into()), Modifiers::COMMAND)),
             None
         );
         assert!(scroll_rate(0) < scroll_rate(SCROLL_DEFAULT) && scroll_rate(SCROLL_DEFAULT) < scroll_rate(9));

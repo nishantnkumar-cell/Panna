@@ -239,3 +239,13 @@ fn forms_through_glyphs_patterns_and_masks_are_refused() {
         ],
     ));
 }
+
+/// Text placed 10^100 points along: hayro's glyph cache added its place as an `i32` and
+/// overflowed, so the page didn't draw (and the fuzzer aborted). Patched in vendor/hayro.
+#[test]
+fn text_placed_far_off_the_page_still_draws() {
+    let bytes = include_bytes!("fuzz-regressions/open-render-crash-5638af88.pdf");
+    let doc = Document::from_bytes(bytes.to_vec(), None, Limits::default()).unwrap();
+    let cache = doc.new_cache();
+    assert!(doc.render_page(&cache, 0, 0.5).is_ok());
+}
