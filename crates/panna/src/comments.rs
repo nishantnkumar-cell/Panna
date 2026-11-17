@@ -2,7 +2,8 @@
 //! page, author, date or type, filters by type, author, status and checkmark, and clicking a
 //! comment scrolls to it and selects it, ready to move or restyle; any can be deleted.
 
-use iced::widget::{Column, button, column, container, pick_list, row, scrollable, space, text};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, container, pick_list, row, scrollable, space};
 use iced::{Center, Element, Fill, Theme};
 use panna_core::{Annotation, Comment, CommentId, CommentKind, ReviewState};
 
@@ -30,12 +31,12 @@ impl Sort {
 
 impl std::fmt::Display for Sort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             Sort::Page => "By page",
             Sort::Author => "By author",
             Sort::Date => "By date, newest first",
             Sort::Type => "By type",
-        })
+        }))
     }
 }
 
@@ -58,7 +59,7 @@ impl Only {
 impl std::fmt::Display for Only {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Only::All(label) => f.write_str(label),
+            Only::All(label) => f.write_str(&crate::i18n::translate(label)),
             Only::This(v) => f.write_str(v),
         }
     }

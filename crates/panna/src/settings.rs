@@ -55,6 +55,8 @@ pub struct Settings {
     pub search_index: bool,
     /// The language spelling is checked in.
     pub spelling_language: panna_core::spell::Language,
+    /// The language the interface is shown in.
+    pub language: crate::i18n::Language,
 }
 
 impl Default for Settings {
@@ -80,6 +82,7 @@ impl Default for Settings {
             keys: crate::keymap::Keymap::default(),
             search_index: true,
             spelling_language: panna_core::spell::Language::default(),
+            language: crate::i18n::Language::default(),
         }
     }
 }
@@ -150,6 +153,9 @@ impl Settings {
                         panna_core::spell::Language::parse(value.trim()).unwrap_or(out.spelling_language);
                 }
                 "search.index" => out.search_index = value.trim() != "false",
+                "ui.language" => {
+                    out.language = crate::i18n::Language::parse(value.trim()).unwrap_or(out.language)
+                }
                 "present.loop" => out.present_loop = value.trim() == "true",
                 "present.seconds" => {
                     out.present_seconds = value.trim().parse::<u32>().map_or(0, |s| s.min(MAX_SECONDS));
@@ -211,9 +217,10 @@ impl Settings {
         }
         self.keys.serialize(&mut out);
         out.push_str(&format!(
-            "search.index={}\nspelling.language={}\n",
+            "search.index={}\nspelling.language={}\nui.language={}\n",
             self.search_index,
-            self.spelling_language.as_str()
+            self.spelling_language.as_str(),
+            self.language.as_str()
         ));
         for word in &self.words {
             out.push_str(&format!("spelling.word={word}\n"));
@@ -334,6 +341,7 @@ mod tests {
             },
             search_index: false,
             spelling_language: panna_core::spell::Language::EnglishGb,
+            language: crate::i18n::Language::Hindi,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

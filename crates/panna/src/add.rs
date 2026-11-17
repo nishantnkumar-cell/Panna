@@ -2,7 +2,8 @@
 //! Unlike comments, these become part of the page itself, as a page change that can be
 //! undone from the page tools.
 
-use iced::widget::{column, container, pick_list, pin, row, space, text, text_editor, text_input};
+use crate::i18n::text;
+use iced::widget::{column, container, pick_list, pin, row, space, text_editor, text_input};
 use iced::{Center, Element, Theme};
 use panna_core::{Addition, Color, FontFamily, LinkTarget, StampImage, TextAlign, TextBox, TextFont};
 
@@ -77,7 +78,9 @@ pub struct FontChoice(Option<FontFamily>);
 
 impl std::fmt::Display for FontChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0.map_or("Same font", FontFamily::label))
+        f.write_str(&crate::i18n::translate(
+            self.0.map_or("Same font", FontFamily::label),
+        ))
     }
 }
 
@@ -97,7 +100,7 @@ impl Spacing {
 impl std::fmt::Display for Spacing {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
-            10 => f.write_str("Single spacing"),
+            10 => f.write_str(&crate::i18n::translate("Single spacing")),
             15 => f.write_str("1.5 lines"),
             20 => f.write_str("Double spacing"),
             n => write!(f, "{} lines", f32::from(n) / 10.0),
@@ -512,7 +515,7 @@ impl Adder {
         let buttons = |ready: bool, label: &'static str| {
             row![
                 space::horizontal(),
-                iced::widget::button("Cancel")
+                iced::widget::button(crate::i18n::text("Cancel"))
                     .style(iced::widget::button::secondary)
                     .on_press(ev(Event::Cancel)),
                 iced::widget::button(label).on_press_maybe(ready.then(|| ev(Event::Done))),
@@ -584,7 +587,7 @@ impl Adder {
                     text("Add text").size(16),
                     text_editor(content)
                         .id(editor_id())
-                        .placeholder("Type here")
+                        .placeholder(crate::i18n::tr_str("Type here"))
                         .on_action(move |a| ev(Event::Edit(a)))
                         .height(120),
                     style(false),
@@ -662,10 +665,13 @@ impl Adder {
                 };
                 column![
                     text("Add a link").size(16),
-                    text_input("Page number, web address or email address", typed)
-                        .id(link_input_id())
-                        .on_input(move |v| ev(Event::Address(v)))
-                        .on_submit(ev(Event::Done)),
+                    text_input(
+                        crate::i18n::tr_str("Page number, web address or email address"),
+                        typed
+                    )
+                    .id(link_input_id())
+                    .on_input(move |v| ev(Event::Address(v)))
+                    .on_submit(ev(Event::Done)),
                     text(note).size(12),
                     buttons(target.is_some(), "Add"),
                 ]

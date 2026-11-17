@@ -2,7 +2,8 @@
 //! do: pages such as 2-5, 9, then for rotating, even or odd pages only and landscape or
 //! portrait pages only.
 
-use iced::widget::{button, column, container, pick_list, radio, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, column, container, pick_list, radio, row, space, text_input};
 use iced::{Element, Theme};
 use panna_core::{PageSize, PageSource};
 
@@ -39,11 +40,11 @@ impl Parity {
 
 impl std::fmt::Display for Parity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             Parity::Both => "Even and odd pages",
             Parity::Even => "Even pages only",
             Parity::Odd => "Odd pages only",
-        })
+        }))
     }
 }
 
@@ -70,11 +71,11 @@ impl Orientation {
 
 impl std::fmt::Display for Orientation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             Orientation::Any => "Pages of either orientation",
             Orientation::Landscape => "Landscape pages",
             Orientation::Portrait => "Portrait pages",
-        })
+        }))
     }
 }
 
@@ -215,7 +216,7 @@ pub fn card<'a>(state: &PageRange, sizes: &[PageSize]) -> Element<'a, Message> {
                 .on_input(move |v| ev(Event::Pages(v)))
                 .on_submit(ev(Event::Go))
                 .width(200),
-            button("All")
+            button(crate::i18n::text("All"))
                 .style(button::secondary)
                 .on_press(ev(Event::Pages(format!("1-{}", sizes.len())))),
         ]
@@ -245,7 +246,7 @@ pub fn card<'a>(state: &PageRange, sizes: &[PageSize]) -> Element<'a, Message> {
     body = body.push(summary).push(
         row![
             space::horizontal(),
-            button("Cancel")
+            button(crate::i18n::text("Cancel"))
                 .style(button::secondary)
                 .on_press(ev(Event::Cancel)),
             button(verb).on_press_maybe(checked.is_ok().then_some(ev(Event::Go))),

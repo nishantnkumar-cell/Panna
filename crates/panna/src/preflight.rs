@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use iced::widget::{Column, button, column, container, row, scrollable, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, container, row, scrollable, space, text_input};
 use iced::{Element, Fill, Theme};
 use panna_core::{AccessFinding, AccessRule, Finding};
 
@@ -239,7 +240,7 @@ impl Report {
                 let detail = match item.element {
                     Some(element) => {
                         let typed = self.alts.get(&element).map_or("", String::as_str);
-                        let input = text_input("Describe what it shows", typed)
+                        let input = text_input(crate::i18n::tr_str("Describe what it shows"), typed)
                             .size(12)
                             .on_input(move |v| Message::Preflight(Event::Alt(element, v)));
                         Element::from(row![detail.width(80), input].spacing(6).align_y(iced::Center))
@@ -265,7 +266,7 @@ impl Report {
         let mut buttons = row![space::horizontal()].spacing(8);
         if self.kind == Kind::PdfA {
             buttons = buttons.push(
-                button("Save a PDF/A copy…")
+                button(crate::i18n::text("Save a PDF/A copy…"))
                     .style(button::secondary)
                     .on_press_maybe(
                         (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::Convert)),
@@ -274,7 +275,7 @@ impl Report {
         }
         if self.kind == Kind::PdfX {
             buttons = buttons.push(
-                button("Save a PDF/X-4 copy…")
+                button(crate::i18n::text("Save a PDF/X-4 copy…"))
                     .style(button::secondary)
                     .on_press_maybe(
                         (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::ConvertPrint)),
@@ -296,14 +297,14 @@ impl Report {
         }
         if self.thin {
             buttons = buttons.push(
-                button("Save with thin lines widened…")
+                button(crate::i18n::text("Save with thin lines widened…"))
                     .style(button::secondary)
                     .on_press(Message::Preflight(Event::FixLines)),
             );
         }
         if self.untagged && self.saved.is_none() {
             buttons = buttons.push(
-                button("Save a tagged copy…")
+                button(crate::i18n::text("Save a tagged copy…"))
                     .style(button::secondary)
                     .on_press(Message::Preflight(Event::Tag)),
             );
@@ -312,7 +313,7 @@ impl Report {
             text(title).size(16),
             text(summary).size(13),
             scrollable(list).height(height),
-            buttons.push(button("Close").on_press(close)),
+            buttons.push(button(crate::i18n::text("Close")).on_press(close)),
         ]
         .spacing(10);
         container(container(body).width(420))

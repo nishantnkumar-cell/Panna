@@ -2,7 +2,8 @@
 
 use std::fmt;
 
-use iced::widget::{button, column, container, pick_list, radio, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, column, container, pick_list, radio, row, space, text_input};
 use iced::{Center, Element};
 
 use crate::Message;
@@ -47,13 +48,13 @@ impl Paper {
 
 impl fmt::Display for Paper {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             Paper::A4 => "A4 (210 × 297 mm)",
             Paper::Letter => "Letter (8.5 × 11 in)",
             Paper::Legal => "Legal (8.5 × 14 in)",
             Paper::A3 => "A3 (297 × 420 mm)",
             Paper::A5 => "A5 (148 × 210 mm)",
-        })
+        }))
     }
 }
 
@@ -148,10 +149,10 @@ pub fn card(state: &Blank) -> Element<'_, Message> {
             .align_y(Center),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(Event::Cancel)),
-                button("Create…").on_press_maybe(ok.then_some(ev(Event::Go))),
+                button(crate::i18n::text("Create…")).on_press_maybe(ok.then_some(ev(Event::Go))),
             ]
             .spacing(8),
         ]

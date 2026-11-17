@@ -6,8 +6,9 @@
 
 use std::path::PathBuf;
 
+use crate::i18n::text;
 use iced::widget::{
-    Column, button, checkbox, column, container, rich_text, row, scrollable, space, span, text, text_input,
+    Column, button, checkbox, column, container, rich_text, row, scrollable, space, span, text_input,
 };
 use iced::{Center, Color, Element, Fill, Task};
 use panna_core::FindOptions;
@@ -133,7 +134,7 @@ impl FolderSearch {
                 let task = Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Choose the folder of PDFs to search")
+                            .set_title(crate::i18n::tr_str("Choose the folder of PDFs to search"))
                             .pick_folder()
                             .await
                             .map(|f| f.path().to_path_buf())
@@ -281,7 +282,7 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         text("Search a folder of PDFs").size(16),
         row![
             icons::glyph::<Message>(Icon::Search, true),
-            text_input("Words to find", &state.query)
+            text_input(crate::i18n::tr_str("Words to find"), &state.query)
                 .id(input_id())
                 .on_input(move |q| ev(Event::Query(q)))
                 .on_submit(ev(Event::Search))
@@ -291,7 +292,7 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         .align_y(Center),
         row![
             text(folder).size(13).width(Fill),
-            button("Choose folder…")
+            button(crate::i18n::text("Choose folder…"))
                 .style(button::secondary)
                 .on_press_maybe((!running).then_some(ev(Event::Choose))),
         ]
@@ -299,19 +300,21 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         .align_y(Center),
         row![
             checkbox(state.subfolders)
-                .label("Include folders inside it")
+                .label(crate::i18n::tr_str("Include folders inside it"))
                 .on_toggle(move |v| ev(Event::Subfolders(v))),
             checkbox(state.options.match_case)
-                .label("Match case")
+                .label(crate::i18n::tr_str("Match case"))
                 .on_toggle(move |v| ev(Event::MatchCase(v))),
             checkbox(state.options.whole_word)
-                .label("Whole words")
+                .label(crate::i18n::tr_str("Whole words"))
                 .on_toggle(move |v| ev(Event::WholeWord(v))),
         ]
         .spacing(14),
         row![
             checkbox(state.use_index)
-                .label("Keep an index on this computer for faster searches")
+                .label(crate::i18n::tr_str(
+                    "Keep an index on this computer for faster searches"
+                ))
                 .on_toggle(move |v| ev(Event::UseIndex(v)))
                 .width(Fill),
             button(
@@ -425,13 +428,16 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         row![
             space::horizontal(),
             if running {
-                button("Stop").style(button::secondary).on_press(ev(Event::Stop))
+                button(crate::i18n::text("Stop"))
+                    .style(button::secondary)
+                    .on_press(ev(Event::Stop))
             } else {
-                button("Close")
+                button(crate::i18n::text("Close"))
                     .style(button::secondary)
                     .on_press(ev(Event::Close))
             },
-            button("Search").on_press_maybe(state.can_search().then_some(ev(Event::Search))),
+            button(crate::i18n::text("Search"))
+                .on_press_maybe(state.can_search().then_some(ev(Event::Search))),
         ]
         .spacing(8),
     );

@@ -4,8 +4,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::i18n::text;
 use iced::keyboard::{self, Key, key::Named};
-use iced::widget::{Column, button, column, container, row, scrollable, space, text};
+use iced::widget::{Column, button, column, container, row, scrollable, space};
 use iced::{Center, Element, Fill};
 
 use crate::Message;
@@ -496,11 +497,11 @@ pub fn card<'a>(keymap: &Keymap, waiting: Option<Action>, note: Option<&'a str>)
         body = body.push(text(note).size(12).style(text::secondary));
     }
     body = body.push(row![
-        button("Reset all")
+        button(crate::i18n::text("Reset all"))
             .style(button::secondary)
             .on_press_maybe((!keymap.changed.is_empty()).then_some(ev(Event::ResetAll))),
         space::horizontal(),
-        button("Done").on_press(Message::Shortcuts(false)),
+        button(crate::i18n::text("Done")).on_press(Message::Shortcuts(false)),
     ]);
     container(body).padding(16).style(container::rounded_box).into()
 }

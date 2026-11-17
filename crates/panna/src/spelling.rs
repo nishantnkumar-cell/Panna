@@ -6,9 +6,8 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use iced::widget::{
-    Column, button, column, container, pick_list, rich_text, row, space, span, text, text_input,
-};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, container, pick_list, rich_text, row, space, span, text_input};
 use iced::{Center, Color, Element, Fill};
 use panna_core::spell::{Dictionary, Language, misspelled};
 
@@ -220,7 +219,7 @@ pub fn card(state: &Spelling) -> Element<'_, Message> {
         body = body.push(text(done).size(13));
         body = body.push(row![
             space::horizontal(),
-            button("Done").on_press(ev(Event::Close))
+            button(crate::i18n::text("Done")).on_press(ev(Event::Close))
         ]);
         return container(body).padding(16).style(container::rounded_box).into();
     };
@@ -308,20 +307,20 @@ pub fn card(state: &Spelling) -> Element<'_, Message> {
     let can_change = !state.change_to.is_empty() && state.change_to != issue.word;
     body = body.push(
         row![
-            button("Ignore")
+            button(crate::i18n::text("Ignore"))
                 .style(button::secondary)
                 .on_press(ev(Event::Ignore)),
-            button("Ignore all")
+            button(crate::i18n::text("Ignore all"))
                 .style(button::secondary)
                 .on_press(ev(Event::IgnoreAll)),
-            button("Add to dictionary")
+            button(crate::i18n::text("Add to dictionary"))
                 .style(button::secondary)
                 .on_press(ev(Event::Add)),
             space::horizontal(),
-            button("Close")
+            button(crate::i18n::text("Close"))
                 .style(button::secondary)
                 .on_press(ev(Event::Close)),
-            button("Change").on_press_maybe(can_change.then_some(ev(Event::Change))),
+            button(crate::i18n::text("Change")).on_press_maybe(can_change.then_some(ev(Event::Change))),
         ]
         .spacing(6),
     );

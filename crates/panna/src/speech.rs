@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use iced::widget::{container, row, text};
+use crate::i18n::text;
+use iced::widget::{container, row};
 use iced::{Center, Element, Theme};
 
 use crate::Message;

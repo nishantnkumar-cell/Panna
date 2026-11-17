@@ -4,7 +4,8 @@
 
 use std::path::PathBuf;
 
-use iced::widget::{button, column, container, row, scrollable, space, text};
+use crate::i18n::text;
+use iced::widget::{button, column, container, row, scrollable, space};
 use iced::{Center, Element, Fill, Task};
 
 use crate::Message;
@@ -46,7 +47,7 @@ impl Combining {
                         let upper: Vec<String> = kinds.iter().map(|k| k.to_uppercase()).collect();
                         kinds.extend(upper.iter().map(String::as_str));
                         rfd::AsyncFileDialog::new()
-                            .set_title("Add files to combine")
+                            .set_title(crate::i18n::tr_str("Add files to combine"))
                             .add_filter("PDFs and pictures", &kinds)
                             .pick_files()
                             .await
@@ -86,7 +87,7 @@ impl Combining {
                 let task = Task::perform(
                     async move {
                         let mut dialog = rfd::AsyncFileDialog::new()
-                            .set_title("Save the combined PDF as")
+                            .set_title(crate::i18n::tr_str("Save the combined PDF as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name(format!("{name} combined.pdf"));
                         if let Some(dir) = dir {
@@ -221,10 +222,11 @@ pub fn card(state: &Combining) -> Element<'_, Message> {
     body = body.push(
         row![
             space::horizontal(),
-            button("Cancel")
+            button(crate::i18n::text("Cancel"))
                 .style(button::secondary)
                 .on_press_maybe(idle.then_some(ev(Event::Close))),
-            button("Combine and save as…").on_press_maybe((idle && count >= 2).then_some(ev(Event::Go))),
+            button(crate::i18n::text("Combine and save as…"))
+                .on_press_maybe((idle && count >= 2).then_some(ev(Event::Go))),
         ]
         .spacing(8),
     );

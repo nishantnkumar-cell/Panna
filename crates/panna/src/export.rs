@@ -1,6 +1,7 @@
 //! The Export card: pages as plain text, a Word document or pictures.
 
-use iced::widget::{button, column, container, radio, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, column, container, radio, row, space, text_input};
 use iced::{Element, Theme};
 use panna_core::ExportFormat;
 
@@ -191,10 +192,10 @@ pub fn card<'a>(state: &Exporting, count: usize) -> Element<'a, Message> {
             hint,
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(Event::Cancel)),
-                button("Export…").on_press_maybe(parsed.is_ok().then_some(ev(Event::Go))),
+                button(crate::i18n::text("Export…")).on_press_maybe(parsed.is_ok().then_some(ev(Event::Go))),
             ]
             .spacing(8),
         ]

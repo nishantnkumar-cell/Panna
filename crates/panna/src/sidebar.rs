@@ -3,8 +3,9 @@
 
 use std::ops::Range;
 
+use crate::i18n::text;
 use iced::widget::scrollable::Viewport;
-use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
+use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space};
 use iced::{Center, Element, Fill, Theme};
 use panna_core::{Annotation, Attachment, Comment, CommentId, Layer, OutlineItem, PageSize};
 

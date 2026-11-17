@@ -23,6 +23,7 @@ mod finder;
 mod folder_search;
 mod form;
 mod guides;
+mod i18n;
 mod icons;
 mod initial;
 mod keymap;
@@ -63,10 +64,11 @@ mod trust;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::i18n::text;
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
     Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, rule,
-    scrollable, space, text, text_input,
+    scrollable, space, text_input,
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
@@ -931,7 +933,7 @@ fn ask_new_pdf_path(name: &'static str) -> Task<Message> {
     Task::perform(
         async move {
             rfd::AsyncFileDialog::new()
-                .set_title("Save the new PDF as")
+                .set_title(crate::i18n::tr_str("Save the new PDF as"))
                 .add_filter("PDF documents", &["pdf"])
                 .set_file_name(name)
                 .save_file()
@@ -1107,7 +1109,7 @@ fn properties_view<'a>(
             iced::widget::Column::with_children(rows).spacing(6),
             rule::horizontal(1),
             initial.view(&info.initial_view, busy),
-            button("Close").on_press(Message::ToggleProperties),
+            button(crate::i18n::text("Close")).on_press(Message::ToggleProperties),
         ]
         .spacing(14)
         .width(460),
@@ -1217,14 +1219,14 @@ fn link_view(uri: &str) -> Element<'_, Message> {
             .size(13)
             .style(text::secondary),
             row![
-                button("Copy link")
+                button(crate::i18n::text("Copy link"))
                     .style(button::secondary)
                     .on_press(Message::OpenLink(LinkChoice::Copy)),
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(Message::OpenLink(LinkChoice::Cancel)),
-                button("Open").on_press(Message::OpenLink(LinkChoice::Open)),
+                button(crate::i18n::text("Open")).on_press(Message::OpenLink(LinkChoice::Open)),
             ]
             .spacing(8),
         ]
@@ -1244,10 +1246,10 @@ fn reset_view<'a>() -> Element<'a, Message> {
                 .style(text::secondary),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(Message::ConfirmReset(false)),
-                button("Reset").on_press(Message::ConfirmReset(true)),
+                button(crate::i18n::text("Reset")).on_press(Message::ConfirmReset(true)),
             ]
             .spacing(8),
         ]
@@ -1276,6 +1278,7 @@ fn password_id() -> iced::widget::Id {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
+        i18n::set_language(settings.language);
         let redact_look = settings.redact.clone();
         let unit = settings.unit;
         let annotate = annotator(&settings);
@@ -1540,7 +1543,7 @@ impl App {
             Message::OpenDialog => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Open PDF")
+                        .set_title(crate::i18n::tr_str("Open PDF"))
                         .add_filter("PDF documents", &["pdf", "PDF"])
                         .pick_file()
                         .await
@@ -2715,7 +2718,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save form data as")
+                            .set_title(crate::i18n::tr_str("Save form data as"))
                             .add_filter("Form data (FDF)", &["fdf"])
                             .add_filter("Form data (XFDF)", &["xfdf"])
                             .set_file_name(name)
@@ -2751,7 +2754,7 @@ impl App {
                 Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Fill in the form from")
+                            .set_title(crate::i18n::tr_str("Fill in the form from"))
                             .add_filter("Form data", &["fdf", "xfdf"])
                             .pick_file()
                             .await
@@ -2830,7 +2833,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a smaller copy as")
+                            .set_title(crate::i18n::tr_str("Save a smaller copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -2874,7 +2877,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save comments as")
+                            .set_title(crate::i18n::tr_str("Save comments as"))
                             .add_filter("Comments (XFDF)", &["xfdf"])
                             .add_filter("Comments (FDF)", &["fdf"])
                             .set_file_name(name)
@@ -2948,7 +2951,7 @@ impl App {
                 Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Add comments from")
+                            .set_title(crate::i18n::tr_str("Add comments from"))
                             .add_filter("Comments", &["xfdf", "fdf"])
                             .pick_file()
                             .await
@@ -3187,7 +3190,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a PDF/A copy as")
+                            .set_title(crate::i18n::tr_str("Save a PDF/A copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3202,7 +3205,7 @@ impl App {
                 Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Choose the print shop's colour profile")
+                            .set_title(crate::i18n::tr_str("Choose the print shop's colour profile"))
                             .add_filter("ICC colour profile", &["icc", "icm"])
                             .pick_file()
                             .await
@@ -3238,7 +3241,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a PDF/X-4 copy as")
+                            .set_title(crate::i18n::tr_str("Save a PDF/X-4 copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3285,7 +3288,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a tagged copy as")
+                            .set_title(crate::i18n::tr_str("Save a tagged copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3301,7 +3304,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save with thin lines widened as")
+                            .set_title(crate::i18n::tr_str("Save with thin lines widened as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3415,7 +3418,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a described copy as")
+                            .set_title(crate::i18n::tr_str("Save a described copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3933,7 +3936,7 @@ impl App {
             Message::FieldPicture(index) => Task::perform(
                 async {
                     let path = rfd::AsyncFileDialog::new()
-                        .set_title("Choose a picture for the field")
+                        .set_title(crate::i18n::tr_str("Choose a picture for the field"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -4221,7 +4224,7 @@ impl App {
             Message::FromPictures => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Make a PDF from pictures")
+                        .set_title(crate::i18n::tr_str("Make a PDF from pictures"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -4249,7 +4252,7 @@ impl App {
                 Task::perform(
                     async move {
                         let mut dialog = rfd::AsyncFileDialog::new()
-                            .set_title("Save the new PDF as")
+                            .set_title(crate::i18n::tr_str("Save the new PDF as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name(format!("{name}.pdf"));
                         if let Some(dir) = dir {
@@ -4393,7 +4396,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a copy in the new reading order as")
+                            .set_title(crate::i18n::tr_str("Save a copy in the new reading order as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -4545,6 +4548,10 @@ impl App {
                     preferences::Event::Unit(unit) => {
                         self.settings.unit = unit;
                         self.measure.unit = unit;
+                    }
+                    preferences::Event::Language(language) => {
+                        self.settings.language = language;
+                        i18n::set_language(language);
                     }
                     preferences::Event::SingleKeys(on) => self.settings.single_keys = on,
                     preferences::Event::PresentLoop(on) => self.settings.present_loop = on,
@@ -4699,7 +4706,7 @@ impl App {
                         return Task::perform(
                             async {
                                 rfd::AsyncFileDialog::new()
-                                    .set_title("Choose a picture for the watermark")
+                                    .set_title(crate::i18n::tr_str("Choose a picture for the watermark"))
                                     .add_filter(
                                         "Pictures",
                                         &[
@@ -4986,7 +4993,7 @@ impl App {
             Message::StampPicture => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Stamp a picture")
+                        .set_title(crate::i18n::tr_str("Stamp a picture"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -5002,7 +5009,7 @@ impl App {
             Message::AttachFile => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Attach a file")
+                        .set_title(crate::i18n::tr_str("Attach a file"))
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())
@@ -5200,7 +5207,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save the comment summary as")
+                            .set_title(crate::i18n::tr_str("Save the comment summary as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -5255,7 +5262,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save attached file as")
+                            .set_title(crate::i18n::tr_str("Save attached file as"))
                             .set_file_name(name)
                             .save_file()
                             .await
@@ -5300,7 +5307,7 @@ impl App {
             Message::NewPortfolio => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Choose the files for the PDF Portfolio")
+                        .set_title(crate::i18n::tr_str("Choose the files for the PDF Portfolio"))
                         .pick_files()
                         .await
                         .map(|files| files.iter().map(|f| f.path().to_path_buf()).collect())
@@ -5312,7 +5319,7 @@ impl App {
             Message::PortfolioFiles(files) => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Save the PDF Portfolio as")
+                        .set_title(crate::i18n::tr_str("Save the PDF Portfolio as"))
                         .add_filter("PDF", &["pdf"])
                         .set_file_name("Portfolio.pdf")
                         .save_file()
@@ -5472,7 +5479,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save PDF as")
+                            .set_title(crate::i18n::tr_str("Save PDF as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -5640,7 +5647,7 @@ impl App {
             pages::Op::InsertFile => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Insert pages from")
+                        .set_title(crate::i18n::tr_str("Insert pages from"))
                         .add_filter("PDF documents", &["pdf", "PDF"])
                         .pick_file()
                         .await
@@ -5655,7 +5662,7 @@ impl App {
             pages::Op::Replace => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Replace pages with pages from")
+                        .set_title(crate::i18n::tr_str("Replace pages with pages from"))
                         .add_filter("PDF documents", &["pdf", "PDF"])
                         .pick_file()
                         .await
@@ -5769,7 +5776,7 @@ impl App {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save the files in")
+                                .set_title(crate::i18n::tr_str("Save the files in"))
                                 .pick_folder()
                                 .await
                                 .map(|f| f.path().to_path_buf())
@@ -5780,7 +5787,7 @@ impl App {
                     Task::perform(
                         async move {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save pages as")
+                                .set_title(crate::i18n::tr_str("Save pages as"))
                                 .add_filter("PDF documents", &["pdf"])
                                 .set_file_name(name)
                                 .save_file()
@@ -5822,7 +5829,7 @@ impl App {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Choose a certificate to trust")
+                            .set_title(crate::i18n::tr_str("Choose a certificate to trust"))
                             .add_filter(
                                 "Certificates",
                                 &["cer", "crt", "pem", "der", "CER", "CRT", "PEM", "DER"],
@@ -5908,7 +5915,7 @@ impl App {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save the scanned pages as")
+                            .set_title(crate::i18n::tr_str("Save the scanned pages as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name("Scan.pdf")
                             .save_file()
@@ -5952,7 +5959,7 @@ impl App {
             signing::Event::Choose => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Choose a certificate file")
+                        .set_title(crate::i18n::tr_str("Choose a certificate file"))
                         .add_filter("Certificate files", &["p12", "pfx", "P12", "PFX"])
                         .pick_file()
                         .await
@@ -6034,7 +6041,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save the signed copy as")
+                            .set_title(crate::i18n::tr_str("Save the signed copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -6169,7 +6176,7 @@ impl App {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save the pictures in")
+                                .set_title(crate::i18n::tr_str("Save the pictures in"))
                                 .pick_folder()
                                 .await
                                 .map(|f| f.path().to_path_buf())
@@ -6189,7 +6196,7 @@ impl App {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Compare with")
+                            .set_title(crate::i18n::tr_str("Compare with"))
                             .add_filter("PDF documents", &["pdf", "PDF"])
                             .pick_file()
                             .await
@@ -6249,7 +6256,7 @@ impl App {
             add::Outcome::PickPicture => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Add a picture")
+                        .set_title(crate::i18n::tr_str("Add a picture"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -6329,7 +6336,7 @@ impl App {
             pictures::Outcome::PickReplacement => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Replace the picture with")
+                        .set_title(crate::i18n::tr_str("Replace the picture with"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -8485,7 +8492,7 @@ impl App {
             (Status::Error(e), _) => center(
                 column![
                     text(e.as_str()),
-                    button("Open another file").on_press(Message::OpenDialog)
+                    button(crate::i18n::text("Open another file")).on_press(Message::OpenDialog)
                 ]
                 .spacing(12)
                 .align_x(Center),
@@ -8503,15 +8510,15 @@ impl App {
                     } else {
                         "Enter the password to open it."
                     }),
-                    text_input("Password", input)
+                    text_input(crate::i18n::tr_str("Password"), input)
                         .id(password_id())
                         .secure(true)
                         .on_input(Message::PasswordInput)
                         .on_submit(Message::PasswordSubmit)
                         .width(280),
                     row![
-                        button("Open").on_press(Message::PasswordSubmit),
-                        button("Choose another file").on_press(Message::OpenDialog),
+                        button(crate::i18n::text("Open")).on_press(Message::PasswordSubmit),
+                        button(crate::i18n::text("Choose another file")).on_press(Message::OpenDialog),
                     ]
                     .spacing(8),
                 ]
@@ -8728,6 +8735,7 @@ impl App {
                     appearance: self.settings.appearance,
                     zoom: self.settings.open_zoom,
                     unit: self.settings.unit,
+                    language: self.settings.language,
                     single_keys: self.settings.single_keys,
                     present_loop: self.settings.present_loop,
                     present_seconds: self.settings.present_seconds,
@@ -8780,7 +8788,7 @@ impl App {
                 container(
                     column![
                         text(notice.as_str()),
-                        button("OK").on_press(Message::DismissNotice)
+                        button(crate::i18n::text("OK")).on_press(Message::DismissNotice)
                     ]
                     .spacing(12)
                     .width(360),
@@ -8869,10 +8877,10 @@ impl App {
                     .size(13),
                     row![
                         space::horizontal(),
-                        button("Cancel")
+                        button(crate::i18n::text("Cancel"))
                             .style(button::secondary)
                             .on_press(Message::RecordCancel),
-                        button("Stop and add").on_press(Message::RecordStop),
+                        button(crate::i18n::text("Stop and add")).on_press(Message::RecordStop),
                     ]
                     .spacing(8),
                 ]
@@ -9070,14 +9078,14 @@ impl App {
                 text("Your comments, drawings and form entries will be lost if you don't save them.")
                     .style(text::secondary),
                 row![
-                    button("Don't save")
+                    button(crate::i18n::text("Don't save"))
                         .style(button::secondary)
                         .on_press(Message::Confirm(Choice::Discard)),
                     space::horizontal(),
-                    button("Cancel")
+                    button(crate::i18n::text("Cancel"))
                         .style(button::secondary)
                         .on_press(Message::Confirm(Choice::Cancel)),
-                    button("Save").on_press(Message::Confirm(Choice::Save)),
+                    button(crate::i18n::text("Save")).on_press(Message::Confirm(Choice::Save)),
                 ]
                 .spacing(8),
             ]
@@ -9114,14 +9122,14 @@ impl App {
                 )),
                 text("Some very old PDF readers can't open AES-256 files.").style(text::secondary),
                 row![
-                    button("Cancel")
+                    button(crate::i18n::text("Cancel"))
                         .style(button::secondary)
                         .on_press(Message::Strengthen(None)),
                     space::horizontal(),
                     button(text(format!("Keep {method}")))
                         .style(button::secondary)
                         .on_press(Message::Strengthen(Some(false))),
-                    button("Use AES-256").on_press(Message::Strengthen(Some(true))),
+                    button(crate::i18n::text("Use AES-256")).on_press(Message::Strengthen(Some(true))),
                 ]
                 .spacing(8),
             ]

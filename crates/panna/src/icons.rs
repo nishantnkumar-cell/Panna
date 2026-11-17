@@ -5,7 +5,8 @@
 
 use std::cell::Cell;
 
-use iced::widget::{self, container, svg, text, tooltip};
+use crate::i18n::text;
+use iced::widget::{self, container, svg, tooltip};
 use iced::{Element, Length, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

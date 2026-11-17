@@ -3,7 +3,8 @@
 //! Acrobat, marks can be repeated across pages, Find can mark phone numbers, emails and such,
 //! and the boxes left behind take a fill colour and overlay text.
 
-use iced::widget::{button, checkbox, column, container, pick_list, pin, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, container, pick_list, pin, row, space, text_input};
 use iced::{Center, Element, Theme};
 use panna_core::{Color, Leftovers, Pattern, RedactLook, TextBox};
 
@@ -50,11 +51,11 @@ impl RepeatOn {
 
 impl std::fmt::Display for RepeatOn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             RepeatOn::All => "Repeat the last mark on every page",
             RepeatOn::Odd => "Repeat it on odd pages",
             RepeatOn::Even => "Repeat it on even pages",
-        })
+        }))
     }
 }
 
@@ -365,7 +366,7 @@ impl Redactor {
             ),
             icons::with_tip(
                 pick_list(Pattern::ALL, None::<Pattern>, move |p| ev(Event::Pattern(p)))
-                    .placeholder("Find…")
+                    .placeholder(crate::i18n::tr_str("Find…"))
                     .width(90)
                     .text_size(13)
                     .padding([3, 6]),
@@ -375,7 +376,7 @@ impl Redactor {
                 pick_list(RepeatOn::ALL, None::<RepeatOn>, move |on| {
                     ev(Event::Repeat(on, pages))
                 })
-                .placeholder("Repeat…")
+                .placeholder(crate::i18n::tr_str("Repeat…"))
                 .width(100)
                 .text_size(13)
                 .padding([3, 6]),
@@ -473,15 +474,18 @@ impl Redactor {
                     .align_y(Center),
                 row![
                     text("Overlay text").size(13).width(90),
-                    text_input("None, or words such as Redacted", &look.overlay)
-                        .on_input(move |w| ev(Event::Overlay(w)))
-                        .on_submit(ev(Event::PropertiesDone))
-                        .size(13),
+                    text_input(
+                        crate::i18n::tr_str("None, or words such as Redacted"),
+                        &look.overlay
+                    )
+                    .on_input(move |w| ev(Event::Overlay(w)))
+                    .on_submit(ev(Event::PropertiesDone))
+                    .size(13),
                 ]
                 .spacing(8)
                 .align_y(Center),
                 checkbox(look.repeat)
-                    .label("Repeat the text to fill each box")
+                    .label(crate::i18n::tr_str("Repeat the text to fill each box"))
                     .on_toggle(move |on| ev(Event::RepeatOverlay(on)))
                     .size(16)
                     .text_size(13),
@@ -491,10 +495,10 @@ impl Redactor {
                     .style(text::secondary),
                 row![
                     space::horizontal(),
-                    button("Cancel")
+                    button(crate::i18n::text("Cancel"))
                         .style(button::secondary)
                         .on_press(ev(Event::PropertiesCancel)),
-                    button("Done").on_press(ev(Event::PropertiesDone)),
+                    button(crate::i18n::text("Done")).on_press(ev(Event::PropertiesDone)),
                 ]
                 .spacing(8),
             ]
@@ -574,10 +578,10 @@ impl Redactor {
         .push(
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(Event::Cancel)),
-                button("Remove").style(button::danger).on_press(ev(Event::Confirm)),
+                button(crate::i18n::text("Remove")).style(button::danger).on_press(ev(Event::Confirm)),
             ]
             .spacing(8),
         )

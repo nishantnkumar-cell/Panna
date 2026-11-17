@@ -3,7 +3,8 @@
 
 use std::ops::Range;
 
-use iced::widget::{Column, button, column, container, rich_text, row, scrollable, span, text};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, container, rich_text, row, scrollable, span};
 use iced::{Center, Color, Element, Fill, Theme};
 use panna_core::{Change, ChangeKind, PageText, TextBox};
 

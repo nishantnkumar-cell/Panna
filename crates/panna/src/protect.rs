@@ -1,7 +1,8 @@
 //! The Password protection card (a password to open the file, and limits on what others may
 //! do with it) and the Remove hidden information card.
 
-use iced::widget::{button, checkbox, column, container, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, container, row, space, text_input};
 use iced::{Element, Theme};
 use panna_core::{Cleanup, Protection};
 
@@ -113,7 +114,7 @@ pub fn card<'a>(state: &Protecting) -> Element<'a, Message> {
         password("Password to open (optional)", &state.open, Event::OpenPassword).id(input_id()),
         password("Type it again", &state.open_again, Event::OpenAgain),
         checkbox(state.restrict)
-            .label("Restrict printing, changes or copying")
+            .label(crate::i18n::tr_str("Restrict printing, changes or copying"))
             .on_toggle(move |v| ev(Event::Restrict(v))),
     ]
     .spacing(10)
@@ -123,13 +124,15 @@ pub fn card<'a>(state: &Protecting) -> Element<'a, Message> {
             .push(
                 column![
                     checkbox(state.print)
-                        .label("Allow printing")
+                        .label(crate::i18n::tr_str("Allow printing"))
                         .on_toggle(move |v| ev(Event::Print(v))),
                     checkbox(state.change)
-                        .label("Allow changes, comments and filling in forms")
+                        .label(crate::i18n::tr_str(
+                            "Allow changes, comments and filling in forms"
+                        ))
                         .on_toggle(move |v| ev(Event::Change(v))),
                     checkbox(state.copy)
-                        .label("Allow copying text and pictures")
+                        .label(crate::i18n::tr_str("Allow copying text and pictures"))
                         .on_toggle(move |v| ev(Event::Copy(v))),
                 ]
                 .spacing(8)
@@ -143,7 +146,7 @@ pub fn card<'a>(state: &Protecting) -> Element<'a, Message> {
             .push(password("Type it again", &state.owner_again, Event::OwnerAgain));
     }
     let remove: Element<'a, Message> = if state.protected {
-        button("Remove protection")
+        button(crate::i18n::text("Remove protection"))
             .style(button::secondary)
             .on_press(ev(Event::Remove))
             .into()
@@ -154,10 +157,10 @@ pub fn card<'a>(state: &Protecting) -> Element<'a, Message> {
         row![
             remove,
             space::horizontal(),
-            button("Cancel")
+            button(crate::i18n::text("Cancel"))
                 .style(button::secondary)
                 .on_press(ev(Event::Cancel)),
-            button("Protect").on_press_maybe(parsed.is_ok().then_some(ev(Event::Go))),
+            button(crate::i18n::text("Protect")).on_press_maybe(parsed.is_ok().then_some(ev(Event::Go))),
         ]
         .spacing(8),
     );
@@ -196,23 +199,29 @@ pub fn clean_card<'a>(state: Cleanup) -> Element<'a, Message> {
             text("Remove hidden information").size(16),
             text("Takes effect when you save. Undo brings it back until then.").size(13),
             checkbox(state.metadata)
-                .label("Title, author, dates and the software that made it")
+                .label(crate::i18n::tr_str(
+                    "Title, author, dates and the software that made it"
+                ))
                 .on_toggle(move |v| ev(CleanEvent::Metadata(v))),
             checkbox(state.scripts)
-                .label("Scripts and actions that run by themselves")
+                .label(crate::i18n::tr_str("Scripts and actions that run by themselves"))
                 .on_toggle(move |v| ev(CleanEvent::Scripts(v))),
             checkbox(state.attachments)
-                .label("Attached files, and videos, sounds and 3D models on pages")
+                .label(crate::i18n::tr_str(
+                    "Attached files, and videos, sounds and 3D models on pages"
+                ))
                 .on_toggle(move |v| ev(CleanEvent::Attachments(v))),
             checkbox(state.comments)
-                .label("Comments and markup (links and form fields stay)")
+                .label(crate::i18n::tr_str(
+                    "Comments and markup (links and form fields stay)"
+                ))
                 .on_toggle(move |v| ev(CleanEvent::Comments(v))),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(CleanEvent::Cancel)),
-                button("Remove").on_press_maybe(any.then_some(ev(CleanEvent::Go))),
+                button(crate::i18n::text("Remove")).on_press_maybe(any.then_some(ev(CleanEvent::Go))),
             ]
             .spacing(8),
         ]

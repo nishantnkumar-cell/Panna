@@ -1,7 +1,8 @@
 //! The Save a smaller copy card: whether pictures sharper than needed may be scaled down too,
 //! and to what resolution. Without that, the copy looks exactly the same.
 
-use iced::widget::{button, checkbox, column, container, pick_list, row, space, text};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, container, pick_list, row, space};
 use iced::{Element, Theme};
 
 use crate::Message;
@@ -59,7 +60,7 @@ pub fn card<'a>(state: Shrinking) -> Element<'a, Message> {
         .size(13),
         row![
             checkbox(state.pictures)
-                .label("Also make sharp pictures smaller, to")
+                .label(crate::i18n::tr_str("Also make sharp pictures smaller, to"))
                 .on_toggle(move |v| ev(Event::Pictures(v))),
             pick_list(Dpi::ALL, Some(state.dpi), move |v| ev(Event::Dpi(v)))
                 .text_size(13)
@@ -88,10 +89,10 @@ pub fn card<'a>(state: Shrinking) -> Element<'a, Message> {
     body = body.push(
         row![
             space::horizontal(),
-            button("Cancel")
+            button(crate::i18n::text("Cancel"))
                 .style(button::secondary)
                 .on_press(ev(Event::Cancel)),
-            button("Save as…").on_press(ev(Event::Go)),
+            button(crate::i18n::text("Save as…")).on_press(ev(Event::Go)),
         ]
         .spacing(8),
     );
