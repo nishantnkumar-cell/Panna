@@ -57,6 +57,7 @@ mod speech;
 mod spelling;
 mod toolbar;
 mod tools;
+mod touch;
 mod trust;
 
 use std::path::PathBuf;
@@ -319,6 +320,8 @@ enum Message {
     RotateCcw,
     PrevPage,
     NextPage,
+    /// Fingers on the pages (see [`touch`]).
+    Touch(touch::Gesture),
     PageInput(String),
     /// Puts the cursor in the page number box.
     FocusPageBox,
@@ -3710,6 +3713,7 @@ impl App {
                 };
                 operation::scroll_to(scroll_id(), offset)
             }
+            Message::Touch(gesture) => self.touch(gesture),
             Message::HandReleased => {
                 self.panning = None;
                 Task::none()
@@ -7062,6 +7066,76 @@ impl App {
         Task::batch([scroll, self.request_visible()])
     }
 
+    /// Whether one finger on the pages draws or marks, as the mouse would, rather than
+    /// scrolling: when a tool that works by pressing on the page is on.
+    fn touch_draws(&self) -> bool {
+        (self.annotate.open && self.annotate.tool != annotate::Tool::Select)
+            || self.measure.on
+            || self.adder.on
+            || self.redactor.on
+            || self.preparer.on
+            || self.picture_editor.on
+            || self.snapping
+            || self.zoom_box
+    }
+
+    fn touch(&mut self, gesture: touch::Gesture) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        match gesture {
+            touch::Gesture::Pan(delta) => self.scroll_view(-delta),
+            touch::Gesture::Pinch {
+                factor,
+                center,
+                shift,
+            } => {
+                let zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+                if doc.layout.paged() || !zoom.is_finite() {
+                    let zoomed = self.set_zoom(zoom);
+                    return Task::batch([zoomed, self.scroll_view(-shift)]);
+                }
+                // Keep the point between the fingers under them.
+                let scale = zoom / self.zoom;
+                let anchor = doc
+                    .layout
+                    .unzoomed_y(self.viewport.offset_y + center.y, self.zoom);
+                self.viewport.offset_y = (doc.layout.zoomed_y(anchor, zoom) - center.y).max(0.0);
+                self.viewport.offset_x = ((self.viewport.offset_x + center.x) * scale - center.x).max(0.0);
+                self.zoom = zoom;
+                Task::batch([self.scroll_view(-shift), self.request_visible()])
+            }
+            touch::Gesture::Swipe(next) => {
+                // Only when the pages fit across, so a swipe isn't wanted to scroll sideways.
+                if doc.layout.content_width(self.zoom, 0.0) <= self.viewport.width + 1.0 {
+                    self.update(if next {
+                        Message::NextPage
+                    } else {
+                        Message::PrevPage
+                    })
+                } else {
+                    Task::none()
+                }
+            }
+            touch::Gesture::Cancel => {
+                self.annotate.draft = None;
+                self.selecting = false;
+                Task::none()
+            }
+        }
+    }
+
+    /// Moves the view by `by` pixels, right and down.
+    fn scroll_view(&mut self, by: iced::Vector) -> Task<Message> {
+        self.viewport.offset_x = (self.viewport.offset_x + by.x).max(0.0);
+        self.viewport.offset_y = (self.viewport.offset_y + by.y).max(0.0);
+        operation::scroll_to(
+            scroll_id(),
+            AbsoluteOffset {
+                x: self.viewport.offset_x,
+                y: self.viewport.offset_y,
+            },
+        )
+    }
+
     fn set_zoom(&mut self, zoom: f32) -> Task<Message> {
         let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         let Some(doc) = &self.doc else {
@@ -9569,11 +9643,10 @@ impl App {
             .width(Fill)
             .height(Fill);
         // A darker backdrop so page edges stay visible in light and dark themes.
-        container(pages)
-            .style(|theme: &iced::Theme| {
-                container::Style::default().background(theme.extended_palette().background.strong.color)
-            })
-            .into()
+        let pages = container(pages).style(|theme: &iced::Theme| {
+            container::Style::default().background(theme.extended_palette().background.strong.color)
+        });
+        touch::touch(pages, self.touch_draws(), Message::Touch).into()
     }
 }
 
