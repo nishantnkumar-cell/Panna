@@ -20,6 +20,8 @@ pub enum Event {
     RunAccessibility,
     /// Save a PDF/A copy.
     Convert,
+    /// Save a PDF/X-4 copy, with a colour profile chosen first.
+    ConvertPrint,
     /// Save a copy with tags added.
     Tag,
     /// Save a copy with thin lines widened.
@@ -106,6 +108,14 @@ impl Report {
         }
     }
 
+    /// The findings on a PDF/X-4 copy just saved as `name`.
+    pub fn saved_print(name: String, findings: Vec<Finding>) -> Self {
+        Self {
+            saved: Some(name),
+            ..Self::print(findings)
+        }
+    }
+
     pub fn accessibility(findings: Vec<AccessFinding>) -> Self {
         Self {
             kind: Kind::Accessibility,
@@ -170,6 +180,15 @@ impl Report {
                 "Not yet PDF/A".to_owned(),
                 "These keep the document from being archival PDF (PDF/A-2b):",
             ),
+            (Kind::PdfX, Some(name)) if clean => (
+                format!("Saved {name}"),
+                "The copy meets PDF/X-4's main rules, for the printing condition chosen. Not \
+                 every rule of the standard is checked.",
+            ),
+            (Kind::PdfX, Some(name)) => (
+                format!("Saved {name}"),
+                "The copy is closer to PDF/X-4, but these couldn't be fixed by Panna:",
+            ),
             (Kind::PdfX, _) if clean => (
                 "Meets PDF/X-4's main rules".to_owned(),
                 "Fonts are embedded, the printing condition is named, every page gives its \
@@ -178,8 +197,8 @@ impl Report {
             ),
             (Kind::PdfX, _) => (
                 "Not yet PDF/X".to_owned(),
-                "These keep the document from being PDF/X-4, for printing. Making PDF/X needs \
-                 the printer's colour profile, so Panna checks but doesn't convert:",
+                "These keep the document from being PDF/X-4, for printing. A PDF/X copy can \
+                 fix most of them, with the print shop's colour profile:",
             ),
             (Kind::Accessibility, Some(name)) if clean => (
                 format!("Saved {name}"),
@@ -250,6 +269,15 @@ impl Report {
                     .style(button::secondary)
                     .on_press_maybe(
                         (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::Convert)),
+                    ),
+            );
+        }
+        if self.kind == Kind::PdfX {
+            buttons = buttons.push(
+                button("Save a PDF/X-4 copy…")
+                    .style(button::secondary)
+                    .on_press_maybe(
+                        (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::ConvertPrint)),
                     ),
             );
         }

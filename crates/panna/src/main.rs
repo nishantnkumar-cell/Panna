@@ -480,6 +480,15 @@ enum Message {
         findings: Vec<panna_core::AccessFinding>,
     },
     ArchiveTo(Option<PathBuf>),
+    /// The colour profile chosen for a PDF/X copy.
+    PrintProfileChosen(Option<PathBuf>),
+    /// Where to save the PDF/X copy made with this profile.
+    PrintReadyTo(Box<panna_core::PrintProfile>, Option<PathBuf>),
+    PrintReady {
+        doc: u64,
+        name: String,
+        result: Result<Vec<panna_core::Finding>, SaveError>,
+    },
     TagTo(Option<PathBuf>),
     FixLinesTo(Option<PathBuf>),
     LinesFixed {
@@ -3114,6 +3123,88 @@ impl App {
                     Message::ArchiveTo,
                 )
             }
+            Message::Preflight(preflight::Event::ConvertPrint) => {
+                self.preflight = None;
+                Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Choose the print shop's colour profile")
+                            .add_filter("ICC colour profile", &["icc", "icm"])
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::PrintProfileChosen,
+                )
+            }
+            Message::PrintProfileChosen(None) => Task::none(),
+            Message::PrintProfileChosen(Some(path)) => {
+                let too_big = std::fs::metadata(&path)
+                    .is_ok_and(|m| m.len() > panna_core::PrintProfile::MAX_BYTES as u64);
+                let read = if too_big {
+                    Err(panna_core::ProfileError::TooBig.to_string())
+                } else {
+                    std::fs::read(&path).map_err(|e| format!("Couldn't read the profile: {e}"))
+                };
+                let fallback = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let profile = match read.and_then(|bytes| {
+                    panna_core::PrintProfile::read(bytes, &fallback).map_err(|e| e.to_string())
+                }) {
+                    Ok(profile) => profile,
+                    Err(e) => {
+                        self.notice = Some(e);
+                        return Task::none();
+                    }
+                };
+                let name = format!("{} (PDF-X).pdf", self.file_stem());
+                let profile = Box::new(profile);
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Save a PDF/X-4 copy as")
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    move |path| Message::PrintReadyTo(profile.clone(), path),
+                )
+            }
+            Message::PrintReadyTo(_, None) => Task::none(),
+            Message::PrintReadyTo(profile, Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Unsaved changes go into the copy too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_print_ready(path, *profile, move |result| {
+                    let _ = tx.send(result);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::PrintReady {
+                    doc: id,
+                    name,
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::PrintReady { doc, name, result } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    match result {
+                        Ok(findings) => self.preflight = Some(preflight::Report::saved_print(name, findings)),
+                        Err(e) => self.notice = Some(e.to_string()),
+                    }
+                }
+                Task::none()
+            }
             Message::Preflight(preflight::Event::Tag) => {
                 self.preflight = None;
                 let name = format!("{} (tagged).pdf", self.file_stem());
@@ -4117,6 +4208,8 @@ impl App {
                 if state.query.is_empty() {
                     state.query = self.find.query.clone();
                 }
+                state.use_index = self.settings.search_index;
+                state.refresh_index_size();
                 self.folder_search_open = true;
                 operation::focus(folder_search::input_id())
             }
@@ -4126,6 +4219,12 @@ impl App {
                 };
                 let kept = state.clone();
                 let (state, task) = state.update(event);
+                if let Some(on) = state.as_ref().map(|s| s.use_index)
+                    && on != self.settings.search_index
+                {
+                    self.settings.search_index = on;
+                    self.settings.save();
+                }
                 match state {
                     Some(state) => self.folder_search = Some(state),
                     None => {
@@ -4282,7 +4381,11 @@ impl App {
                         .into_iter()
                         .map(|(index, name, text)| (spelling::Source::Field(index, name), text)),
                 );
-                self.spelling = Some(spelling::Spelling::new(sources, &self.settings.words));
+                self.spelling = Some(spelling::Spelling::new(
+                    sources,
+                    &self.settings.words,
+                    self.settings.spelling_language,
+                ));
                 operation::focus(spelling::input_id())
             }
             Message::Spelling(event) => {
@@ -4290,6 +4393,12 @@ impl App {
                     return Task::none();
                 };
                 let (state, action) = state.update(event);
+                if let Some(language) = state.as_ref().map(|s| s.language)
+                    && language != self.settings.spelling_language
+                {
+                    self.settings.spelling_language = language;
+                    self.settings.save();
+                }
                 self.spelling = state;
                 match action {
                     spelling::Action::Nothing => Task::none(),

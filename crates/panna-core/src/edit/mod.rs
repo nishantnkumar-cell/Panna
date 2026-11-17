@@ -25,6 +25,9 @@ mod fonts;
 pub use fonts::{FontFamily, TextAlign, TextFont};
 mod pack;
 mod pdfa;
+mod pdfx;
+pub(crate) use pdfx::to_pdfx;
+pub use pdfx::{PrintProfile, ProfileError};
 mod picture;
 mod rebuild;
 mod redact;
@@ -117,6 +120,8 @@ pub enum SaveError {
     OtherFile(String),
     /// Changing the lines of password-protected files isn't supported.
     LinesProtected,
+    /// PDF/X files can't be password protected.
+    PrintProtected,
 }
 
 impl fmt::Display for SaveError {
@@ -138,6 +143,11 @@ impl fmt::Display for SaveError {
                 f,
                 "Only the owner can change this PDF's password protection. Open it with the \
                  owner password first."
+            ),
+            Self::PrintProtected => write!(
+                f,
+                "PDF/X files can't have password protection. Remove it first, from Password \
+                 protection in All tools."
             ),
             Self::ArchiveProtected => write!(
                 f,

@@ -213,3 +213,60 @@ fn thin_lines_are_found_and_widened_and_spot_inks_listed() {
     let cache = fixed.new_cache();
     assert!(fixed.render_page(&cache, 0, 1.0).is_ok());
 }
+
+/// A CMYK output profile with a description, just enough to be read.
+fn cmyk_profile(desc: &str) -> Vec<u8> {
+    let mut tag = b"desc\0\0\0\0".to_vec();
+    tag.extend(((desc.len() + 1) as u32).to_be_bytes());
+    tag.extend(desc.as_bytes());
+    tag.push(0);
+    let mut icc = vec![0u8; 128];
+    icc[12..16].copy_from_slice(b"prtr");
+    icc[16..20].copy_from_slice(b"CMYK");
+    icc[36..40].copy_from_slice(b"acsp");
+    icc.extend(1u32.to_be_bytes());
+    icc.extend(b"desc");
+    icc.extend(144u32.to_be_bytes());
+    icc.extend((tag.len() as u32).to_be_bytes());
+    icc.extend(tag);
+    let size = icc.len() as u32;
+    icc[0..4].copy_from_slice(&size.to_be_bytes());
+    icc
+}
+
+#[test]
+fn a_pdfx_copy_meets_the_print_rules() {
+    let bytes = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            // The media box is inherited, and one page already has a trim box.
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /TrimBox [5 5 295 395] >>",
+            "<< /Title (Flyer) /Author (Jo) >>",
+        ],
+        "/Info 5 0 R",
+    );
+    let doc = Document::from_bytes(bytes.clone(), None, Limits::default()).unwrap();
+    assert!(!doc.preflight_x().is_empty());
+    let profile = panna_core::PrintProfile::read(cmyk_profile("Coated FOGRA39"), "press").unwrap();
+    let out = doc.print_ready(&profile).unwrap();
+    // An incremental update: the original bytes are untouched.
+    assert!(out.starts_with(&bytes));
+    let copy = doc.reopen(out).unwrap();
+    assert_eq!(copy.preflight_x(), []);
+    let text = String::from_utf8_lossy(copy.bytes());
+    assert!(text.contains("/TrimBox [0 0 300 400]"), "{text}");
+    assert!(text.contains("/TrimBox [5 5 295 395]"));
+    assert!(text.contains("/Trapped /False"));
+    assert!(text.contains("/S /GTS_PDFX /OutputConditionIdentifier"));
+    assert!(text.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Flyer"));
+    assert_eq!(copy.info().unwrap().title.as_deref(), Some("Flyer"));
+
+    let locked = include_bytes!("fixtures/encrypted-aes256.pdf");
+    let locked = Document::from_bytes(locked.to_vec(), Some("secret"), Limits::default()).unwrap();
+    assert!(matches!(
+        locked.print_ready(&profile),
+        Err(panna_core::SaveError::PrintProtected)
+    ));
+}

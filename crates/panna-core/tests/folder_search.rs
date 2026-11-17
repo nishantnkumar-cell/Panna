@@ -82,3 +82,39 @@ fn every_pdf_in_a_folder_and_its_subfolders_is_found_and_searched() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A file's text is kept in the index and read from it while the file is unchanged, and
+/// read again once it changes.
+#[test]
+fn the_index_answers_until_the_file_changes() {
+    use panna_core::folder::{Index, search_indexed};
+    let dir = std::env::temp_dir().join(format!("panna-index-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a.pdf");
+    std::fs::write(&file, saying("Kept for later")).unwrap();
+    let index = Index::new(dir.join("index"));
+    let opts = FindOptions::default();
+    let (found, cached) = search_indexed(&file, "later", opts, Limits::default(), Some(&index)).unwrap();
+    assert_eq!((found.len(), cached), (1, false));
+    let (found, cached) = search_indexed(&file, "kept", opts, Limits::default(), Some(&index)).unwrap();
+    assert_eq!((found.len(), cached), (1, true));
+    assert_eq!(found[0].after, " for later");
+    assert_eq!(index.size().0, 1);
+
+    // A changed file (a different size) is read again.
+    std::fs::write(&file, saying("Something else entirely")).unwrap();
+    let (found, cached) = search_indexed(&file, "kept", opts, Limits::default(), Some(&index)).unwrap();
+    assert_eq!((found.len(), cached), (0, false));
+    let (found, cached) = search_indexed(&file, "else", opts, Limits::default(), Some(&index)).unwrap();
+    assert_eq!((found.len(), cached), (1, true));
+
+    // A damaged entry is ignored.
+    for entry in std::fs::read_dir(dir.join("index")).unwrap() {
+        std::fs::write(entry.unwrap().path(), "panna-search-index 1\nnonsense").unwrap();
+    }
+    assert!(index.load(&file).is_none());
+    index.clear().unwrap();
+    assert_eq!(index.size().0, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}

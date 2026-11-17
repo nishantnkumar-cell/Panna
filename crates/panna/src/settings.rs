@@ -51,6 +51,10 @@ pub struct Settings {
     pub words: Vec<String>,
     /// Shortcuts the user has changed.
     pub keys: crate::keymap::Keymap,
+    /// Folder search keeps an index of each file's text.
+    pub search_index: bool,
+    /// The language spelling is checked in.
+    pub spelling_language: panna_core::spell::Language,
 }
 
 impl Default for Settings {
@@ -74,6 +78,8 @@ impl Default for Settings {
             recent: Vec::new(),
             words: Vec::new(),
             keys: crate::keymap::Keymap::default(),
+            search_index: true,
+            spelling_language: panna_core::spell::Language::default(),
         }
     }
 }
@@ -139,6 +145,11 @@ impl Settings {
                 "view.open_zoom" => out.open_zoom = OpenZoom::parse(value.trim()).unwrap_or(out.open_zoom),
                 "measure.unit" => out.unit = Unit::parse(value.trim()).unwrap_or(out.unit),
                 "keys.single" => out.single_keys = value.trim() != "false",
+                "spelling.language" => {
+                    out.spelling_language =
+                        panna_core::spell::Language::parse(value.trim()).unwrap_or(out.spelling_language);
+                }
+                "search.index" => out.search_index = value.trim() != "false",
                 "present.loop" => out.present_loop = value.trim() == "true",
                 "present.seconds" => {
                     out.present_seconds = value.trim().parse::<u32>().map_or(0, |s| s.min(MAX_SECONDS));
@@ -199,6 +210,11 @@ impl Settings {
             out.push_str(&format!("comments.author={}\n", self.author));
         }
         self.keys.serialize(&mut out);
+        out.push_str(&format!(
+            "search.index={}\nspelling.language={}\n",
+            self.search_index,
+            self.spelling_language.as_str()
+        ));
         for word in &self.words {
             out.push_str(&format!("spelling.word={word}\n"));
         }
@@ -242,6 +258,21 @@ fn finite(s: &str) -> Option<f32> {
 
 fn file_path() -> Option<PathBuf> {
     Some(config_dir()?.join("settings.txt"))
+}
+
+/// Panna's folder in the OS cache directory, for things that can be made again.
+pub fn cache_dir() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+    }?;
+    Some(base.join("Panna"))
 }
 
 /// Panna's folder in the OS config directory.
@@ -301,6 +332,8 @@ mod tests {
                 keys.set(crate::keymap::Action::Print, None);
                 keys
             },
+            search_index: false,
+            spelling_language: panna_core::spell::Language::EnglishGb,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

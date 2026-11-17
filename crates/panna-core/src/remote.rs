@@ -75,6 +75,8 @@ pub(crate) enum Op {
     Preflight(Standard),
     Accessibility,
     Archived,
+    /// A PDF/X-4 copy with this printing condition.
+    PrintReady(crate::PrintProfile),
     Tagged,
     /// Figures given these descriptions, by object number and generation.
     Described(Vec<((u32, u16), String)>),
@@ -175,7 +177,7 @@ impl Op {
             Self::DetectFields => Answer::Fields(Err(render)),
             Self::Preflight(_) => Answer::Findings(Vec::new()),
             Self::Accessibility => Answer::Access(Vec::new()),
-            Self::Archived => Answer::Archived(Err(save)),
+            Self::Archived | Self::PrintReady(_) => Answer::Archived(Err(save)),
             Self::Tagged | Self::Described(_) | Self::Reordered(_) => Answer::Tagged(Err(save)),
             Self::ReadingOrder => Answer::Order(crate::ReadingOrder::default()),
             Self::Hairlines(_) => Answer::Thickened(Err(save)),
@@ -254,6 +256,11 @@ pub(crate) fn perform<'a>(
         Op::Archived => Answer::Archived(doc.archived().and_then(|bytes| {
             let copy = doc.reopen(bytes).map_err(|_| SaveError::Damaged)?;
             let findings = copy.preflight();
+            Ok((copy.bytes().to_vec(), findings))
+        })),
+        Op::PrintReady(profile) => Answer::Archived(doc.print_ready(&profile).and_then(|bytes| {
+            let copy = doc.reopen(bytes).map_err(|_| SaveError::Damaged)?;
+            let findings = copy.preflight_x();
             Ok((copy.bytes().to_vec(), findings))
         })),
         Op::Tagged => Answer::Tagged(doc.tagged().and_then(|bytes| {

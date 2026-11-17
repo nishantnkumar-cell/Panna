@@ -116,6 +116,20 @@ impl PageText {
         self.chars.is_empty()
     }
 
+    /// Text without positions, as kept in the folder search index: it can be searched and
+    /// sliced, but has no boxes to highlight.
+    pub fn plain(text: &str) -> Self {
+        Self {
+            chars: text.chars().collect(),
+            boxes: Vec::new(),
+        }
+    }
+
+    /// The whole page's text.
+    pub fn text(&self) -> String {
+        self.chars.iter().collect()
+    }
+
     /// The characters in `range` as a string. Out-of-range bounds are clamped.
     pub fn slice(&self, range: Range<usize>) -> String {
         let end = range.end.min(self.chars.len());

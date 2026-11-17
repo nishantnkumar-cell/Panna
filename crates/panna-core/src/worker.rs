@@ -202,6 +202,7 @@ enum Reply {
     Accessibility(AccessReply),
     /// Writes a PDF/A copy.
     Archive(PathBuf, ArchiveReply),
+    PrintReady(PathBuf, crate::PrintProfile, ArchiveReply),
     Tag(PathBuf, TagReply),
     /// Writes a copy with thin lines widened.
     Hairlines(PathBuf, f32, HairlinesReply),
@@ -525,6 +526,22 @@ impl RenderWorker {
             index: self.serial.fetch_add(1, Ordering::Relaxed),
             kind: Kind::Pages,
             reply: Reply::Archive(path, Box::new(reply)),
+        });
+    }
+
+    /// Writes a PDF/X-4 copy of the document (with the changes last given to it) with
+    /// `profile` as its printing condition to `path`, and replies with what still keeps the
+    /// copy from being PDF/X-4.
+    pub fn save_print_ready(
+        &self,
+        path: PathBuf,
+        profile: crate::PrintProfile,
+        reply: impl FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::PrintReady(path, profile, Box::new(reply)),
         });
     }
 
@@ -950,6 +967,12 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         Ok(findings)
                     }))
                 }
+                Reply::PrintReady(path, profile, reply) => reply(
+                    ask!(Op::PrintReady(profile), Archived).and_then(|(bytes, findings)| {
+                        write_atomically(&path, &bytes)?;
+                        Ok(findings)
+                    }),
+                ),
                 Reply::Tag(path, reply) => reply(ask!(Op::Tagged, Tagged).and_then(|(bytes, findings)| {
                     write_atomically(&path, &bytes)?;
                     Ok(findings)

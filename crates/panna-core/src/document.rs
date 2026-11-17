@@ -1335,6 +1335,16 @@ impl Document {
         })
     }
 
+    /// A PDF/X-4 copy for printing with `profile` as its printing condition, made as an
+    /// incremental update (see [`crate::PrintProfile`]). What can't be fixed this way, such as
+    /// fonts that aren't embedded, stays, so check the copy with [`Document::preflight_x`].
+    pub fn print_ready(&self, profile: &crate::PrintProfile) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::to_pdfx(&self.pdf, &self.bytes, profile)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
+    }
+
     /// The sound of a spoken comment, by its sound stream.
     pub fn sound(&self, stream: crate::ObjRef) -> Option<crate::Sound> {
         catch_unwind(AssertUnwindSafe(|| {

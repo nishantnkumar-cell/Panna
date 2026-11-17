@@ -1850,7 +1850,7 @@ pub(crate) fn page_content(page: &Dict<'_>) -> Vec<u8> {
     out
 }
 
-fn flate_stream(dict: &str, data: &[u8]) -> Vec<u8> {
+pub(super) fn flate_stream(dict: &str, data: &[u8]) -> Vec<u8> {
     let packed = super::pack::deflate(data);
     let mut body = format!(
         "<< {dict}/Filter /FlateDecode /Length {} >>\nstream\n",
