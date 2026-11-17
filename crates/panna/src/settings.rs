@@ -49,6 +49,8 @@ pub struct Settings {
     pub recent: Vec<PathBuf>,
     /// Words added to the spelling dictionary, in lower case.
     pub words: Vec<String>,
+    /// Shortcuts the user has changed.
+    pub keys: crate::keymap::Keymap,
 }
 
 impl Default for Settings {
@@ -71,6 +73,7 @@ impl Default for Settings {
             redact: RedactLook::default(),
             recent: Vec::new(),
             words: Vec::new(),
+            keys: crate::keymap::Keymap::default(),
         }
     }
 }
@@ -120,7 +123,7 @@ impl Settings {
                 continue;
             };
             let key = key.trim();
-            if out.bars.parse_line(key, value, finite) {
+            if out.bars.parse_line(key, value, finite) || out.keys.parse_line(key, value) {
                 continue;
             }
             match key {
@@ -195,6 +198,7 @@ impl Settings {
         if !self.author.contains(['\n', '\r']) {
             out.push_str(&format!("comments.author={}\n", self.author));
         }
+        self.keys.serialize(&mut out);
         for word in &self.words {
             out.push_str(&format!("spelling.word={word}\n"));
         }
@@ -288,6 +292,15 @@ mod tests {
             },
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
             words: vec!["panna".into(), "acrobat's".into()],
+            keys: {
+                let mut keys = crate::keymap::Keymap::default();
+                keys.set(
+                    crate::keymap::Action::Save,
+                    crate::keymap::Chord::parse("Ctrl+Shift+F2"),
+                );
+                keys.set(crate::keymap::Action::Print, None);
+                keys
+            },
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

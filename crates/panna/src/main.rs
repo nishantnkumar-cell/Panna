@@ -25,6 +25,7 @@ mod form;
 mod guides;
 mod icons;
 mod initial;
+mod keymap;
 mod labels;
 mod layout;
 mod links;
@@ -374,7 +375,13 @@ enum Message {
     SplitScrolled(Viewport),
     /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
     AutoScroll,
-    AutoScrollTick,
+    AutoScrollTick(std::time::Instant),
+    /// A key while scrolling automatically: speed, direction or the next or previous page.
+    AutoScrollKey(shortcuts::ScrollKey),
+    /// A key no widget used: a shortcut, under the user's own keys first.
+    Key(iced::keyboard::Event),
+    /// The Keyboard shortcuts card.
+    Keys(keymap::Event),
     /// Starts reading aloud, or stops it.
     ReadAloudToggle,
     /// Opens the navigation pane.
@@ -630,6 +637,12 @@ struct App {
     presented_at: Option<std::time::Instant>,
     /// Automatic scrolling is on.
     auto_scroll: bool,
+    /// How fast automatic scrolling goes, 0 slowest to 9 fastest, and whether it goes up.
+    scroll_speed: u8,
+    scroll_up: bool,
+    /// The last frame while scrolling automatically, so the speed doesn't depend on the
+    /// screen's refresh rate.
+    scroll_frame: Option<std::time::Instant>,
     /// The text markup and drawing tools U and D pick: the last of each used.
     last_markup: annotate::Tool,
     last_drawing: annotate::Tool,
@@ -705,6 +718,10 @@ struct App {
     all_tools: bool,
     /// The keyboard shortcuts card is showing.
     shortcuts: bool,
+    /// The Keyboard shortcuts card waits for a key press for this action.
+    keys_waiting: Option<keymap::Action>,
+    /// What the last change on the Keyboard shortcuts card did.
+    keys_note: Option<String>,
     menus: menu::State,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
@@ -1069,90 +1086,19 @@ fn properties_view<'a>(
 }
 
 /// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
-/// The keyboard shortcuts, in two columns.
-fn shortcuts_card<'a>() -> Element<'a, Message> {
-    let m = icons::MOD;
-    let keys: [(String, &str); 38] = [
-        (format!("{m}O"), "Open"),
-        (format!("{m}S"), "Save"),
-        (format!("{m}Shift+S"), "Save as"),
-        (format!("{m}P"), "Print"),
-        (format!("{m}W, {m}F4"), "Close the document"),
-        (format!("{m}Tab"), "Next tab"),
-        (format!("{m}D"), "Document properties"),
-        (format!("{m}F, F3, Shift+F3"), "Find, next, previous"),
-        (format!("{m}Shift+F"), "Search a folder of PDFs"),
-        (format!("{m}4"), "Reflow the text to fit the window"),
-        ("F7".to_owned(), "Check spelling in comments and form fields"),
-        (format!("{m}Z, {m}Y"), "Undo, redo"),
-        (format!("{m}C"), "Copy"),
-        (format!("{m}K"), "Preferences"),
-        ("F10, Alt+letter".into(), "Open a menu"),
-        (format!("{m}+, {m}−"), "Zoom in, zoom out"),
-        (
-            format!("{m}1, {m}2, {m}3, {m}0"),
-            "Actual size, fit width, fit visible, fit page",
-        ),
-        ("Page Up, Page Down".into(), "Previous, next page"),
-        ("Left, Right".into(), "Previous, next page"),
-        ("Enter, Shift+Enter".into(), "Next, previous screen"),
-        ("Home, End".into(), "First, last page"),
-        (
-            if cfg!(target_os = "macos") {
-                format!("{m}←, {m}→")
-            } else {
-                "Alt+←, Alt+→".into()
-            },
-            "Previous, next view",
-        ),
-        (format!("{m}Shift+N"), "Go to page"),
-        (format!("{m}Shift+−, {m}Shift++"), "Rotate the view"),
-        (
-            format!("{m}Shift+T, {m}Shift+I"),
-            "Insert a blank page, insert a file",
-        ),
-        (format!("{m}Shift+D, {m}Shift+R"), "Delete pages, rotate pages"),
-        (format!("{m}B"), "Add a bookmark"),
-        ("F4, Shift+F4".into(), "Navigation pane, all tools"),
-        (format!("{m}H"), "Read mode"),
-        (format!("{m}L, F11"), "Full screen: pages only, or with the tools"),
-        (format!("{m}Shift+H"), "Scroll automatically"),
-        (format!("{m}Shift+Y"), "Read aloud, or stop"),
-        (format!("{m}Shift+C"), "Comment tools"),
-        ("Space (hold), H, Z, V".into(), "Hand, zoom box, select"),
-        ("S, X, Q, K".into(), "Sticky note, text box, cloud, stamp"),
-        ("U, Shift+U".into(), "Highlight; next text markup"),
-        ("D, Shift+D".into(), "Drawing tool; next drawing tool"),
-        ("Shift+K".into(), "Checkmark on the selected comment"),
-    ];
-    let line = |(k, what): (String, &'a str)| -> Element<'a, Message> {
-        row![text(k).size(13).width(200), text(what).size(13)]
-            .spacing(8)
-            .into()
-    };
-    let mut left: Vec<Element<'a, Message>> = keys.into_iter().map(line).collect();
-    let right = left.split_off(18);
-    container(
-        column![
-            text("Keyboard shortcuts").size(16),
-            row![
-                iced::widget::Column::with_children(left).spacing(6).width(390),
-                iced::widget::Column::with_children(right).spacing(6).width(470),
-            ]
-            .spacing(16),
-            row![
-                space::horizontal(),
-                button("Close")
-                    .style(button::secondary)
-                    .on_press(Message::Shortcuts(false)),
-            ],
-        ]
-        .spacing(12)
-        .width(876),
-    )
-    .padding(16)
-    .style(container::rounded_box)
-    .into()
+/// Shows the user's own shortcuts in a menu's key column.
+fn relabel_keys(entries: &mut [menu::Entry<Message>], keys: &keymap::Keymap) {
+    for entry in entries {
+        match entry {
+            menu::Entry::Item { keys: shown, .. } => {
+                if let Some(label) = keys.menu_label(shown) {
+                    *shown = label;
+                }
+            }
+            menu::Entry::Sub { items, .. } => relabel_keys(items, keys),
+            menu::Entry::Separator => {}
+        }
+    }
 }
 
 fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
@@ -1324,6 +1270,8 @@ impl App {
             scanned: Vec::new(),
             all_tools: false,
             shortcuts: false,
+            keys_waiting: None,
+            keys_note: None,
             menus: menu::State::default(),
             pictures: Vec::new(),
             blank: None,
@@ -1355,6 +1303,9 @@ impl App {
             read_mode: false,
             presented_at: None,
             auto_scroll: false,
+            scroll_speed: shortcuts::SCROLL_DEFAULT,
+            scroll_up: false,
+            scroll_frame: None,
             last_markup: annotate::Tool::Highlight,
             last_drawing: annotate::Tool::Pen,
             panning: None,
@@ -1416,18 +1367,29 @@ impl App {
                 iced::Event::Keyboard(key) => shortcuts::menu_keys(key),
                 event => window_event(event),
             })
+        } else if self.auto_scroll {
+            // While scrolling on its own, the arrows and number keys set the speed, as in Acrobat.
+            event::listen_with(|event, status, _window| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(keys)) => {
+                    Some(Message::Modifiers(keys))
+                }
+                iced::Event::Keyboard(key) if status == event::Status::Ignored => {
+                    Some(shortcuts::auto_scroll_keys(&key).map_or(Message::Key(key), Message::AutoScrollKey))
+                }
+                event => window_event(event),
+            })
         } else {
             event::listen_with(|event, status, _window| match event {
                 iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(keys)) => {
                     Some(Message::Modifiers(keys))
                 }
-                iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
+                iced::Event::Keyboard(key) if status == event::Status::Ignored => Some(Message::Key(key)),
                 event => window_event(event),
             })
         };
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
         if self.auto_scroll {
-            subs.push(window::frames().map(|_| Message::AutoScrollTick));
+            subs.push(window::frames().map(Message::AutoScrollTick));
         }
         if self.recorder.is_some() || self.player.is_some() {
             subs.push(Subscription::run(audio::ticks).map(|()| Message::AudioTick));
@@ -2027,14 +1989,46 @@ impl App {
             }
             Message::AutoScroll => {
                 self.auto_scroll = !self.auto_scroll && self.doc.is_some();
+                self.scroll_frame = None;
+                self.scroll_up = false;
                 Task::none()
             }
-            Message::AutoScrollTick => {
+            Message::AutoScrollTick(now) => {
                 if !self.auto_scroll || self.doc.is_none() {
                     self.auto_scroll = false;
                     return Task::none();
                 }
-                operation::scroll_by(scroll_id(), AbsoluteOffset { x: 0.0, y: 1.5 })
+                let Some(last) = self.scroll_frame.replace(now) else {
+                    return Task::none();
+                };
+                // A long gap (the window was hidden) moves no further than a tenth of a second.
+                let seconds = now.saturating_duration_since(last).as_secs_f32().min(0.1);
+                let step = shortcuts::scroll_rate(self.scroll_speed) * seconds;
+                let y = if self.scroll_up { -step } else { step };
+                operation::scroll_by(scroll_id(), AbsoluteOffset { x: 0.0, y })
+            }
+            Message::AutoScrollKey(key) => {
+                use shortcuts::ScrollKey;
+                match key {
+                    ScrollKey::Speed(n) => self.scroll_speed = n.min(shortcuts::SCROLL_FASTEST),
+                    // The arrow the way it's going speeds it up; the other slows it down.
+                    ScrollKey::Arrow(down) => {
+                        if down != self.scroll_up {
+                            self.scroll_speed = (self.scroll_speed + 1).min(shortcuts::SCROLL_FASTEST);
+                        } else {
+                            self.scroll_speed = self.scroll_speed.saturating_sub(1);
+                        }
+                    }
+                    ScrollKey::Reverse => self.scroll_up = !self.scroll_up,
+                    ScrollKey::Page(next) => {
+                        return self.update(if next {
+                            Message::NextPage
+                        } else {
+                            Message::PrevPage
+                        });
+                    }
+                }
+                Task::none()
             }
             Message::ReadAloudToggle => {
                 let event = if self.reader.active() {
@@ -2136,6 +2130,72 @@ impl App {
             }
             Message::Shortcuts(show) => {
                 self.shortcuts = show;
+                self.keys_waiting = None;
+                self.keys_note = None;
+                Task::none()
+            }
+            Message::Key(event) => {
+                if let Some(action) = self.keys_waiting {
+                    use iced::keyboard::{Key, key::Named};
+                    let iced::keyboard::Event::KeyPressed { key, .. } = &event else {
+                        return Task::none();
+                    };
+                    let chord = match key.as_ref() {
+                        Key::Named(Named::Escape) => {
+                            self.keys_waiting = None;
+                            return Task::none();
+                        }
+                        Key::Named(Named::Backspace) => None,
+                        _ => match keymap::Chord::from_event(&event) {
+                            Some(chord) => Some(chord),
+                            // A modifier on its own: keep waiting for the key.
+                            None => return Task::none(),
+                        },
+                    };
+                    let shown = chord.as_ref().map(keymap::Chord::label);
+                    let taken = self.settings.keys.set(action, chord);
+                    self.keys_note = match (taken, shown) {
+                        (Some(other), Some(shown)) => Some(format!(
+                            "{shown} was the shortcut for {}, which now has none.",
+                            other.label()
+                        )),
+                        _ => None,
+                    };
+                    self.keys_waiting = None;
+                    self.settings.save();
+                    return Task::none();
+                }
+                match self.settings.keys.resolve(&event) {
+                    keymap::Resolved::Bound(action) => self.update(action.message()),
+                    keymap::Resolved::Blocked => Task::none(),
+                    keymap::Resolved::Default => {
+                        shortcuts::map(event).map_or_else(Task::none, |message| self.update(message))
+                    }
+                }
+            }
+            Message::Keys(event) => {
+                self.keys_note = None;
+                match event {
+                    keymap::Event::Change(action) => {
+                        self.keys_waiting = (self.keys_waiting != Some(action)).then_some(action);
+                        return Task::none();
+                    }
+                    keymap::Event::Remove(action) => {
+                        self.settings.keys.set(action, None);
+                    }
+                    keymap::Event::Reset(action) => {
+                        if let Some(other) = self.settings.keys.reset(action) {
+                            self.keys_note = Some(format!(
+                                "{} was the shortcut for {}, which now has none.",
+                                action.default_chord().label(),
+                                other.label()
+                            ));
+                        }
+                    }
+                    keymap::Event::ResetAll => self.settings.keys = keymap::Keymap::default(),
+                }
+                self.keys_waiting = None;
+                self.settings.save();
                 Task::none()
             }
             Message::About => {
@@ -7423,6 +7483,13 @@ impl App {
 
     /// The rows of a menu, enabled and ticked to match the app's state.
     fn menu_entries(&self, which: menu::Menu) -> Vec<menu::Entry<Message>> {
+        let mut entries = self.default_menu_entries(which);
+        relabel_keys(&mut entries, &self.settings.keys);
+        entries
+    }
+
+    /// The rows of a menu, enabled and ticked to match the app's state, with the default keys.
+    fn default_menu_entries(&self, which: menu::Menu) -> Vec<menu::Entry<Message>> {
         use menu::{Entry::Separator, check, item, plain, sub};
         use toolbar::Event as T;
         let has_doc = self.doc.as_ref().is_some_and(|d| !d.pages.is_empty());
@@ -7782,7 +7849,15 @@ impl App {
                     ),
                     Separator,
                     check(
-                        "Scroll automatically",
+                        if self.auto_scroll {
+                            format!(
+                                "Scrolling {}, speed {} (0–9, ↑ ↓, − turns)",
+                                if self.scroll_up { "up" } else { "down" },
+                                self.scroll_speed
+                            )
+                        } else {
+                            "Scroll automatically".to_owned()
+                        },
                         k("Shift+H"),
                         self.auto_scroll,
                         on(Message::AutoScroll),
@@ -8053,7 +8128,7 @@ impl App {
                 ),
             ],
             menu::Menu::Help => vec![
-                plain("Keyboard shortcuts", "", Some(Message::Shortcuts(true))),
+                plain("Keyboard shortcuts…", "", Some(Message::Shortcuts(true))),
                 Separator,
                 item(Icon::Properties, "About Panna", "", Some(Message::About)),
             ],
@@ -8429,7 +8504,10 @@ impl App {
             );
         }
         if self.shortcuts {
-            dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
+            dialogs.push(modal(
+                keymap::card(&self.settings.keys, self.keys_waiting, self.keys_note.as_deref()),
+                Message::Shortcuts(false),
+            ));
         }
         if let Some(recorder) = &self.recorder {
             let card = container(

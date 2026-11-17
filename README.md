@@ -35,6 +35,8 @@ already has.
 | Next / previous page | Page Down / Page Up |
 | Preferences | Ctrl+, |
 
+Help › Keyboard shortcuts lists the rest and lets you change them.
+
 You can also drop a PDF onto the window to open it.
 
 ## Linux: KDE Plasma and GNOME

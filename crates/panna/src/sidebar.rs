@@ -518,6 +518,9 @@ fn layers<'a>(layers: &'a [Layer], shown: &[bool]) -> Element<'a, Message> {
 fn files(attachments: &[Attachment]) -> Element<'_, Message> {
     let items = attachments.iter().enumerate().map(|(index, file)| {
         let mut details = Vec::new();
+        if let Some(media) = file.media {
+            details.push(media.label().to_owned());
+        }
         if let Some(size) = file.size {
             details.push(size_text(size));
         }

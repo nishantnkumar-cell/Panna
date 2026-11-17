@@ -793,7 +793,11 @@ pub(crate) fn rebuild(
                         }
                         let script = runs_script(&annot);
                         if (clean.comments && subtype != "Link" && subtype != "Widget")
-                            || (clean.attachments && subtype == "FileAttachment")
+                            || (clean.attachments
+                                && matches!(
+                                    subtype.as_str(),
+                                    "FileAttachment" | "Screen" | "Movie" | "RichMedia" | "3D"
+                                ))
                             || (clean.scripts && subtype == "Link" && script)
                         {
                             continue;

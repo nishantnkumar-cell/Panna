@@ -41,7 +41,7 @@ mod view;
 mod worker;
 
 pub use access::{AccessFinding, AccessRule};
-pub use attachments::Attachment;
+pub use attachments::{Attachment, Media};
 pub use calc::{CalcOp, Calculation, Expr, Formula, number as calc_number, value_text as calc_value_text};
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use compare::{Change, ChangeKind};

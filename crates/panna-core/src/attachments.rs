@@ -1,10 +1,12 @@
 //! Files attached to a document: in its EmbeddedFiles name tree, and on its pages as file
-//! attachment annotations. They are only listed and saved, never opened.
+//! attachment annotations. Videos, sounds and 3D models carried by screen, movie, rich media
+//! and 3D annotations are listed with them. They are only listed and saved, never opened or
+//! played: media players and 3D viewers are a large attack surface.
 
 use std::collections::HashSet;
 
 use hayro::hayro_syntax::Pdf;
-use hayro::hayro_syntax::object::{Array, Dict, Object, ObjectIdentifier, Stream};
+use hayro::hayro_syntax::object::{Array, Dict, Name, Object, ObjectIdentifier, Stream};
 
 use crate::document::decode_text_string;
 
@@ -22,6 +24,61 @@ pub struct Attachment {
     pub size: Option<u64>,
     /// The page it's attached to (from 0), or `None` for the document as a whole.
     pub page: Option<usize>,
+    /// What kind of media it is, when it's played on a page rather than attached.
+    #[serde(default)]
+    pub media: Option<Media>,
+}
+
+/// Media a page plays: listed so it can be saved, never played inside Panna.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Media {
+    Video,
+    Sound,
+    Model3D,
+    /// Rich media content of another kind, such as a Flash file.
+    Other,
+}
+
+impl Media {
+    pub fn label(self) -> &'static str {
+        match self {
+            Media::Video => "Video",
+            Media::Sound => "Sound",
+            Media::Model3D => "3D model",
+            Media::Other => "Rich media",
+        }
+    }
+
+    /// From a MIME type such as `video/mp4`.
+    fn from_mime(mime: &str) -> Option<Self> {
+        let mime = mime.to_ascii_lowercase();
+        if mime.starts_with("video/") {
+            Some(Media::Video)
+        } else if mime.starts_with("audio/") {
+            Some(Media::Sound)
+        } else if mime.starts_with("model/") {
+            Some(Media::Model3D)
+        } else {
+            None
+        }
+    }
+
+    /// From a file name's extension.
+    fn from_name(name: &str) -> Self {
+        let ext = name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        match ext.as_str() {
+            "mp4" | "m4v" | "mov" | "avi" | "wmv" | "flv" | "f4v" | "mpg" | "mpeg" | "webm" | "mkv"
+            | "3gp" => Media::Video,
+            "mp3" | "wav" | "aif" | "aiff" | "aac" | "m4a" | "wma" | "ogg" | "flac" | "au" | "snd" => {
+                Media::Sound
+            }
+            "u3d" | "prc" | "stl" | "obj" | "glb" | "gltf" => Media::Model3D,
+            _ => Media::Other,
+        }
+    }
 }
 
 impl Attachment {
@@ -43,10 +100,29 @@ fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
-/// Every attached file's specification, with the page it's on: the document's first, then
-/// each page's in order.
-fn specs(pdf: &Pdf) -> Vec<(Dict<'_>, Option<usize>)> {
-    let mut out = Vec::new();
+/// Where an attached file's bytes are: a file specification, or (for a 3D model) a stream
+/// with the name to save it under.
+enum Source<'a> {
+    Spec(Dict<'a>),
+    Raw(Stream<'a>, String),
+}
+
+impl Source<'_> {
+    fn id(&self) -> Option<ObjectIdentifier> {
+        match self {
+            Source::Spec(spec) => spec.obj_id(),
+            Source::Raw(stream, _) => Some(stream.obj_id()),
+        }
+    }
+}
+
+/// One listed file: where it is, the page it's on, and the kind of media it is.
+type Entry<'a> = (Source<'a>, Option<usize>, Option<Media>);
+
+/// Every attached file, with the page it's on: the document's first, then each page's in
+/// order, a page's attachments and media together.
+fn specs(pdf: &Pdf) -> Vec<Entry<'_>> {
+    let mut out: Vec<Entry<'_>> = Vec::new();
     let xref = pdf.xref();
     if let Some(tree) = xref
         .get::<Dict<'_>>(xref.root_id())
@@ -54,30 +130,117 @@ fn specs(pdf: &Pdf) -> Vec<(Dict<'_>, Option<usize>)> {
         .and_then(|names| names.get::<Dict<'_>>(b"EmbeddedFiles"))
     {
         let mut budget = MAX_NODES;
-        walk(tree, 0, &mut budget, &mut HashSet::new(), &mut out);
+        let mut found = Vec::new();
+        walk(tree, 0, &mut budget, &mut HashSet::new(), &mut found);
+        out.extend(found.into_iter().map(|spec| (Source::Spec(spec), None, None)));
     }
     for (index, page) in pdf.pages().iter().enumerate() {
         let Some(annots) = page.raw().get::<Array<'_>>(b"Annots") else {
             continue;
         };
         for annot in annots.iter::<Dict<'_>>().take(4_000) {
-            // A file can be both in the tree and on a page; it's listed once.
-            let listed = |spec: &Dict<'_>| {
-                spec.obj_id()
-                    .is_some_and(|id| out.iter().any(|(s, _): &(Dict<'_>, _)| s.obj_id() == Some(id)))
+            let subtype = annot.get::<Name<'_>>(b"Subtype");
+            let found = match subtype.as_ref().map(Name::as_str) {
+                Some("FileAttachment") => annot
+                    .get::<Dict<'_>>(b"FS")
+                    .map(|spec| vec![(Source::Spec(spec), None)])
+                    .unwrap_or_default(),
+                Some("Screen") => screen(&annot),
+                Some("Movie") => annot
+                    .get::<Dict<'_>>(b"Movie")
+                    .and_then(|movie| movie.get::<Dict<'_>>(b"F"))
+                    .map(|spec| vec![(Source::Spec(spec), Some(Media::Video))])
+                    .unwrap_or_default(),
+                Some("RichMedia") => rich_media(&annot),
+                Some("3D") => model(&annot, index).into_iter().collect(),
+                _ => Vec::new(),
             };
-            let is_file = annot
-                .get::<hayro::hayro_syntax::object::Name<'_>>(b"Subtype")
-                .is_some_and(|s| s.as_str() == "FileAttachment");
-            if let Some(spec) = annot.get::<Dict<'_>>(b"FS").filter(|_| is_file)
-                && !listed(&spec)
-                && out.len() < MAX_FILES
-            {
-                out.push((spec, Some(index)));
+            for (source, media) in found {
+                // A file can be listed in more than one place; it's listed once.
+                let listed = source
+                    .id()
+                    .is_some_and(|id| out.iter().any(|(s, ..)| s.id() == Some(id)));
+                if !listed && out.len() < MAX_FILES {
+                    out.push((source, Some(index), media));
+                }
             }
         }
     }
     out
+}
+
+/// The clip a screen annotation's rendition plays: `/A` (or the page-open action) names a
+/// rendition, either a media rendition or a selector whose first choice is one.
+fn screen<'a>(annot: &Dict<'a>) -> Vec<(Source<'a>, Option<Media>)> {
+    let actions = [
+        annot.get::<Dict<'a>>(b"A"),
+        annot
+            .get::<Dict<'a>>(b"AA")
+            .and_then(|aa| aa.get::<Dict<'a>>(b"PO")),
+        annot
+            .get::<Dict<'a>>(b"AA")
+            .and_then(|aa| aa.get::<Dict<'a>>(b"PV")),
+    ];
+    let mut out = Vec::new();
+    for action in actions.into_iter().flatten() {
+        let Some(rendition) = action.get::<Dict<'a>>(b"R") else {
+            continue;
+        };
+        // A selector lists renditions in order of preference; the first media one is kept.
+        let rendition = match rendition.get::<Array<'a>>(b"R") {
+            Some(choices) => choices
+                .iter::<Dict<'a>>()
+                .take(64)
+                .find(|r| r.get::<Dict<'a>>(b"C").is_some()),
+            None => Some(rendition),
+        };
+        let Some(clip) = rendition.and_then(|r| r.get::<Dict<'a>>(b"C")) else {
+            continue;
+        };
+        let kind = clip
+            .get::<hayro::hayro_syntax::object::String<'_>>(b"CT")
+            .and_then(|ct| Media::from_mime(&String::from_utf8_lossy(ct.as_bytes())));
+        if let Some(spec) = clip.get::<Dict<'a>>(b"D") {
+            out.push((Source::Spec(spec), Some(kind.unwrap_or(Media::Video))));
+        }
+    }
+    out
+}
+
+/// The files a rich media annotation carries: its content's Assets name tree.
+fn rich_media<'a>(annot: &Dict<'a>) -> Vec<(Source<'a>, Option<Media>)> {
+    let Some(assets) = annot
+        .get::<Dict<'a>>(b"RichMediaContent")
+        .and_then(|content| content.get::<Dict<'a>>(b"Assets"))
+    else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut budget = MAX_NODES;
+    walk(assets, 0, &mut budget, &mut HashSet::new(), &mut found);
+    found
+        .into_iter()
+        .map(|spec| {
+            let media = Media::from_name(&spec_name(&spec));
+            (Source::Spec(spec), Some(media))
+        })
+        .collect()
+}
+
+/// A 3D annotation's model: its `/3DD` stream, or a reference dictionary's.
+fn model<'a>(annot: &Dict<'a>, page: usize) -> Option<(Source<'a>, Option<Media>)> {
+    let stream = annot.get::<Stream<'a>>(b"3DD").or_else(|| {
+        annot
+            .get::<Dict<'a>>(b"3DD")
+            .and_then(|reference| reference.get::<Stream<'a>>(b"3DD"))
+    })?;
+    let format = stream.dict().get::<Name<'_>>(b"Subtype");
+    let ext = match format.as_ref().map(Name::as_str) {
+        Some("PRC") => "prc",
+        _ => "u3d",
+    };
+    let name = format!("3D model, page {}.{ext}", page + 1);
+    Some((Source::Raw(stream, name), Some(Media::Model3D)))
 }
 
 fn walk<'a>(
@@ -85,7 +248,7 @@ fn walk<'a>(
     depth: u16,
     budget: &mut usize,
     visited: &mut HashSet<ObjectIdentifier>,
-    out: &mut Vec<(Dict<'a>, Option<usize>)>,
+    out: &mut Vec<Dict<'a>>,
 ) {
     if depth > MAX_DEPTH || *budget == 0 || out.len() >= MAX_FILES {
         return;
@@ -102,7 +265,7 @@ fn walk<'a>(
             if let Object::Dict(spec) = value
                 && out.len() < MAX_FILES
             {
-                out.push((spec, None));
+                out.push(spec);
             }
         }
     }
@@ -119,17 +282,39 @@ fn file<'a>(spec: &Dict<'a>) -> Option<Stream<'a>> {
     ef.get::<Stream<'a>>(b"UF").or_else(|| ef.get::<Stream<'a>>(b"F"))
 }
 
-/// The files attached to `pdf`, the document's first.
+/// The stream holding a source's bytes; `None` for a file kept outside the PDF.
+fn stream<'a>(source: &Source<'a>) -> Option<Stream<'a>> {
+    match source {
+        Source::Spec(spec) => file(spec),
+        Source::Raw(stream, _) => Some(stream.clone()),
+    }
+}
+
+/// A file specification's name as written: the Unicode name, else the plain one.
+fn spec_name(spec: &Dict<'_>) -> String {
+    let text = |key: &[u8]| {
+        spec.get::<hayro::hayro_syntax::object::String<'_>>(key)
+            .map(|s| decode_text_string(s.as_bytes()))
+    };
+    text(b"UF").or_else(|| text(b"F")).unwrap_or_default()
+}
+
+/// The files attached to `pdf`, the document's first. Media kept in files outside the PDF
+/// aren't listed: there is nothing in the document to save.
 pub(crate) fn read(pdf: &Pdf) -> Vec<Attachment> {
     specs(pdf)
         .into_iter()
-        .filter_map(|(spec, page)| {
-            let stream = file(&spec)?;
-            let text = |key: &[u8]| {
-                spec.get::<hayro::hayro_syntax::object::String<'_>>(key)
-                    .map(|s| decode_text_string(s.as_bytes()))
+        .filter_map(|(source, page, media)| {
+            let stream = stream(&source)?;
+            let (name, description) = match &source {
+                Source::Spec(spec) => (
+                    spec_name(spec),
+                    spec.get::<hayro::hayro_syntax::object::String<'_>>(b"Desc")
+                        .map(|s| decode_text_string(s.as_bytes()))
+                        .unwrap_or_default(),
+                ),
+                Source::Raw(_, name) => (name.clone(), String::new()),
             };
-            let name = text(b"UF").or_else(|| text(b"F")).unwrap_or_default();
             // Only the last part of the name: it becomes a file name when saved. Control and
             // text-direction characters go too: an override (U+202E) can make "invoice<U+202E>fdp.exe" show
             // as "invoiceexe.pdf".
@@ -153,9 +338,10 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<Attachment> {
                 } else {
                     name
                 },
-                description: text(b"Desc").unwrap_or_default(),
+                description,
                 size,
                 page,
+                media,
             })
         })
         .collect()
@@ -164,12 +350,10 @@ pub(crate) fn read(pdf: &Pdf) -> Vec<Attachment> {
 /// The contents of the attached file at `index` in [`read`]'s list, if it unpacks to no more
 /// than `limit` bytes (measured first, so a decompression bomb is never unpacked).
 pub(crate) fn data(pdf: &Pdf, index: usize, limit: u64) -> Option<Vec<u8>> {
-    let spec = specs(pdf)
+    let stream = specs(pdf)
         .into_iter()
-        .filter(|(spec, _)| file(spec).is_some())
-        .nth(index)?
-        .0;
-    let stream = file(&spec)?;
+        .filter_map(|(source, ..)| stream(&source))
+        .nth(index)?;
     crate::guard::decoded_size(&stream, limit).ok()?;
     stream.decoded().ok().map(|d| d.into_owned())
 }

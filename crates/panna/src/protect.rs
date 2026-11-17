@@ -202,7 +202,7 @@ pub fn clean_card<'a>(state: Cleanup) -> Element<'a, Message> {
                 .label("Scripts and actions that run by themselves")
                 .on_toggle(move |v| ev(CleanEvent::Scripts(v))),
             checkbox(state.attachments)
-                .label("Attached files")
+                .label("Attached files, and videos, sounds and 3D models on pages")
                 .on_toggle(move |v| ev(CleanEvent::Attachments(v))),
             checkbox(state.comments)
                 .label("Comments and markup (links and form fields stay)")
