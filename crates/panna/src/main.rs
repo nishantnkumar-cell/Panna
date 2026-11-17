@@ -254,6 +254,14 @@ enum Message {
     Extracted(Result<(), SaveError>),
     /// Save a copy of attached file n.
     SaveAttachment(usize),
+    /// Opens an attached PDF in a tab of its own, from a copy in the temporary folder.
+    OpenAttachment(usize),
+    AttachmentReady(PathBuf, Result<(), SaveError>),
+    /// Make a PDF Portfolio: pick the files, then where to save it.
+    NewPortfolio,
+    PortfolioFiles(Vec<PathBuf>),
+    PortfolioTo(Vec<PathBuf>, Option<PathBuf>),
+    PortfolioMade(Result<PathBuf, String>),
     AttachmentChosen(usize, Option<PathBuf>),
     /// Asks for a picture to stamp.
     StampPicture,
@@ -1094,7 +1102,46 @@ fn properties_view<'a>(
     )
 }
 
-/// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
+/// Removes the copies of attached PDFs made to open them. Best effort: a copy still in use
+/// on Windows stays until the system clears the temporary folder.
+fn remove_attachment_copies() {
+    let dir = std::env::temp_dir().join(format!("Panna-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Packs `files` into a PDF Portfolio saved at `target`. Files are read whole, so the total
+/// is limited to what Panna opens.
+fn make_portfolio_file(files: &[PathBuf], target: &std::path::Path) -> Result<(), String> {
+    if files.len() > panna_core::MAX_PORTFOLIO_FILES {
+        return Err(format!(
+            "A PDF Portfolio can hold up to {} files.",
+            panna_core::MAX_PORTFOLIO_FILES
+        ));
+    }
+    let limit = panna_core::Limits::default().max_file_bytes;
+    let mut total = 0u64;
+    let mut packed = Vec::with_capacity(files.len());
+    for path in files {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        total += std::fs::metadata(path)
+            .map_err(|e| format!("Couldn't read {name}: {e}"))?
+            .len();
+        if total > limit {
+            return Err("Those files are too large together for one PDF.".into());
+        }
+        let data = std::fs::read(path).map_err(|e| format!("Couldn't read {name}: {e}"))?;
+        packed.push((name, data));
+    }
+    let bytes = panna_core::make_portfolio(&packed);
+    let tmp = target.with_extension("pdf.tmp");
+    std::fs::write(&tmp, bytes)
+        .and_then(|()| std::fs::rename(&tmp, target))
+        .map_err(|e| format!("Couldn't save the PDF Portfolio: {e}"))
+}
+
 /// Shows the user's own shortcuts in a menu's key column.
 fn relabel_keys(entries: &mut [menu::Entry<Message>], keys: &keymap::Keymap) {
     for entry in entries {
@@ -1110,6 +1157,7 @@ fn relabel_keys(entries: &mut [menu::Entry<Message>], keys: &keymap::Keymap) {
     }
 }
 
+/// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
 fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
     opaque(
         mouse_area(
@@ -1536,6 +1584,10 @@ impl App {
                             }
                             _ => None,
                         };
+                        // A portfolio is its files: show them even when it doesn't ask.
+                        let panel = panel
+                            .or((info.portfolio && !info.attachments.is_empty())
+                                .then_some(sidebar::Tab::Files));
                         if let Some(tab) = panel {
                             self.sidebar.open = true;
                             self.sidebar.tab = tab;
@@ -5189,6 +5241,82 @@ impl App {
                     move |path| Message::AttachmentChosen(index, path),
                 )
             }
+            Message::OpenAttachment(index) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let Some(file) = doc.info.attachments.get(index).filter(|f| f.is_pdf()) else {
+                    return Task::none();
+                };
+                // A folder of Panna's own in the temporary folder, so the copy can't take the
+                // place of another program's file.
+                // A folder per document and file keeps the file's own name for its tab.
+                let dir = std::env::temp_dir()
+                    .join(format!("Panna-{}", std::process::id()))
+                    .join(format!("{}-{index}", doc.id));
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    self.notice = Some(format!("Couldn't make a copy to open: {e}"));
+                    return Task::none();
+                }
+                // Only the last part of the stored name, so it can't reach outside the folder.
+                let name = std::path::Path::new(&file.name)
+                    .file_name()
+                    .map_or_else(|| "attachment.pdf".into(), |n| n.to_os_string());
+                let path = dir.join(name);
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_attachment(index, path.clone(), move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, move |result| {
+                    Message::AttachmentReady(path.clone(), result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::AttachmentReady(path, Ok(())) => self.open(path, None),
+            Message::AttachmentReady(_, Err(e)) => {
+                self.notice = Some(e.to_string());
+                Task::none()
+            }
+            Message::NewPortfolio => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose the files for the PDF Portfolio")
+                        .pick_files()
+                        .await
+                        .map(|files| files.iter().map(|f| f.path().to_path_buf()).collect())
+                        .unwrap_or_default()
+                },
+                Message::PortfolioFiles,
+            ),
+            Message::PortfolioFiles(files) if files.is_empty() => Task::none(),
+            Message::PortfolioFiles(files) => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Save the PDF Portfolio as")
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("Portfolio.pdf")
+                        .save_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                move |target| Message::PortfolioTo(files.clone(), target),
+            ),
+            Message::PortfolioTo(_, None) => Task::none(),
+            Message::PortfolioTo(files, Some(target)) => {
+                self.notice = Some(format!("Packing {} files into a PDF Portfolio…", files.len()));
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(make_portfolio_file(&files, &target).map(|()| target));
+                });
+                Task::perform(rx, |result| {
+                    Message::PortfolioMade(result.unwrap_or_else(|_| Err("It stopped unexpectedly.".into())))
+                })
+            }
+            Message::PortfolioMade(Ok(path)) => {
+                self.notice = None;
+                self.open(path, None)
+            }
+            Message::PortfolioMade(Err(e)) => {
+                self.notice = Some(e);
+                Task::none()
+            }
             Message::AttachmentChosen(_, None) => Task::none(),
             Message::AttachmentChosen(index, Some(path)) => {
                 let Some(doc) = &self.doc else { return Task::none() };
@@ -5376,6 +5504,7 @@ impl App {
                     self.confirm = Some(Pending::Close);
                     return shown;
                 }
+                remove_attachment_copies();
                 self.reader.stop();
                 window::close(id)
             }
@@ -6232,6 +6361,7 @@ impl App {
                         shown
                     }
                     None => {
+                        remove_attachment_copies();
                         self.reader.stop();
                         iced::exit()
                     }
@@ -6858,6 +6988,7 @@ impl App {
                 protected: false,
                 weak_protection: false,
                 attachments: Vec::new(),
+                portfolio: false,
                 marks: Default::default(),
                 layers: Vec::new(),
                 signatures: Vec::new(),
@@ -7694,6 +7825,12 @@ impl App {
                     "Combine files…",
                     "",
                     Some(Message::Combine(combine::Event::Open)),
+                ),
+                item(
+                    Icon::Paperclip,
+                    "Create a PDF Portfolio…",
+                    "",
+                    Some(Message::NewPortfolio),
                 ),
                 item(
                     Icon::Batch,
@@ -8997,6 +9134,7 @@ impl App {
                 unsaved: &self.annotate.items,
                 removed: &self.annotate.removed,
                 attachments: &doc.info.attachments,
+                portfolio: doc.info.portfolio,
                 signatures: &doc.info.signatures,
                 trusted: &self.trusted.certs,
                 layers: &doc.info.layers,

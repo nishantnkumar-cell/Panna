@@ -150,3 +150,49 @@ fn embedded_media_are_listed() {
     assert_eq!(doc.attachment(1).unwrap(), b"U3D");
     assert_eq!(doc.attachment(2).unwrap(), b"moov");
 }
+
+/// A portfolio made from files holds them in order, says it's a portfolio, and opens on its
+/// attachments.
+#[test]
+fn a_portfolio_holds_its_files() {
+    let files = vec![
+        ("zebra notes.txt".to_owned(), b"stripes".to_vec()),
+        ("Résumé.pdf".to_owned(), b"%PDF-1.7 not really".to_vec()),
+        ("photo.jpg".to_owned(), vec![0xFF, 0xD8, 0xFF, 0x00]),
+    ];
+    let bytes = panna_core::make_portfolio(&files);
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    let info = doc.info().unwrap();
+    assert!(info.portfolio);
+    assert_eq!(info.pages.len(), 1);
+    let names: Vec<_> = info
+        .attachments
+        .iter()
+        .map(|a| (a.name.as_str(), a.size))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("zebra notes.txt", Some(7)),
+            ("Résumé.pdf", Some(19)),
+            ("photo.jpg", Some(4))
+        ]
+    );
+    for (i, (_, data)) in files.iter().enumerate() {
+        assert_eq!(&doc.attachment(i).unwrap(), data);
+    }
+    assert_eq!(info.initial_view.panel, panna_core::OpenPanel::Attachments);
+    let text = doc.page_text(0).unwrap().text();
+    assert!(
+        text.contains("PDF Portfolio") && text.contains("zebra notes.txt"),
+        "{text}"
+    );
+    // An ordinary document isn't one.
+    assert!(
+        !Document::from_bytes(attached(), None, Limits::default())
+            .unwrap()
+            .info()
+            .unwrap()
+            .portfolio
+    );
+}

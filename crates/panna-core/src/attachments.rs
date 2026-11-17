@@ -82,6 +82,14 @@ impl Media {
 }
 
 impl Attachment {
+    /// Whether the file is a PDF, by its name.
+    pub fn is_pdf(&self) -> bool {
+        self.name
+            .trim_end_matches(['.', ' '])
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("pdf"))
+    }
+
     /// Whether the file is a program or script that would run if opened, so the user can be
     /// warned before saving it. Trailing dots and spaces, which Windows drops, are ignored.
     pub fn is_program(&self) -> bool {
@@ -274,6 +282,13 @@ fn walk<'a>(
             walk(kid, depth + 1, budget, visited, out);
         }
     }
+}
+
+/// Whether the document is a PDF Portfolio: its catalog has a `/Collection`.
+pub(crate) fn is_portfolio(pdf: &Pdf) -> bool {
+    let xref = pdf.xref();
+    xref.get::<Dict<'_>>(xref.root_id())
+        .is_some_and(|catalog| catalog.contains_key(b"Collection"))
 }
 
 /// The embedded file stream of a file specification.

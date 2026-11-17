@@ -48,6 +48,9 @@ pub struct DocumentInfo {
     pub weak_protection: bool,
     /// Files attached to the document and its pages.
     pub attachments: Vec<crate::Attachment>,
+    /// The document is a PDF Portfolio: its attached files are what it's for.
+    #[serde(default)]
+    pub portfolio: bool,
     /// Layers that can be shown or hidden.
     pub layers: Vec<crate::Layer>,
     /// Digital signatures, each checked.
@@ -457,6 +460,8 @@ impl Document {
                 links,
                 protected,
                 weak_protection,
+                portfolio: catch_unwind(AssertUnwindSafe(|| crate::attachments::is_portfolio(&self.pdf)))
+                    .unwrap_or(false),
                 attachments,
                 layers,
                 pages,
