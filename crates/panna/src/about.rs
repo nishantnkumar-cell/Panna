@@ -302,13 +302,23 @@ fn licences<'a>() -> Element<'a, Message> {
 
 /// A plain-text licence as paragraphs, its hard line breaks joined so it wraps to the box.
 fn paragraphs(licence: &str) -> Vec<String> {
-    // A Windows checkout may have turned the line breaks into CRLF.
-    licence
-        .replace("\r\n", "\n")
-        .split("\n\n")
-        .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|p| !p.is_empty())
-        .collect()
+    // Line by line, so CRLF line breaks (a Windows checkout) work too.
+    let mut out = Vec::new();
+    let mut words: Vec<&str> = Vec::new();
+    for line in licence.lines() {
+        if line.trim().is_empty() {
+            if !words.is_empty() {
+                out.push(words.join(" "));
+                words.clear();
+            }
+        } else {
+            words.extend(line.split_whitespace());
+        }
+    }
+    if !words.is_empty() {
+        out.push(words.join(" "));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -325,7 +335,9 @@ mod tests {
         assert!(THIRD_PARTY.contains("\nureq\t"));
         assert!(LICENSE_MIT.starts_with("MIT License"));
         assert!(LICENSE_APACHE.contains("Version 2.0"));
-        let mit = paragraphs(&LICENSE_MIT.replace('\n', "\r\n"));
+        let mit = paragraphs(LICENSE_MIT);
+        let crlf = LICENSE_MIT.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert_eq!(paragraphs(&crlf), mit);
         assert_eq!(mit.first().map(String::as_str), Some("MIT License"));
         assert!(mit.iter().all(|p| !p.contains('\n')));
     }
