@@ -302,7 +302,9 @@ fn licences<'a>() -> Element<'a, Message> {
 
 /// A plain-text licence as paragraphs, its hard line breaks joined so it wraps to the box.
 fn paragraphs(licence: &str) -> Vec<String> {
+    // A Windows checkout may have turned the line breaks into CRLF.
     licence
+        .replace("\r\n", "\n")
         .split("\n\n")
         .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|p| !p.is_empty())
@@ -323,7 +325,7 @@ mod tests {
         assert!(THIRD_PARTY.contains("\nureq\t"));
         assert!(LICENSE_MIT.starts_with("MIT License"));
         assert!(LICENSE_APACHE.contains("Version 2.0"));
-        let mit = paragraphs(LICENSE_MIT);
+        let mit = paragraphs(&LICENSE_MIT.replace('\n', "\r\n"));
         assert_eq!(mit.first().map(String::as_str), Some("MIT License"));
         assert!(mit.iter().all(|p| !p.contains('\n')));
     }
