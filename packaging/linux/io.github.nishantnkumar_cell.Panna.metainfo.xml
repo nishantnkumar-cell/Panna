@@ -34,6 +34,9 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-11-18">
+      <description><p>Adds a New button and Ctrl+N for a new blank PDF, .deb packages and ARM Flatpaks.</p></description>
+    </release>
     <release version="0.1.0" date="2026-11-18">
       <description><p>First preview: open, scroll, zoom and page navigation.</p></description>
     </release>
