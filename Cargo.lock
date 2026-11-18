@@ -3430,7 +3430,7 @@ dependencies = [
 
 [[package]]
 name = "panna"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "arboard",
@@ -3451,7 +3451,7 @@ dependencies = [
 
 [[package]]
 name = "panna-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "cms",
@@ -3483,7 +3483,7 @@ dependencies = [
 
 [[package]]
 name = "panna-print"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -3494,7 +3494,7 @@ dependencies = [
 
 [[package]]
 name = "panna-sandbox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "landlock",
  "libc",
@@ -3505,7 +3505,7 @@ dependencies = [
 
 [[package]]
 name = "panna-update"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "semver",
  "serde",
