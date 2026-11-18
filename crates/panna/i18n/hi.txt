@@ -3399,3 +3399,70 @@ of {n}
 
 seconds
 = सेकंड
+
+# About box
+Version {v}
+= संस्करण {v}
+
+An offline PDF viewer and editor, written in Rust. Nothing you open leaves this computer.
+= Rust में लिखा एक ऑफ़लाइन PDF व्यूअर और एडिटर। आप जो भी खोलते हैं, वह इस कंप्यूटर से बाहर नहीं जाता।
+
+Documentation
+= दस्तावेज़ीकरण
+
+Project page
+= प्रोजेक्ट पेज
+
+Licences
+= लाइसेंस
+
+Hide licences
+= लाइसेंस छिपाएँ
+
+Updates
+= अपडेट
+
+Check for updates
+= अपडेट जाँचें
+
+Checking…
+= जाँच हो रही है…
+
+Download
+= डाउनलोड करें
+
+Open the releases page
+= रिलीज़ पेज खोलें
+
+Panna {v} is the newest version.
+= Panna {v} सबसे नया संस्करण है।
+
+Release {v} is available.
+= रिलीज़ {v} उपलब्ध है।
+
+Pre-release {v} is available.
+= प्री-रिलीज़ {v} उपलब्ध है।
+
+Couldn't reach GitHub ({why}). Check the connection and try again.
+= GitHub से संपर्क नहीं हो सका ({why})। कनेक्शन जाँचें और फिर से कोशिश करें।
+
+GitHub's answer couldn't be read ({why}).
+= GitHub का उत्तर पढ़ा नहीं जा सका ({why})।
+
+Checking asks github.com for the list of Panna releases. Nothing about you or your files is sent, and Panna never checks on its own.
+= जाँच करने पर github.com से Panna की रिलीज़ की सूची माँगी जाती है। आपके या आपकी फ़ाइलों के बारे में कुछ नहीं भेजा जाता, और Panna अपने-आप कभी जाँच नहीं करता।
+
+This Flatpak has no network access, so Panna can't check by itself. The releases page lists every version.
+= इस Flatpak को नेटवर्क की अनुमति नहीं है, इसलिए Panna खुद जाँच नहीं कर सकता। रिलीज़ पेज पर हर संस्करण दिया है।
+
+Couldn't open a browser. The address is {uri}
+= ब्राउज़र नहीं खुल सका। पता है: {uri}
+
+About Panna, licences and updates
+= Panna के बारे में, लाइसेंस और अपडेट
+
+Panna is free software: you may use it under the MIT licence or the Apache License 2.0, whichever you prefer. Both texts are below the list.
+= Panna मुफ़्त सॉफ़्टवेयर है: आप इसे MIT लाइसेंस या Apache License 2.0, जो भी आप चाहें, के तहत इस्तेमाल कर सकते हैं। दोनों के पूरे पाठ सूची के नीचे हैं।
+
+Panna is built from {n} open-source crates:
+= Panna {n} ओपन-सोर्स crates से बना है:

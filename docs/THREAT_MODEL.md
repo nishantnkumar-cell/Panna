@@ -50,7 +50,10 @@ how Panna is built (section 6).
   annotations, form fields, signatures, attachments, links and actions.
 - Each document is parsed and rendered on its **own worker thread**; the UI thread never
   parses PDF data. Engine panics are caught at that boundary and become errors.
-- Panna makes **no network connections**. `cargo-deny` keeps HTTP/TLS crates out of the tree.
+- Panna makes **no network connections** of its own accord. The only exception is the About
+  box's **Check for updates** button: one HTTPS GET to `api.github.com` (the releases list),
+  made only when clicked. It lives in the `panna-update` crate; `cargo-deny` allows `ureq`
+  only there and `rustls` only under `ureq`, and keeps every other HTTP/TLS crate out.
 
 ## 4. Attack classes and how each is handled
 
@@ -105,7 +108,8 @@ Status key: **Mitigated**: handled and tested · **Partly**: reduced, with a kno
 | Passwords stored or leaked | Partly | Passwords are never written to disk or settings, and password fields are masked. They stay in process memory while the document is open, and aren't zeroed afterwards |
 | Private keys | Mitigated | Windows-store keys never leave Windows: Panna sends the digest and Windows signs (and asks for a PIN if needed). Certificate-file keys are read only to sign, then dropped. RSA signing uses `rsa` 0.10, whose constant-time arithmetic fixes the Marvin timing issue (RUSTSEC-2023-0071); P-256 and P-384 use the 0.14 crates on `crypto-bigint` 0.7, which fixes RUSTSEC-2026-0387 |
 | XML attacks (external entities, entity expansion) on XFDF | Mitigated | `roxmltree` with `allow_dtd: false`: no DTDs, so no entities; it never fetches anything. XMP metadata is only searched as text |
-| Network leaks (tracking pixels, phone-home, remote fonts) | Mitigated | No networking code or crates; nothing is fetched while opening or rendering |
+| Network leaks (tracking pixels, phone-home, remote fonts) | Mitigated | Nothing is fetched while opening or rendering; the only networking code is the update check, which never runs by itself |
+| Update check (added 2026-11-18) | Mitigated | Runs only on a click. HTTPS only, at most 3 redirects, a 15 s timeout and a 2 MiB reply cap; the reply is parsed as JSON by `serde_json`, and only a version number and a `https://github.com/` link are used from it. The link opens in the browser only when the user clicks Download. Sends nothing but standard headers and `Panna/<version>` as the user agent. Uses Mozilla's roots (`webpki-roots`), so behind a proxy that re-signs TLS it fails and offers the releases page instead. The Flatpak has no network permission and only offers the releases page |
 | Saving loosens a file's permissions, or writes through a planted link | **Mitigated (fixed 2026-11-09)** | A save writes a new temporary file next to the document and renames it over. The temporary file is now created exclusively (never opening an existing file or following a link at its name), and it takes the permissions of the file it replaces, so a file only its owner could read stays that way. Before, a saved copy got default permissions |
 | Settings file tampering | Mitigated | Size-capped (64 KiB), line-based, unknown keys ignored, values validated; recent-file paths are only offered, never opened automatically |
 

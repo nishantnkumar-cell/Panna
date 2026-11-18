@@ -170,6 +170,9 @@ pub enum Icon {
     ReadingOrder,
     OutputPreview,
     Mic,
+    About,
+    Download,
+    Refresh,
 }
 
 impl Icon {
@@ -334,6 +337,9 @@ impl Icon {
             Icon::ReadingOrder => include_bytes!("../icons/list-ordered.svg"),
             Icon::OutputPreview => include_bytes!("../icons/swatch-book.svg"),
             Icon::Mic => include_bytes!("../icons/mic.svg"),
+            Icon::About => include_bytes!("../icons/circle-help.svg"),
+            Icon::Download => include_bytes!("../icons/download.svg"),
+            Icon::Refresh => include_bytes!("../icons/refresh-cw.svg"),
         }
     }
 }
@@ -442,7 +448,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 159] = [
+    const ALL: [Icon; 162] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -602,6 +608,9 @@ mod tests {
         Icon::ReadingOrder,
         Icon::OutputPreview,
         Icon::Mic,
+        Icon::About,
+        Icon::Download,
+        Icon::Refresh,
     ];
 
     #[test]
