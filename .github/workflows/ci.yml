@@ -10,6 +10,11 @@ on:
     # Nightly: re-check advisories against new RustSec entries and run the fuzzer longer.
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Version to release, like v0.1.0. CI tags the tested commit and drafts the release. Leave empty for a plain run."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -144,7 +149,7 @@ jobs:
 
       - name: Install ALSA headers (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev dpkg-dev
 
       - name: Build (Linux, Windows)
         if: matrix.target != 'universal'
@@ -162,6 +167,14 @@ jobs:
           cp packaging/linux/$ID.svg $D/share/icons/hicolor/scalable/apps/
           cp packaging/linux/$ID.thumbnailer $D/share/thumbnailers/
           tar czf $D.tar.gz $D
+
+      - name: Package Linux .deb
+        if: runner.os == 'Linux'
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "panna") | .version')
+          packaging/linux/make-deb.sh target/${{ matrix.target }}/release/panna "$VERSION" deb
+          mv deb/*.deb panna-${{ matrix.name }}.deb
+          dpkg-deb --info panna-${{ matrix.name }}.deb
 
       - name: Sign Windows executable
         if: runner.os == 'Windows' && env.WINDOWS_SIGNING == 'true'
@@ -273,6 +286,7 @@ jobs:
           name: panna-${{ matrix.name }}
           path: |
             panna-${{ matrix.name }}.tar.gz
+            panna-${{ matrix.name }}.deb
             panna-${{ matrix.name }}.zip
             panna-${{ matrix.name }}-setup.exe
             panna-${{ matrix.name }}.dmg
@@ -280,7 +294,8 @@ jobs:
 
   release:
     name: Draft release with checksums
-    if: startsWith(github.ref, 'refs/tags/v')
+    # A pushed version tag, or a manual run given a version (for when a tag can't be pushed).
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
     needs: [build, flatpak]
     runs-on: ubuntu-26.04
     permissions:
@@ -298,14 +313,31 @@ jobs:
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft \
-            --title "Panna $GITHUB_REF_NAME" --notes "Check a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$TAG' isn't a version like v0.1.0"; exit 1
+          fi
+          # Publishing a draft made by a manual run creates its tag, which starts CI again.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for $TAG already exists; leaving it as it is."; exit 0
+          fi
+          # --target makes the tag on the commit just built when it doesn't exist yet.
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --prerelease --target "$GITHUB_SHA" \
+            --title "Panna $TAG" --notes "Check a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
 
   flatpak:
-    name: Flatpak (KDE Plasma and GNOME)
+    name: Flatpak (KDE Plasma and GNOME, ${{ matrix.arch }})
     needs: check
-    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-26.04
+          - arch: aarch64
+            os: ubuntu-26.04-arm
+    runs-on: ${{ matrix.os }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
       options: --privileged
@@ -321,6 +353,7 @@ jobs:
           python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/cargo-sources.json
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
-          bundle: panna.flatpak
+          bundle: panna-linux-${{ matrix.arch }}.flatpak
           manifest-path: packaging/linux/io.github.nishantnkumar_cell.Panna.yml
-          cache-key: flatpak-builder-${{ github.sha }}
+          arch: ${{ matrix.arch }}
+          cache-key: flatpak-builder-${{ matrix.arch }}-${{ github.sha }}

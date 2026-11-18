@@ -66,7 +66,8 @@ keep a copy of any PDF you care about.
 | Windows, Intel or AMD | `panna-windows-x86_64-setup.exe` (installer) or `panna-windows-x86_64.zip` (portable) |
 | Windows, ARM | `panna-windows-aarch64-setup.exe` or `panna-windows-aarch64.zip` |
 | macOS, Apple Silicon and Intel | `panna-macos-universal.dmg` |
-| Linux, Flatpak | `panna.flatpak`: `flatpak install --user panna.flatpak` |
+| Linux, Flatpak | `panna-linux-x86_64.flatpak` or `panna-linux-aarch64.flatpak`: `flatpak install --user panna-linux-x86_64.flatpak` |
+| Debian, Ubuntu and derivatives | `panna-linux-x86_64.deb` or `panna-linux-aarch64.deb`: `sudo apt install ./panna-linux-x86_64.deb` |
 | Linux, tarball | `panna-linux-x86_64.tar.gz` or `panna-linux-aarch64.tar.gz` |
 
 Check a download against `SHA256SUMS` from the same release:
