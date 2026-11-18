@@ -240,7 +240,7 @@ impl Icon {
             Icon::Watermark => include_bytes!("../icons/file-type.svg"),
             Icon::Export => include_bytes!("../icons/file-output.svg"),
             Icon::FromPictures => include_bytes!("../icons/file-image.svg"),
-            Icon::NewBlank => include_bytes!("../icons/file.svg"),
+            Icon::NewBlank => include_bytes!("../icons/file-plus.svg"),
             Icon::FromClipboard => include_bytes!("../icons/clipboard-paste.svg"),
             Icon::Flatten => include_bytes!("../icons/layers.svg"),
             Icon::Protect => include_bytes!("../icons/lock.svg"),

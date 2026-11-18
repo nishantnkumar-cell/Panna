@@ -1533,6 +1533,9 @@ Close this document (Ctrl+W)
 Couldn't start the renderer: {e}
 = रेंडरर शुरू नहीं हो सका: {e}
 
+New blank PDF… ({m}N)
+= नई खाली PDF… ({m}N)
+
 Open… ({m}O)
 = खोलें… ({m}O)
 
