@@ -6,6 +6,10 @@ Push a version tag and CI does the rest:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
+If a tag can't be pushed, open **Actions → CI → Run workflow** on `main` and type the version
+(like `v0.2.0`) into the box instead. That run tests and builds the commit, then drafts the
+release; the tag is made on that commit when the draft is published.
+
 Every platform is built, signed where the secrets below exist, and put in a **draft** release
 with a `SHA256SUMS` file. Check the draft, then publish it. People can check a download with
 `sha256sum -c SHA256SUMS --ignore-missing` (`shasum -a 256 -c` on macOS).

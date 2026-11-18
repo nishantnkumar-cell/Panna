@@ -10,6 +10,11 @@ on:
     # Nightly: re-check advisories against new RustSec entries and run the fuzzer longer.
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Version to release, like v0.1.0. CI tags the tested commit and drafts the release. Leave empty for a plain run."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -280,7 +285,8 @@ jobs:
 
   release:
     name: Draft release with checksums
-    if: startsWith(github.ref, 'refs/tags/v')
+    # A pushed version tag, or a manual run given a version (for when a tag can't be pushed).
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
     needs: [build, flatpak]
     runs-on: ubuntu-26.04
     permissions:
@@ -298,9 +304,18 @@ jobs:
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft \
-            --title "Panna $GITHUB_REF_NAME" --notes "Check a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$TAG' isn't a version like v0.1.0"; exit 1
+          fi
+          # Publishing a draft made by a manual run creates its tag, which starts CI again.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for $TAG already exists; leaving it as it is."; exit 0
+          fi
+          # --target makes the tag on the commit just built when it doesn't exist yet.
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "Panna $TAG" --notes "Check a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
 
   flatpak:
     name: Flatpak (KDE Plasma and GNOME)
