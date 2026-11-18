@@ -155,6 +155,7 @@ pub fn map(event: keyboard::Event) -> Option<Message> {
     }
     if modifiers.command() {
         return match key.as_ref() {
+            Key::Character("n") => Some(Message::Blank(crate::create::Event::Open)),
             Key::Character("o") => Some(Message::OpenDialog),
             Key::Character("w") => Some(Message::CloseTab),
             Key::Named(Named::F4) => Some(Message::CloseTab),

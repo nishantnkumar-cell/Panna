@@ -7599,6 +7599,11 @@ impl App {
         let m = icons::MOD;
         let items = match bar {
             Bar::File => vec![
+                icons::button(
+                    Icon::NewBlank,
+                    format!("New blank PDF… ({m}N)"),
+                    Some(Message::Blank(create::Event::Open)),
+                ),
                 icons::button(Icon::Open, format!("Open… ({m}O)"), Some(Message::OpenDialog)),
                 icons::button(
                     Icon::Save,
@@ -7841,7 +7846,7 @@ impl App {
                 item(
                     Icon::NewBlank,
                     "New blank PDF…",
-                    "",
+                    k("N"),
                     Some(Message::Blank(create::Event::Open)),
                 ),
                 item(

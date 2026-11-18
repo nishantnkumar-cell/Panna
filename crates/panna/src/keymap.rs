@@ -240,6 +240,8 @@ const fn shift(key: &'static str) -> DefaultKey {
 
 use crate::find::Event as Find;
 actions! {
+    New, "new", "New blank PDF", ctrl("n"),
+        Message::Blank(crate::create::Event::Open);
     Open, "open", "Open", ctrl("o"), Message::OpenDialog;
     Save, "save", "Save", ctrl("s"), Message::Save;
     SaveAs, "save_as", "Save as", ctrl_shift("s"), Message::SaveAs;
