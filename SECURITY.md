@@ -11,8 +11,12 @@ class and how it's handled, and what's still open) is in
   The only `unsafe` we wrote calls the operating system: the Windows and macOS print dialogs
   and receiving files opened from Finder (`panna-print`), and the Windows and macOS sandbox
   calls (`panna-sandbox`). Each block is small and says why it is sound.
-- **No network access.** The app never connects to the internet. There are no updates, no
-  telemetry and no cloud features. Links in documents open in your browser only after you
+- **No network access, unless you ask.** The app never connects to the internet on its own:
+  no automatic updates, no telemetry and no cloud features. The one exception is **Check for
+  updates** in the About box: when clicked, it makes a single HTTPS request (rustls, Mozilla's
+  root certificates) to GitHub's public releases list and shows the answer. Nothing about you
+  or your files is sent. That code lives in its own crate, `panna-update`, and `cargo-deny`
+  allows the HTTP and TLS crates only there. Links in documents open in your browser only after you
   agree.
 - **No active content.** PDF JavaScript, launch actions and opening attached files are not
   supported. Attachments can only be saved, and programs among them are labelled.

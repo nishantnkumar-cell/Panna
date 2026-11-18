@@ -4,6 +4,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod about;
 mod add;
 mod annotate;
 mod audio;
@@ -441,6 +442,7 @@ enum Message {
     /// Shows or hides the keyboard shortcuts card.
     Shortcuts(bool),
     About,
+    AboutBox(about::Event),
     /// Closes the window, as its close button does.
     Quit,
     WindowResized(Size),
@@ -759,6 +761,8 @@ struct App {
     all_tools: bool,
     /// The keyboard shortcuts card is showing.
     shortcuts: bool,
+    /// The About box, while open.
+    about: Option<about::About>,
     /// The Keyboard shortcuts card waits for a key press for this action.
     keys_waiting: Option<keymap::Action>,
     /// What the last change on the Keyboard shortcuts card did.
@@ -1352,6 +1356,7 @@ impl App {
             scanned: Vec::new(),
             all_tools: false,
             shortcuts: false,
+            about: None,
             keys_waiting: None,
             keys_note: None,
             menus: menu::State::default(),
@@ -2285,12 +2290,10 @@ impl App {
                 Task::none()
             }
             Message::About => {
-                self.notice = Some(format!(
-                    "Panna {}\n\nAn offline PDF viewer and editor, written in Rust. Nothing you open leaves this computer.",
-                    env!("CARGO_PKG_VERSION")
-                ));
+                self.about.get_or_insert_with(about::About::default);
                 Task::none()
             }
+            Message::AboutBox(event) => about::update(&mut self.about, event),
             Message::Quit => window::latest().and_then(|id| Task::done(Message::CloseRequested(id))),
             Message::WindowResized(size) => {
                 self.window_size = size;
@@ -8481,7 +8484,7 @@ impl App {
             menu::Menu::Help => vec![
                 plain("Keyboard shortcuts…", "", Some(Message::Shortcuts(true))),
                 Separator,
-                item(Icon::Properties, "About Panna", "", Some(Message::About)),
+                item(Icon::About, "About Panna", "", Some(Message::About)),
             ],
         }
     }
@@ -8855,6 +8858,9 @@ impl App {
                     .into(),
             );
         }
+        if let Some(state) = &self.about {
+            dialogs.push(modal(about::card(state), Message::AboutBox(about::Event::Close)));
+        }
         if self.shortcuts {
             dialogs.push(modal(
                 keymap::card(&self.settings.keys, self.keys_waiting, self.keys_note.as_deref()),
@@ -8912,7 +8918,7 @@ impl App {
             self.window_size,
         );
         let window = column![
-            self.menus.bar(Message::Menu),
+            self.menus.bar(Message::Menu, about::bar_button(),),
             bars.top,
             row![bars.left, container(body).width(Fill).height(Fill), bars.right].height(Fill),
             bars.bottom,
