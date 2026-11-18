@@ -50,5 +50,5 @@ stapled to it, so it opens offline without a warning.
 
 ### Linux
 
-The tarball and Flatpak aren't signed; the checksums cover them. Flathub signs what it builds
+The tarball, .deb and Flatpak aren't signed; the checksums cover them. Flathub signs what it builds
 itself.
