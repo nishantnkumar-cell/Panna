@@ -1,8 +1,9 @@
 //! Measuring tools: distance between two points, the perimeter of a shape and the area inside
 //! it, on a page. Measurements are shown, not saved.
 
+use crate::i18n::text;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
-use iced::widget::{container, pick_list, row, text};
+use iced::widget::{container, pick_list, row};
 use iced::{Center, Element, Point, Rectangle, Renderer, Size, Theme, mouse};
 
 use crate::Message;
@@ -60,12 +61,12 @@ impl Unit {
 
 impl std::fmt::Display for Unit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             Unit::Points => "Points",
             Unit::Inches => "Inches",
             Unit::Millimetres => "Millimetres",
             Unit::Centimetres => "Centimetres",
-        })
+        }))
     }
 }
 

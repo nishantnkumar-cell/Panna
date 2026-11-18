@@ -23,8 +23,10 @@ mod finder;
 mod folder_search;
 mod form;
 mod guides;
+mod i18n;
 mod icons;
 mod initial;
+mod keymap;
 mod labels;
 mod layout;
 mod links;
@@ -56,15 +58,17 @@ mod speech;
 mod spelling;
 mod toolbar;
 mod tools;
+mod touch;
 mod trust;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::i18n::text;
 use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{
     Stack, button, center, column, container, image, mouse_area, opaque, operation, pin, row, rule,
-    scrollable, space, text, text_input,
+    scrollable, space, text_input,
 };
 use iced::{Center, Element, Fill, Length, Point, Size, Subscription, Task, event, mouse, window};
 use panna_core::{
@@ -103,6 +107,25 @@ fn main() -> iced::Result {
     }
     if let Ok(program) = std::env::current_exe() {
         panna_core::isolate::use_renderer(program);
+    }
+    // `panna --thumbnail FILE OUT SIZE`: a file manager's thumbnail of FILE's first page,
+    // saved as a PNG at OUT (see packaging/linux).
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if let [_, flag, source, target, size] = args.as_slice()
+        && flag == "--thumbnail"
+    {
+        let size = size.to_str().and_then(|s| s.parse().ok()).unwrap_or(256);
+        let made = panna_core::thumbnail_file(source.as_ref(), size).and_then(|png| {
+            std::fs::write(target, png).map_err(|e| panna_core::SaveError::Io(e.to_string()))
+        });
+        if let Err(e) = made {
+            eprintln!(
+                "panna: no thumbnail for {}: {e}",
+                std::path::Path::new(source).display()
+            );
+            std::process::exit(1);
+        }
+        std::process::exit(0);
     }
     #[cfg(target_os = "macos")]
     finder::install();
@@ -253,6 +276,14 @@ enum Message {
     Extracted(Result<(), SaveError>),
     /// Save a copy of attached file n.
     SaveAttachment(usize),
+    /// Opens an attached PDF in a tab of its own, from a copy in the temporary folder.
+    OpenAttachment(usize),
+    AttachmentReady(PathBuf, Result<(), SaveError>),
+    /// Make a PDF Portfolio: pick the files, then where to save it.
+    NewPortfolio,
+    PortfolioFiles(Vec<PathBuf>),
+    PortfolioTo(Vec<PathBuf>, Option<PathBuf>),
+    PortfolioMade(Result<PathBuf, String>),
     AttachmentChosen(usize, Option<PathBuf>),
     /// Asks for a picture to stamp.
     StampPicture,
@@ -310,6 +341,8 @@ enum Message {
     RotateCcw,
     PrevPage,
     NextPage,
+    /// Fingers on the pages (see [`touch`]).
+    Touch(touch::Gesture),
     PageInput(String),
     /// Puts the cursor in the page number box.
     FocusPageBox,
@@ -374,7 +407,13 @@ enum Message {
     SplitScrolled(Viewport),
     /// Scrolls on its own until stopped, as Acrobat's Automatically Scroll.
     AutoScroll,
-    AutoScrollTick,
+    AutoScrollTick(std::time::Instant),
+    /// A key while scrolling automatically: speed, direction or the next or previous page.
+    AutoScrollKey(shortcuts::ScrollKey),
+    /// A key no widget used: a shortcut, under the user's own keys first.
+    Key(iced::keyboard::Event),
+    /// The Keyboard shortcuts card.
+    Keys(keymap::Event),
     /// Starts reading aloud, or stops it.
     ReadAloudToggle,
     /// Opens the navigation pane.
@@ -473,6 +512,15 @@ enum Message {
         findings: Vec<panna_core::AccessFinding>,
     },
     ArchiveTo(Option<PathBuf>),
+    /// The colour profile chosen for a PDF/X copy.
+    PrintProfileChosen(Option<PathBuf>),
+    /// Where to save the PDF/X copy made with this profile.
+    PrintReadyTo(Box<panna_core::PrintProfile>, Option<PathBuf>),
+    PrintReady {
+        doc: u64,
+        name: String,
+        result: Result<Vec<panna_core::Finding>, SaveError>,
+    },
     TagTo(Option<PathBuf>),
     FixLinesTo(Option<PathBuf>),
     LinesFixed {
@@ -630,6 +678,12 @@ struct App {
     presented_at: Option<std::time::Instant>,
     /// Automatic scrolling is on.
     auto_scroll: bool,
+    /// How fast automatic scrolling goes, 0 slowest to 9 fastest, and whether it goes up.
+    scroll_speed: u8,
+    scroll_up: bool,
+    /// The last frame while scrolling automatically, so the speed doesn't depend on the
+    /// screen's refresh rate.
+    scroll_frame: Option<std::time::Instant>,
     /// The text markup and drawing tools U and D pick: the last of each used.
     last_markup: annotate::Tool,
     last_drawing: annotate::Tool,
@@ -705,6 +759,10 @@ struct App {
     all_tools: bool,
     /// The keyboard shortcuts card is showing.
     shortcuts: bool,
+    /// The Keyboard shortcuts card waits for a key press for this action.
+    keys_waiting: Option<keymap::Action>,
+    /// What the last change on the Keyboard shortcuts card did.
+    keys_note: Option<String>,
     menus: menu::State,
     /// Pictures chosen for a new PDF, while asking where to save it.
     pictures: Vec<PathBuf>,
@@ -875,7 +933,7 @@ fn ask_new_pdf_path(name: &'static str) -> Task<Message> {
     Task::perform(
         async move {
             rfd::AsyncFileDialog::new()
-                .set_title("Save the new PDF as")
+                .set_title(crate::i18n::tr_str("Save the new PDF as"))
                 .add_filter("PDF documents", &["pdf"])
                 .set_file_name(name)
                 .save_file()
@@ -1051,7 +1109,7 @@ fn properties_view<'a>(
             iced::widget::Column::with_children(rows).spacing(6),
             rule::horizontal(1),
             initial.view(&info.initial_view, busy),
-            button("Close").on_press(Message::ToggleProperties),
+            button(crate::i18n::text("Close")).on_press(Message::ToggleProperties),
         ]
         .spacing(14)
         .width(460),
@@ -1068,93 +1126,62 @@ fn properties_view<'a>(
     )
 }
 
-/// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
-/// The keyboard shortcuts, in two columns.
-fn shortcuts_card<'a>() -> Element<'a, Message> {
-    let m = icons::MOD;
-    let keys: [(String, &str); 38] = [
-        (format!("{m}O"), "Open"),
-        (format!("{m}S"), "Save"),
-        (format!("{m}Shift+S"), "Save as"),
-        (format!("{m}P"), "Print"),
-        (format!("{m}W, {m}F4"), "Close the document"),
-        (format!("{m}Tab"), "Next tab"),
-        (format!("{m}D"), "Document properties"),
-        (format!("{m}F, F3, Shift+F3"), "Find, next, previous"),
-        (format!("{m}Shift+F"), "Search a folder of PDFs"),
-        (format!("{m}4"), "Reflow the text to fit the window"),
-        ("F7".to_owned(), "Check spelling in comments and form fields"),
-        (format!("{m}Z, {m}Y"), "Undo, redo"),
-        (format!("{m}C"), "Copy"),
-        (format!("{m}K"), "Preferences"),
-        ("F10, Alt+letter".into(), "Open a menu"),
-        (format!("{m}+, {m}−"), "Zoom in, zoom out"),
-        (
-            format!("{m}1, {m}2, {m}3, {m}0"),
-            "Actual size, fit width, fit visible, fit page",
-        ),
-        ("Page Up, Page Down".into(), "Previous, next page"),
-        ("Left, Right".into(), "Previous, next page"),
-        ("Enter, Shift+Enter".into(), "Next, previous screen"),
-        ("Home, End".into(), "First, last page"),
-        (
-            if cfg!(target_os = "macos") {
-                format!("{m}←, {m}→")
-            } else {
-                "Alt+←, Alt+→".into()
-            },
-            "Previous, next view",
-        ),
-        (format!("{m}Shift+N"), "Go to page"),
-        (format!("{m}Shift+−, {m}Shift++"), "Rotate the view"),
-        (
-            format!("{m}Shift+T, {m}Shift+I"),
-            "Insert a blank page, insert a file",
-        ),
-        (format!("{m}Shift+D, {m}Shift+R"), "Delete pages, rotate pages"),
-        (format!("{m}B"), "Add a bookmark"),
-        ("F4, Shift+F4".into(), "Navigation pane, all tools"),
-        (format!("{m}H"), "Read mode"),
-        (format!("{m}L, F11"), "Full screen: pages only, or with the tools"),
-        (format!("{m}Shift+H"), "Scroll automatically"),
-        (format!("{m}Shift+Y"), "Read aloud, or stop"),
-        (format!("{m}Shift+C"), "Comment tools"),
-        ("Space (hold), H, Z, V".into(), "Hand, zoom box, select"),
-        ("S, X, Q, K".into(), "Sticky note, text box, cloud, stamp"),
-        ("U, Shift+U".into(), "Highlight; next text markup"),
-        ("D, Shift+D".into(), "Drawing tool; next drawing tool"),
-        ("Shift+K".into(), "Checkmark on the selected comment"),
-    ];
-    let line = |(k, what): (String, &'a str)| -> Element<'a, Message> {
-        row![text(k).size(13).width(200), text(what).size(13)]
-            .spacing(8)
-            .into()
-    };
-    let mut left: Vec<Element<'a, Message>> = keys.into_iter().map(line).collect();
-    let right = left.split_off(18);
-    container(
-        column![
-            text("Keyboard shortcuts").size(16),
-            row![
-                iced::widget::Column::with_children(left).spacing(6).width(390),
-                iced::widget::Column::with_children(right).spacing(6).width(470),
-            ]
-            .spacing(16),
-            row![
-                space::horizontal(),
-                button("Close")
-                    .style(button::secondary)
-                    .on_press(Message::Shortcuts(false)),
-            ],
-        ]
-        .spacing(12)
-        .width(876),
-    )
-    .padding(16)
-    .style(container::rounded_box)
-    .into()
+/// Removes the copies of attached PDFs made to open them. Best effort: a copy still in use
+/// on Windows stays until the system clears the temporary folder.
+fn remove_attachment_copies() {
+    let dir = std::env::temp_dir().join(format!("Panna-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Packs `files` into a PDF Portfolio saved at `target`. Files are read whole, so the total
+/// is limited to what Panna opens.
+fn make_portfolio_file(files: &[PathBuf], target: &std::path::Path) -> Result<(), String> {
+    if files.len() > panna_core::MAX_PORTFOLIO_FILES {
+        return Err(format!(
+            "A PDF Portfolio can hold up to {} files.",
+            panna_core::MAX_PORTFOLIO_FILES
+        ));
+    }
+    let limit = panna_core::Limits::default().max_file_bytes;
+    let mut total = 0u64;
+    let mut packed = Vec::with_capacity(files.len());
+    for path in files {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        total += std::fs::metadata(path)
+            .map_err(|e| format!("Couldn't read {name}: {e}"))?
+            .len();
+        if total > limit {
+            return Err("Those files are too large together for one PDF.".into());
+        }
+        let data = std::fs::read(path).map_err(|e| format!("Couldn't read {name}: {e}"))?;
+        packed.push((name, data));
+    }
+    let bytes = panna_core::make_portfolio(&packed);
+    let tmp = target.with_extension("pdf.tmp");
+    std::fs::write(&tmp, bytes)
+        .and_then(|()| std::fs::rename(&tmp, target))
+        .map_err(|e| format!("Couldn't save the PDF Portfolio: {e}"))
+}
+
+/// Shows the user's own shortcuts in a menu's key column.
+fn relabel_keys(entries: &mut [menu::Entry<Message>], keys: &keymap::Keymap) {
+    for entry in entries {
+        match entry {
+            menu::Entry::Item { keys: shown, .. } => {
+                if let Some(label) = keys.menu_label(shown) {
+                    *shown = label;
+                }
+            }
+            menu::Entry::Sub { items, .. } => relabel_keys(items, keys),
+            menu::Entry::Separator => {}
+        }
+    }
+}
+
+/// Centres `card` over a dimmed backdrop. Clicking the backdrop sends `dismiss`.
 fn modal<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
     opaque(
         mouse_area(
@@ -1192,14 +1219,14 @@ fn link_view(uri: &str) -> Element<'_, Message> {
             .size(13)
             .style(text::secondary),
             row![
-                button("Copy link")
+                button(crate::i18n::text("Copy link"))
                     .style(button::secondary)
                     .on_press(Message::OpenLink(LinkChoice::Copy)),
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(Message::OpenLink(LinkChoice::Cancel)),
-                button("Open").on_press(Message::OpenLink(LinkChoice::Open)),
+                button(crate::i18n::text("Open")).on_press(Message::OpenLink(LinkChoice::Open)),
             ]
             .spacing(8),
         ]
@@ -1219,10 +1246,10 @@ fn reset_view<'a>() -> Element<'a, Message> {
                 .style(text::secondary),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(Message::ConfirmReset(false)),
-                button("Reset").on_press(Message::ConfirmReset(true)),
+                button(crate::i18n::text("Reset")).on_press(Message::ConfirmReset(true)),
             ]
             .spacing(8),
         ]
@@ -1251,6 +1278,7 @@ fn password_id() -> iced::widget::Id {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load();
+        i18n::set_language(settings.language);
         let redact_look = settings.redact.clone();
         let unit = settings.unit;
         let annotate = annotator(&settings);
@@ -1324,6 +1352,8 @@ impl App {
             scanned: Vec::new(),
             all_tools: false,
             shortcuts: false,
+            keys_waiting: None,
+            keys_note: None,
             menus: menu::State::default(),
             pictures: Vec::new(),
             blank: None,
@@ -1355,6 +1385,9 @@ impl App {
             read_mode: false,
             presented_at: None,
             auto_scroll: false,
+            scroll_speed: shortcuts::SCROLL_DEFAULT,
+            scroll_up: false,
+            scroll_frame: None,
             last_markup: annotate::Tool::Highlight,
             last_drawing: annotate::Tool::Pen,
             panning: None,
@@ -1416,18 +1449,29 @@ impl App {
                 iced::Event::Keyboard(key) => shortcuts::menu_keys(key),
                 event => window_event(event),
             })
+        } else if self.auto_scroll {
+            // While scrolling on its own, the arrows and number keys set the speed, as in Acrobat.
+            event::listen_with(|event, status, _window| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(keys)) => {
+                    Some(Message::Modifiers(keys))
+                }
+                iced::Event::Keyboard(key) if status == event::Status::Ignored => {
+                    Some(shortcuts::auto_scroll_keys(&key).map_or(Message::Key(key), Message::AutoScrollKey))
+                }
+                event => window_event(event),
+            })
         } else {
             event::listen_with(|event, status, _window| match event {
                 iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(keys)) => {
                     Some(Message::Modifiers(keys))
                 }
-                iced::Event::Keyboard(key) if status == event::Status::Ignored => shortcuts::map(key),
+                iced::Event::Keyboard(key) if status == event::Status::Ignored => Some(Message::Key(key)),
                 event => window_event(event),
             })
         };
         let mut subs = vec![base, window::close_requests().map(Message::CloseRequested)];
         if self.auto_scroll {
-            subs.push(window::frames().map(|_| Message::AutoScrollTick));
+            subs.push(window::frames().map(Message::AutoScrollTick));
         }
         if self.recorder.is_some() || self.player.is_some() {
             subs.push(Subscription::run(audio::ticks).map(|()| Message::AudioTick));
@@ -1499,7 +1543,7 @@ impl App {
             Message::OpenDialog => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Open PDF")
+                        .set_title(crate::i18n::tr_str("Open PDF"))
                         .add_filter("PDF documents", &["pdf", "PDF"])
                         .pick_file()
                         .await
@@ -1565,6 +1609,10 @@ impl App {
                             }
                             _ => None,
                         };
+                        // A portfolio is its files: show them even when it doesn't ask.
+                        let panel = panel
+                            .or((info.portfolio && !info.attachments.is_empty())
+                                .then_some(sidebar::Tab::Files));
                         if let Some(tab) = panel {
                             self.sidebar.open = true;
                             self.sidebar.tab = tab;
@@ -2027,14 +2075,46 @@ impl App {
             }
             Message::AutoScroll => {
                 self.auto_scroll = !self.auto_scroll && self.doc.is_some();
+                self.scroll_frame = None;
+                self.scroll_up = false;
                 Task::none()
             }
-            Message::AutoScrollTick => {
+            Message::AutoScrollTick(now) => {
                 if !self.auto_scroll || self.doc.is_none() {
                     self.auto_scroll = false;
                     return Task::none();
                 }
-                operation::scroll_by(scroll_id(), AbsoluteOffset { x: 0.0, y: 1.5 })
+                let Some(last) = self.scroll_frame.replace(now) else {
+                    return Task::none();
+                };
+                // A long gap (the window was hidden) moves no further than a tenth of a second.
+                let seconds = now.saturating_duration_since(last).as_secs_f32().min(0.1);
+                let step = shortcuts::scroll_rate(self.scroll_speed) * seconds;
+                let y = if self.scroll_up { -step } else { step };
+                operation::scroll_by(scroll_id(), AbsoluteOffset { x: 0.0, y })
+            }
+            Message::AutoScrollKey(key) => {
+                use shortcuts::ScrollKey;
+                match key {
+                    ScrollKey::Speed(n) => self.scroll_speed = n.min(shortcuts::SCROLL_FASTEST),
+                    // The arrow the way it's going speeds it up; the other slows it down.
+                    ScrollKey::Arrow(down) => {
+                        if down != self.scroll_up {
+                            self.scroll_speed = (self.scroll_speed + 1).min(shortcuts::SCROLL_FASTEST);
+                        } else {
+                            self.scroll_speed = self.scroll_speed.saturating_sub(1);
+                        }
+                    }
+                    ScrollKey::Reverse => self.scroll_up = !self.scroll_up,
+                    ScrollKey::Page(next) => {
+                        return self.update(if next {
+                            Message::NextPage
+                        } else {
+                            Message::PrevPage
+                        });
+                    }
+                }
+                Task::none()
             }
             Message::ReadAloudToggle => {
                 let event = if self.reader.active() {
@@ -2136,6 +2216,72 @@ impl App {
             }
             Message::Shortcuts(show) => {
                 self.shortcuts = show;
+                self.keys_waiting = None;
+                self.keys_note = None;
+                Task::none()
+            }
+            Message::Key(event) => {
+                if let Some(action) = self.keys_waiting {
+                    use iced::keyboard::{Key, key::Named};
+                    let iced::keyboard::Event::KeyPressed { key, .. } = &event else {
+                        return Task::none();
+                    };
+                    let chord = match key.as_ref() {
+                        Key::Named(Named::Escape) => {
+                            self.keys_waiting = None;
+                            return Task::none();
+                        }
+                        Key::Named(Named::Backspace) => None,
+                        _ => match keymap::Chord::from_event(&event) {
+                            Some(chord) => Some(chord),
+                            // A modifier on its own: keep waiting for the key.
+                            None => return Task::none(),
+                        },
+                    };
+                    let shown = chord.as_ref().map(keymap::Chord::label);
+                    let taken = self.settings.keys.set(action, chord);
+                    self.keys_note = match (taken, shown) {
+                        (Some(other), Some(shown)) => Some(format!(
+                            "{shown} was the shortcut for {}, which now has none.",
+                            other.label()
+                        )),
+                        _ => None,
+                    };
+                    self.keys_waiting = None;
+                    self.settings.save();
+                    return Task::none();
+                }
+                match self.settings.keys.resolve(&event) {
+                    keymap::Resolved::Bound(action) => self.update(action.message()),
+                    keymap::Resolved::Blocked => Task::none(),
+                    keymap::Resolved::Default => {
+                        shortcuts::map(event).map_or_else(Task::none, |message| self.update(message))
+                    }
+                }
+            }
+            Message::Keys(event) => {
+                self.keys_note = None;
+                match event {
+                    keymap::Event::Change(action) => {
+                        self.keys_waiting = (self.keys_waiting != Some(action)).then_some(action);
+                        return Task::none();
+                    }
+                    keymap::Event::Remove(action) => {
+                        self.settings.keys.set(action, None);
+                    }
+                    keymap::Event::Reset(action) => {
+                        if let Some(other) = self.settings.keys.reset(action) {
+                            self.keys_note = Some(format!(
+                                "{} was the shortcut for {}, which now has none.",
+                                action.default_chord().label(),
+                                other.label()
+                            ));
+                        }
+                    }
+                    keymap::Event::ResetAll => self.settings.keys = keymap::Keymap::default(),
+                }
+                self.keys_waiting = None;
+                self.settings.save();
                 Task::none()
             }
             Message::About => {
@@ -2572,7 +2718,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save form data as")
+                            .set_title(crate::i18n::tr_str("Save form data as"))
                             .add_filter("Form data (FDF)", &["fdf"])
                             .add_filter("Form data (XFDF)", &["xfdf"])
                             .set_file_name(name)
@@ -2608,7 +2754,7 @@ impl App {
                 Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Fill in the form from")
+                            .set_title(crate::i18n::tr_str("Fill in the form from"))
                             .add_filter("Form data", &["fdf", "xfdf"])
                             .pick_file()
                             .await
@@ -2687,7 +2833,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a smaller copy as")
+                            .set_title(crate::i18n::tr_str("Save a smaller copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -2731,7 +2877,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save comments as")
+                            .set_title(crate::i18n::tr_str("Save comments as"))
                             .add_filter("Comments (XFDF)", &["xfdf"])
                             .add_filter("Comments (FDF)", &["fdf"])
                             .set_file_name(name)
@@ -2805,7 +2951,7 @@ impl App {
                 Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Add comments from")
+                            .set_title(crate::i18n::tr_str("Add comments from"))
                             .add_filter("Comments", &["xfdf", "fdf"])
                             .pick_file()
                             .await
@@ -3044,7 +3190,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a PDF/A copy as")
+                            .set_title(crate::i18n::tr_str("Save a PDF/A copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3054,13 +3200,95 @@ impl App {
                     Message::ArchiveTo,
                 )
             }
+            Message::Preflight(preflight::Event::ConvertPrint) => {
+                self.preflight = None;
+                Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title(crate::i18n::tr_str("Choose the print shop's colour profile"))
+                            .add_filter("ICC colour profile", &["icc", "icm"])
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::PrintProfileChosen,
+                )
+            }
+            Message::PrintProfileChosen(None) => Task::none(),
+            Message::PrintProfileChosen(Some(path)) => {
+                let too_big = std::fs::metadata(&path)
+                    .is_ok_and(|m| m.len() > panna_core::PrintProfile::MAX_BYTES as u64);
+                let read = if too_big {
+                    Err(panna_core::ProfileError::TooBig.to_string())
+                } else {
+                    std::fs::read(&path).map_err(|e| format!("Couldn't read the profile: {e}"))
+                };
+                let fallback = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let profile = match read.and_then(|bytes| {
+                    panna_core::PrintProfile::read(bytes, &fallback).map_err(|e| e.to_string())
+                }) {
+                    Ok(profile) => profile,
+                    Err(e) => {
+                        self.notice = Some(e);
+                        return Task::none();
+                    }
+                };
+                let name = format!("{} (PDF-X).pdf", self.file_stem());
+                let profile = Box::new(profile);
+                Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title(crate::i18n::tr_str("Save a PDF/X-4 copy as"))
+                            .add_filter("PDF", &["pdf"])
+                            .set_file_name(name)
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    move |path| Message::PrintReadyTo(profile.clone(), path),
+                )
+            }
+            Message::PrintReadyTo(_, None) => Task::none(),
+            Message::PrintReadyTo(profile, Some(path)) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                // Unsaved changes go into the copy too.
+                if self.dirty() {
+                    doc.worker.set_changes(self.changes(), |_| {});
+                }
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_print_ready(path, *profile, move |result| {
+                    let _ = tx.send(result);
+                });
+                let id = doc.id;
+                Task::perform(rx, move |result| Message::PrintReady {
+                    doc: id,
+                    name,
+                    result: result.unwrap_or(Err(SaveError::EngineCrashed)),
+                })
+            }
+            Message::PrintReady { doc, name, result } => {
+                if self.doc.as_ref().is_some_and(|d| d.id == doc) {
+                    match result {
+                        Ok(findings) => self.preflight = Some(preflight::Report::saved_print(name, findings)),
+                        Err(e) => self.notice = Some(e.to_string()),
+                    }
+                }
+                Task::none()
+            }
             Message::Preflight(preflight::Event::Tag) => {
                 self.preflight = None;
                 let name = format!("{} (tagged).pdf", self.file_stem());
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a tagged copy as")
+                            .set_title(crate::i18n::tr_str("Save a tagged copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3076,7 +3304,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save with thin lines widened as")
+                            .set_title(crate::i18n::tr_str("Save with thin lines widened as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3190,7 +3418,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a described copy as")
+                            .set_title(crate::i18n::tr_str("Save a described copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -3507,6 +3735,7 @@ impl App {
                 };
                 operation::scroll_to(scroll_id(), offset)
             }
+            Message::Touch(gesture) => self.touch(gesture),
             Message::HandReleased => {
                 self.panning = None;
                 Task::none()
@@ -3707,7 +3936,7 @@ impl App {
             Message::FieldPicture(index) => Task::perform(
                 async {
                     let path = rfd::AsyncFileDialog::new()
-                        .set_title("Choose a picture for the field")
+                        .set_title(crate::i18n::tr_str("Choose a picture for the field"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -3995,7 +4224,7 @@ impl App {
             Message::FromPictures => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Make a PDF from pictures")
+                        .set_title(crate::i18n::tr_str("Make a PDF from pictures"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -4023,7 +4252,7 @@ impl App {
                 Task::perform(
                     async move {
                         let mut dialog = rfd::AsyncFileDialog::new()
-                            .set_title("Save the new PDF as")
+                            .set_title(crate::i18n::tr_str("Save the new PDF as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name(format!("{name}.pdf"));
                         if let Some(dir) = dir {
@@ -4057,6 +4286,8 @@ impl App {
                 if state.query.is_empty() {
                     state.query = self.find.query.clone();
                 }
+                state.use_index = self.settings.search_index;
+                state.refresh_index_size();
                 self.folder_search_open = true;
                 operation::focus(folder_search::input_id())
             }
@@ -4066,6 +4297,12 @@ impl App {
                 };
                 let kept = state.clone();
                 let (state, task) = state.update(event);
+                if let Some(on) = state.as_ref().map(|s| s.use_index)
+                    && on != self.settings.search_index
+                {
+                    self.settings.search_index = on;
+                    self.settings.save();
+                }
                 match state {
                     Some(state) => self.folder_search = Some(state),
                     None => {
@@ -4159,7 +4396,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save a copy in the new reading order as")
+                            .set_title(crate::i18n::tr_str("Save a copy in the new reading order as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -4222,7 +4459,11 @@ impl App {
                         .into_iter()
                         .map(|(index, name, text)| (spelling::Source::Field(index, name), text)),
                 );
-                self.spelling = Some(spelling::Spelling::new(sources, &self.settings.words));
+                self.spelling = Some(spelling::Spelling::new(
+                    sources,
+                    &self.settings.words,
+                    self.settings.spelling_language,
+                ));
                 operation::focus(spelling::input_id())
             }
             Message::Spelling(event) => {
@@ -4230,6 +4471,12 @@ impl App {
                     return Task::none();
                 };
                 let (state, action) = state.update(event);
+                if let Some(language) = state.as_ref().map(|s| s.language)
+                    && language != self.settings.spelling_language
+                {
+                    self.settings.spelling_language = language;
+                    self.settings.save();
+                }
                 self.spelling = state;
                 match action {
                     spelling::Action::Nothing => Task::none(),
@@ -4301,6 +4548,10 @@ impl App {
                     preferences::Event::Unit(unit) => {
                         self.settings.unit = unit;
                         self.measure.unit = unit;
+                    }
+                    preferences::Event::Language(language) => {
+                        self.settings.language = language;
+                        i18n::set_language(language);
                     }
                     preferences::Event::SingleKeys(on) => self.settings.single_keys = on,
                     preferences::Event::PresentLoop(on) => self.settings.present_loop = on,
@@ -4455,7 +4706,7 @@ impl App {
                         return Task::perform(
                             async {
                                 rfd::AsyncFileDialog::new()
-                                    .set_title("Choose a picture for the watermark")
+                                    .set_title(crate::i18n::tr_str("Choose a picture for the watermark"))
                                     .add_filter(
                                         "Pictures",
                                         &[
@@ -4742,7 +4993,7 @@ impl App {
             Message::StampPicture => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Stamp a picture")
+                        .set_title(crate::i18n::tr_str("Stamp a picture"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -4758,7 +5009,7 @@ impl App {
             Message::AttachFile => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Attach a file")
+                        .set_title(crate::i18n::tr_str("Attach a file"))
                         .pick_file()
                         .await
                         .map(|f| f.path().to_path_buf())
@@ -4956,7 +5207,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save the comment summary as")
+                            .set_title(crate::i18n::tr_str("Save the comment summary as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -5011,7 +5262,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save attached file as")
+                            .set_title(crate::i18n::tr_str("Save attached file as"))
                             .set_file_name(name)
                             .save_file()
                             .await
@@ -5019,6 +5270,82 @@ impl App {
                     },
                     move |path| Message::AttachmentChosen(index, path),
                 )
+            }
+            Message::OpenAttachment(index) => {
+                let Some(doc) = &self.doc else { return Task::none() };
+                let Some(file) = doc.info.attachments.get(index).filter(|f| f.is_pdf()) else {
+                    return Task::none();
+                };
+                // A folder of Panna's own in the temporary folder, so the copy can't take the
+                // place of another program's file.
+                // A folder per document and file keeps the file's own name for its tab.
+                let dir = std::env::temp_dir()
+                    .join(format!("Panna-{}", std::process::id()))
+                    .join(format!("{}-{index}", doc.id));
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    self.notice = Some(format!("Couldn't make a copy to open: {e}"));
+                    return Task::none();
+                }
+                // Only the last part of the stored name, so it can't reach outside the folder.
+                let name = std::path::Path::new(&file.name)
+                    .file_name()
+                    .map_or_else(|| "attachment.pdf".into(), |n| n.to_os_string());
+                let path = dir.join(name);
+                let (tx, rx) = futures_channel::oneshot::channel();
+                doc.worker.save_attachment(index, path.clone(), move |result| {
+                    let _ = tx.send(result);
+                });
+                Task::perform(rx, move |result| {
+                    Message::AttachmentReady(path.clone(), result.unwrap_or(Err(SaveError::EngineCrashed)))
+                })
+            }
+            Message::AttachmentReady(path, Ok(())) => self.open(path, None),
+            Message::AttachmentReady(_, Err(e)) => {
+                self.notice = Some(e.to_string());
+                Task::none()
+            }
+            Message::NewPortfolio => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title(crate::i18n::tr_str("Choose the files for the PDF Portfolio"))
+                        .pick_files()
+                        .await
+                        .map(|files| files.iter().map(|f| f.path().to_path_buf()).collect())
+                        .unwrap_or_default()
+                },
+                Message::PortfolioFiles,
+            ),
+            Message::PortfolioFiles(files) if files.is_empty() => Task::none(),
+            Message::PortfolioFiles(files) => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title(crate::i18n::tr_str("Save the PDF Portfolio as"))
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("Portfolio.pdf")
+                        .save_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                move |target| Message::PortfolioTo(files.clone(), target),
+            ),
+            Message::PortfolioTo(_, None) => Task::none(),
+            Message::PortfolioTo(files, Some(target)) => {
+                self.notice = Some(format!("Packing {} files into a PDF Portfolio…", files.len()));
+                let (tx, rx) = futures_channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(make_portfolio_file(&files, &target).map(|()| target));
+                });
+                Task::perform(rx, |result| {
+                    Message::PortfolioMade(result.unwrap_or_else(|_| Err("It stopped unexpectedly.".into())))
+                })
+            }
+            Message::PortfolioMade(Ok(path)) => {
+                self.notice = None;
+                self.open(path, None)
+            }
+            Message::PortfolioMade(Err(e)) => {
+                self.notice = Some(e);
+                Task::none()
             }
             Message::AttachmentChosen(_, None) => Task::none(),
             Message::AttachmentChosen(index, Some(path)) => {
@@ -5152,7 +5479,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save PDF as")
+                            .set_title(crate::i18n::tr_str("Save PDF as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -5207,6 +5534,7 @@ impl App {
                     self.confirm = Some(Pending::Close);
                     return shown;
                 }
+                remove_attachment_copies();
                 self.reader.stop();
                 window::close(id)
             }
@@ -5319,7 +5647,7 @@ impl App {
             pages::Op::InsertFile => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Insert pages from")
+                        .set_title(crate::i18n::tr_str("Insert pages from"))
                         .add_filter("PDF documents", &["pdf", "PDF"])
                         .pick_file()
                         .await
@@ -5334,7 +5662,7 @@ impl App {
             pages::Op::Replace => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Replace pages with pages from")
+                        .set_title(crate::i18n::tr_str("Replace pages with pages from"))
                         .add_filter("PDF documents", &["pdf", "PDF"])
                         .pick_file()
                         .await
@@ -5448,7 +5776,7 @@ impl App {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save the files in")
+                                .set_title(crate::i18n::tr_str("Save the files in"))
                                 .pick_folder()
                                 .await
                                 .map(|f| f.path().to_path_buf())
@@ -5459,7 +5787,7 @@ impl App {
                     Task::perform(
                         async move {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save pages as")
+                                .set_title(crate::i18n::tr_str("Save pages as"))
                                 .add_filter("PDF documents", &["pdf"])
                                 .set_file_name(name)
                                 .save_file()
@@ -5501,7 +5829,7 @@ impl App {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Choose a certificate to trust")
+                            .set_title(crate::i18n::tr_str("Choose a certificate to trust"))
                             .add_filter(
                                 "Certificates",
                                 &["cer", "crt", "pem", "der", "CER", "CRT", "PEM", "DER"],
@@ -5587,7 +5915,7 @@ impl App {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save the scanned pages as")
+                            .set_title(crate::i18n::tr_str("Save the scanned pages as"))
                             .add_filter("PDF documents", &["pdf"])
                             .set_file_name("Scan.pdf")
                             .save_file()
@@ -5631,7 +5959,7 @@ impl App {
             signing::Event::Choose => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Choose a certificate file")
+                        .set_title(crate::i18n::tr_str("Choose a certificate file"))
                         .add_filter("Certificate files", &["p12", "pfx", "P12", "PFX"])
                         .pick_file()
                         .await
@@ -5713,7 +6041,7 @@ impl App {
                 Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Save the signed copy as")
+                            .set_title(crate::i18n::tr_str("Save the signed copy as"))
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(name)
                             .save_file()
@@ -5848,7 +6176,7 @@ impl App {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
-                                .set_title("Save the pictures in")
+                                .set_title(crate::i18n::tr_str("Save the pictures in"))
                                 .pick_folder()
                                 .await
                                 .map(|f| f.path().to_path_buf())
@@ -5868,7 +6196,7 @@ impl App {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Compare with")
+                            .set_title(crate::i18n::tr_str("Compare with"))
                             .add_filter("PDF documents", &["pdf", "PDF"])
                             .pick_file()
                             .await
@@ -5928,7 +6256,7 @@ impl App {
             add::Outcome::PickPicture => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Add a picture")
+                        .set_title(crate::i18n::tr_str("Add a picture"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -6008,7 +6336,7 @@ impl App {
             pictures::Outcome::PickReplacement => Task::perform(
                 async {
                     rfd::AsyncFileDialog::new()
-                        .set_title("Replace the picture with")
+                        .set_title(crate::i18n::tr_str("Replace the picture with"))
                         .add_filter(
                             "Pictures",
                             &[
@@ -6063,6 +6391,7 @@ impl App {
                         shown
                     }
                     None => {
+                        remove_attachment_copies();
                         self.reader.stop();
                         iced::exit()
                     }
@@ -6689,6 +7018,7 @@ impl App {
                 protected: false,
                 weak_protection: false,
                 attachments: Vec::new(),
+                portfolio: false,
                 marks: Default::default(),
                 layers: Vec::new(),
                 signatures: Vec::new(),
@@ -6760,6 +7090,76 @@ impl App {
             },
         );
         Task::batch([scroll, self.request_visible()])
+    }
+
+    /// Whether one finger on the pages draws or marks, as the mouse would, rather than
+    /// scrolling: when a tool that works by pressing on the page is on.
+    fn touch_draws(&self) -> bool {
+        (self.annotate.open && self.annotate.tool != annotate::Tool::Select)
+            || self.measure.on
+            || self.adder.on
+            || self.redactor.on
+            || self.preparer.on
+            || self.picture_editor.on
+            || self.snapping
+            || self.zoom_box
+    }
+
+    fn touch(&mut self, gesture: touch::Gesture) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        match gesture {
+            touch::Gesture::Pan(delta) => self.scroll_view(-delta),
+            touch::Gesture::Pinch {
+                factor,
+                center,
+                shift,
+            } => {
+                let zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+                if doc.layout.paged() || !zoom.is_finite() {
+                    let zoomed = self.set_zoom(zoom);
+                    return Task::batch([zoomed, self.scroll_view(-shift)]);
+                }
+                // Keep the point between the fingers under them.
+                let scale = zoom / self.zoom;
+                let anchor = doc
+                    .layout
+                    .unzoomed_y(self.viewport.offset_y + center.y, self.zoom);
+                self.viewport.offset_y = (doc.layout.zoomed_y(anchor, zoom) - center.y).max(0.0);
+                self.viewport.offset_x = ((self.viewport.offset_x + center.x) * scale - center.x).max(0.0);
+                self.zoom = zoom;
+                Task::batch([self.scroll_view(-shift), self.request_visible()])
+            }
+            touch::Gesture::Swipe(next) => {
+                // Only when the pages fit across, so a swipe isn't wanted to scroll sideways.
+                if doc.layout.content_width(self.zoom, 0.0) <= self.viewport.width + 1.0 {
+                    self.update(if next {
+                        Message::NextPage
+                    } else {
+                        Message::PrevPage
+                    })
+                } else {
+                    Task::none()
+                }
+            }
+            touch::Gesture::Cancel => {
+                self.annotate.draft = None;
+                self.selecting = false;
+                Task::none()
+            }
+        }
+    }
+
+    /// Moves the view by `by` pixels, right and down.
+    fn scroll_view(&mut self, by: iced::Vector) -> Task<Message> {
+        self.viewport.offset_x = (self.viewport.offset_x + by.x).max(0.0);
+        self.viewport.offset_y = (self.viewport.offset_y + by.y).max(0.0);
+        operation::scroll_to(
+            scroll_id(),
+            AbsoluteOffset {
+                x: self.viewport.offset_x,
+                y: self.viewport.offset_y,
+            },
+        )
     }
 
     fn set_zoom(&mut self, zoom: f32) -> Task<Message> {
@@ -7423,6 +7823,13 @@ impl App {
 
     /// The rows of a menu, enabled and ticked to match the app's state.
     fn menu_entries(&self, which: menu::Menu) -> Vec<menu::Entry<Message>> {
+        let mut entries = self.default_menu_entries(which);
+        relabel_keys(&mut entries, &self.settings.keys);
+        entries
+    }
+
+    /// The rows of a menu, enabled and ticked to match the app's state, with the default keys.
+    fn default_menu_entries(&self, which: menu::Menu) -> Vec<menu::Entry<Message>> {
         use menu::{Entry::Separator, check, item, plain, sub};
         use toolbar::Event as T;
         let has_doc = self.doc.as_ref().is_some_and(|d| !d.pages.is_empty());
@@ -7518,6 +7925,12 @@ impl App {
                     "Combine files…",
                     "",
                     Some(Message::Combine(combine::Event::Open)),
+                ),
+                item(
+                    Icon::Paperclip,
+                    "Create a PDF Portfolio…",
+                    "",
+                    Some(Message::NewPortfolio),
                 ),
                 item(
                     Icon::Batch,
@@ -7782,7 +8195,15 @@ impl App {
                     ),
                     Separator,
                     check(
-                        "Scroll automatically",
+                        if self.auto_scroll {
+                            format!(
+                                "Scrolling {}, speed {} (0–9, ↑ ↓, − turns)",
+                                if self.scroll_up { "up" } else { "down" },
+                                self.scroll_speed
+                            )
+                        } else {
+                            "Scroll automatically".to_owned()
+                        },
                         k("Shift+H"),
                         self.auto_scroll,
                         on(Message::AutoScroll),
@@ -8053,7 +8474,7 @@ impl App {
                 ),
             ],
             menu::Menu::Help => vec![
-                plain("Keyboard shortcuts", "", Some(Message::Shortcuts(true))),
+                plain("Keyboard shortcuts…", "", Some(Message::Shortcuts(true))),
                 Separator,
                 item(Icon::Properties, "About Panna", "", Some(Message::About)),
             ],
@@ -8071,7 +8492,7 @@ impl App {
             (Status::Error(e), _) => center(
                 column![
                     text(e.as_str()),
-                    button("Open another file").on_press(Message::OpenDialog)
+                    button(crate::i18n::text("Open another file")).on_press(Message::OpenDialog)
                 ]
                 .spacing(12)
                 .align_x(Center),
@@ -8089,15 +8510,15 @@ impl App {
                     } else {
                         "Enter the password to open it."
                     }),
-                    text_input("Password", input)
+                    text_input(crate::i18n::tr_str("Password"), input)
                         .id(password_id())
                         .secure(true)
                         .on_input(Message::PasswordInput)
                         .on_submit(Message::PasswordSubmit)
                         .width(280),
                     row![
-                        button("Open").on_press(Message::PasswordSubmit),
-                        button("Choose another file").on_press(Message::OpenDialog),
+                        button(crate::i18n::text("Open")).on_press(Message::PasswordSubmit),
+                        button(crate::i18n::text("Choose another file")).on_press(Message::OpenDialog),
                     ]
                     .spacing(8),
                 ]
@@ -8314,6 +8735,7 @@ impl App {
                     appearance: self.settings.appearance,
                     zoom: self.settings.open_zoom,
                     unit: self.settings.unit,
+                    language: self.settings.language,
                     single_keys: self.settings.single_keys,
                     present_loop: self.settings.present_loop,
                     present_seconds: self.settings.present_seconds,
@@ -8366,7 +8788,7 @@ impl App {
                 container(
                     column![
                         text(notice.as_str()),
-                        button("OK").on_press(Message::DismissNotice)
+                        button(crate::i18n::text("OK")).on_press(Message::DismissNotice)
                     ]
                     .spacing(12)
                     .width(360),
@@ -8429,7 +8851,10 @@ impl App {
             );
         }
         if self.shortcuts {
-            dialogs.push(modal(shortcuts_card(), Message::Shortcuts(false)));
+            dialogs.push(modal(
+                keymap::card(&self.settings.keys, self.keys_waiting, self.keys_note.as_deref()),
+                Message::Shortcuts(false),
+            ));
         }
         if let Some(recorder) = &self.recorder {
             let card = container(
@@ -8452,10 +8877,10 @@ impl App {
                     .size(13),
                     row![
                         space::horizontal(),
-                        button("Cancel")
+                        button(crate::i18n::text("Cancel"))
                             .style(button::secondary)
                             .on_press(Message::RecordCancel),
-                        button("Stop and add").on_press(Message::RecordStop),
+                        button(crate::i18n::text("Stop and add")).on_press(Message::RecordStop),
                     ]
                     .spacing(8),
                 ]
@@ -8653,14 +9078,14 @@ impl App {
                 text("Your comments, drawings and form entries will be lost if you don't save them.")
                     .style(text::secondary),
                 row![
-                    button("Don't save")
+                    button(crate::i18n::text("Don't save"))
                         .style(button::secondary)
                         .on_press(Message::Confirm(Choice::Discard)),
                     space::horizontal(),
-                    button("Cancel")
+                    button(crate::i18n::text("Cancel"))
                         .style(button::secondary)
                         .on_press(Message::Confirm(Choice::Cancel)),
-                    button("Save").on_press(Message::Confirm(Choice::Save)),
+                    button(crate::i18n::text("Save")).on_press(Message::Confirm(Choice::Save)),
                 ]
                 .spacing(8),
             ]
@@ -8697,14 +9122,14 @@ impl App {
                 )),
                 text("Some very old PDF readers can't open AES-256 files.").style(text::secondary),
                 row![
-                    button("Cancel")
+                    button(crate::i18n::text("Cancel"))
                         .style(button::secondary)
                         .on_press(Message::Strengthen(None)),
                     space::horizontal(),
                     button(text(format!("Keep {method}")))
                         .style(button::secondary)
                         .on_press(Message::Strengthen(Some(false))),
-                    button("Use AES-256").on_press(Message::Strengthen(Some(true))),
+                    button(crate::i18n::text("Use AES-256")).on_press(Message::Strengthen(Some(true))),
                 ]
                 .spacing(8),
             ]
@@ -8810,6 +9235,7 @@ impl App {
                 unsaved: &self.annotate.items,
                 removed: &self.annotate.removed,
                 attachments: &doc.info.attachments,
+                portfolio: doc.info.portfolio,
                 signatures: &doc.info.signatures,
                 trusted: &self.trusted.certs,
                 layers: &doc.info.layers,
@@ -9244,11 +9670,10 @@ impl App {
             .width(Fill)
             .height(Fill);
         // A darker backdrop so page edges stay visible in light and dark themes.
-        container(pages)
-            .style(|theme: &iced::Theme| {
-                container::Style::default().background(theme.extended_palette().background.strong.color)
-            })
-            .into()
+        let pages = container(pages).style(|theme: &iced::Theme| {
+            container::Style::default().background(theme.extended_palette().background.strong.color)
+        });
+        touch::touch(pages, self.touch_draws(), Message::Touch).into()
     }
 }
 

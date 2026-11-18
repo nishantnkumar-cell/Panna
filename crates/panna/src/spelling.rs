@@ -6,9 +6,10 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use iced::widget::{Column, button, column, container, rich_text, row, space, span, text, text_input};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, container, pick_list, rich_text, row, space, span, text_input};
 use iced::{Center, Color, Element, Fill};
-use panna_core::spell::{Dictionary, misspelled};
+use panna_core::spell::{Dictionary, Language, misspelled};
 
 use crate::Message;
 use crate::annotate::Picked;
@@ -42,6 +43,7 @@ pub struct Spelling {
     /// Words ignored everywhere, in lower case: the personal dictionary's and those ignored
     /// here.
     ignored: HashSet<String>,
+    pub language: Language,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +54,7 @@ pub enum Event {
     Ignore,
     IgnoreAll,
     Add,
+    Language(Language),
     Close,
 }
 
@@ -70,7 +73,7 @@ pub fn input_id() -> iced::widget::Id {
 }
 
 impl Spelling {
-    pub fn new(sources: Vec<(Source, String)>, words: &[String]) -> Self {
+    pub fn new(sources: Vec<(Source, String)>, words: &[String], language: Language) -> Self {
         let mut state = Spelling {
             sources,
             issues: Vec::new(),
@@ -78,6 +81,7 @@ impl Spelling {
             change_to: String::new(),
             suggestions: Vec::new(),
             ignored: words.iter().map(|w| w.to_lowercase()).collect(),
+            language,
         };
         state.scan(None);
         state
@@ -86,7 +90,7 @@ impl Spelling {
     /// Finds every misspelling again, then goes to the first after `after` (a source and a
     /// place in its text), or the first of all.
     fn scan(&mut self, after: Option<(usize, usize)>) {
-        let dict = Dictionary::english();
+        let dict = Dictionary::get(self.language);
         self.issues = self
             .sources
             .iter()
@@ -113,7 +117,7 @@ impl Spelling {
     fn suggest(&mut self) {
         match self.issues.get(self.current) {
             Some(issue) => {
-                self.suggestions = Dictionary::english().suggest(&issue.word, 6);
+                self.suggestions = Dictionary::get(self.language).suggest(&issue.word, 6);
                 self.change_to = self
                     .suggestions
                     .first()
@@ -179,6 +183,11 @@ impl Spelling {
                 )));
                 return (Some(self), Action::Replace(source, new));
             }
+            Event::Language(language) => {
+                self.language = language;
+                let at = self.issues.get(self.current).map(|i| (i.source, i.range.start));
+                self.scan(at);
+            }
             Event::Close => return (None, Action::Nothing),
         }
         (Some(self), Action::Nothing)
@@ -188,7 +197,19 @@ impl Spelling {
 /// The Check spelling card.
 pub fn card(state: &Spelling) -> Element<'_, Message> {
     let ev = Message::Spelling;
-    let mut body = column![text("Check spelling").size(16)].spacing(10).width(540);
+    let mut body = column![
+        row![
+            text("Check spelling").size(16),
+            space::horizontal(),
+            pick_list(Language::ALL, Some(state.language), move |l| ev(Event::Language(
+                l
+            )))
+            .text_size(13),
+        ]
+        .align_y(Center)
+    ]
+    .spacing(10)
+    .width(540);
     let Some(issue) = state.issues.get(state.current) else {
         let done = if state.sources.is_empty() {
             "There's no text in comments or form fields to check."
@@ -198,7 +219,7 @@ pub fn card(state: &Spelling) -> Element<'_, Message> {
         body = body.push(text(done).size(13));
         body = body.push(row![
             space::horizontal(),
-            button("Done").on_press(ev(Event::Close))
+            button(crate::i18n::text("Done")).on_press(ev(Event::Close))
         ]);
         return container(body).padding(16).style(container::rounded_box).into();
     };
@@ -286,20 +307,20 @@ pub fn card(state: &Spelling) -> Element<'_, Message> {
     let can_change = !state.change_to.is_empty() && state.change_to != issue.word;
     body = body.push(
         row![
-            button("Ignore")
+            button(crate::i18n::text("Ignore"))
                 .style(button::secondary)
                 .on_press(ev(Event::Ignore)),
-            button("Ignore all")
+            button(crate::i18n::text("Ignore all"))
                 .style(button::secondary)
                 .on_press(ev(Event::IgnoreAll)),
-            button("Add to dictionary")
+            button(crate::i18n::text("Add to dictionary"))
                 .style(button::secondary)
                 .on_press(ev(Event::Add)),
             space::horizontal(),
-            button("Close")
+            button(crate::i18n::text("Close"))
                 .style(button::secondary)
                 .on_press(ev(Event::Close)),
-            button("Change").on_press_maybe(can_change.then_some(ev(Event::Change))),
+            button(crate::i18n::text("Change")).on_press_maybe(can_change.then_some(ev(Event::Change))),
         ]
         .spacing(6),
     );
@@ -319,7 +340,7 @@ mod tests {
                 "a recieve and recieve, also qwzx".to_owned(),
             ),
         ];
-        let state = Spelling::new(sources, &["qwzx".to_owned()]);
+        let state = Spelling::new(sources, &["qwzx".to_owned()], Language::EnglishUs);
         assert_eq!(state.issues.len(), 3);
         assert_eq!(state.change_to, "The");
         let (state, action) = state.update(Event::Change);

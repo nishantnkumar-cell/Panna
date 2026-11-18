@@ -7,7 +7,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iced::widget::{button, checkbox, column, pick_list, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, pick_list, row, space, text_input};
 use iced::{Element, Theme};
 use panna_core::{Corner, SignOptions, Visible};
 
@@ -71,12 +72,12 @@ impl Place {
 
 impl std::fmt::Display for Place {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self.0 {
+        f.write_str(&crate::i18n::translate(match self.0 {
             Corner::BottomRight => "bottom right",
             Corner::BottomLeft => "bottom left",
             Corner::TopRight => "top right",
             Corner::TopLeft => "top left",
-        })
+        }))
     }
 }
 
@@ -127,7 +128,7 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
         ),
         row![
             text(file_name).size(13).width(iced::Fill),
-            button("Choose…")
+            button(crate::i18n::text("Choose…"))
                 .style(button::secondary)
                 .on_press(ev(Event::Choose)),
         ]
@@ -141,18 +142,21 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
             pick_list(state.store.as_slice(), state.stored.as_ref(), move |v| {
                 ev(Event::Stored(v))
             })
-            .placeholder("Or a certificate installed in Windows")
+            .placeholder(crate::i18n::tr_str("Or a certificate installed in Windows"))
             .text_size(13)
             .width(iced::Fill),
         );
     }
     if state.stored.is_none() {
         body = body.push(
-            text_input("The certificate file's password", &state.password)
-                .secure(true)
-                .id(input_id())
-                .on_input(move |v| ev(Event::Password(v)))
-                .on_submit(ev(Event::Go)),
+            text_input(
+                crate::i18n::tr_str("The certificate file's password"),
+                &state.password,
+            )
+            .secure(true)
+            .id(input_id())
+            .on_input(move |v| ev(Event::Password(v)))
+            .on_submit(ev(Event::Go)),
         );
     }
     body = body.extend([
@@ -163,7 +167,7 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
         .on_input(move |v| ev(Event::Reason(v)))
         .on_submit(ev(Event::Go))
         .into(),
-        text_input("Place (optional)", &state.location)
+        text_input(crate::i18n::tr_str("Place (optional)"), &state.location)
             .on_input(move |v| ev(Event::Location(v)))
             .on_submit(ev(Event::Go))
             .into(),
@@ -191,8 +195,9 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
             .align_y(iced::Center),
         );
     }
-    let certify = checkbox(state.certify && state.can_certify)
-        .label("Certify: later changes other than filling in forms and signing will show as not allowed");
+    let certify = checkbox(state.certify && state.can_certify).label(crate::i18n::tr_str(
+        "Certify: later changes other than filling in forms and signing will show as not allowed",
+    ));
     body = body.push(if state.can_certify {
         certify.on_toggle(move |v| ev(Event::Certify(v)))
     } else {
@@ -209,10 +214,10 @@ pub fn card<'a>(state: &'a Signing) -> Element<'a, Message> {
     body = body.push(
         row![
             space::horizontal(),
-            button("Cancel")
+            button(crate::i18n::text("Cancel"))
                 .style(button::secondary)
                 .on_press(ev(Event::Cancel)),
-            button("Sign and save as…")
+            button(crate::i18n::text("Sign and save as…"))
                 .on_press_maybe((state.file.is_some() || state.stored.is_some()).then_some(ev(Event::Go)),),
         ]
         .spacing(8),

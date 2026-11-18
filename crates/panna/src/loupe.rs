@@ -2,8 +2,9 @@
 //! magnifies the page around the pointer, and one with the whole page and a box for the part
 //! in the window, which can be clicked or dragged to move the view.
 
+use crate::i18n::text;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
-use iced::widget::{Stack, column, container, image, pick_list, row, text};
+use iced::widget::{Stack, column, container, image, pick_list, row};
 use iced::{Center, Element, Point, Rectangle, Renderer, Size, Theme, mouse};
 
 use crate::Message;

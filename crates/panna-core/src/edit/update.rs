@@ -107,6 +107,11 @@ impl Update {
         self.crypt = Some(crypt);
     }
 
+    /// Points the trailer's `/Info` at another object.
+    pub(crate) fn set_info(&mut self, value: Vec<u8>) {
+        self.trailer.info = Some(value);
+    }
+
     /// Reserves an object number for a new object.
     pub(crate) fn alloc(&mut self) -> u32 {
         let id = self.next;

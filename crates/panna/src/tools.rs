@@ -1,7 +1,8 @@
 //! The All tools card: the document tools that don't need a place on the toolbar, each with
 //! its icon and name.
 
-use iced::widget::{button, column, container, row, space, text};
+use crate::i18n::text;
+use iced::widget::{button, column, container, row, space};
 use iced::{Element, Theme};
 
 use crate::icons::{self, Icon};
@@ -210,7 +211,7 @@ pub fn card<'a>(has_form: bool, has_doc: bool) -> Element<'a, Message> {
             row![side(tools), side(right)].spacing(12),
             row![
                 space::horizontal(),
-                button("Close")
+                button(crate::i18n::text("Close"))
                     .style(button::secondary)
                     .on_press(Message::AllTools(false)),
             ],

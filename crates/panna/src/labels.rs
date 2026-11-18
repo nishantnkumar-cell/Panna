@@ -3,7 +3,8 @@
 
 use std::fmt;
 
-use iced::widget::{button, column, container, pick_list, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, column, container, pick_list, row, space, text_input};
 use iced::{Center, Element};
 use panna_core::{LabelRange, LabelStyle};
 
@@ -26,14 +27,14 @@ impl StyleChoice {
 
 impl fmt::Display for StyleChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self.0 {
+        f.write_str(&crate::i18n::translate(match self.0 {
             LabelStyle::Decimal => "1, 2, 3",
             LabelStyle::LowerRoman => "i, ii, iii",
             LabelStyle::UpperRoman => "I, II, III",
             LabelStyle::LowerLetters => "a, b, c",
             LabelStyle::UpperLetters => "A, B, C",
             LabelStyle::None => "No number",
-        })
+        }))
     }
 }
 
@@ -228,10 +229,10 @@ pub fn card(state: &Labelling) -> Element<'_, Message> {
             text(sample).size(13).style(text::secondary),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(Event::Cancel)),
-                button("Apply").on_press_maybe(ranges.is_some().then_some(ev(Event::Go))),
+                button(crate::i18n::text("Apply")).on_press_maybe(ranges.is_some().then_some(ev(Event::Go))),
             ]
             .spacing(8),
         ]

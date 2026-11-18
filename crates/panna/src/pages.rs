@@ -3,7 +3,8 @@
 //! Each tool works on the current page and becomes a new page list for the worker, which
 //! rewrites the document in memory until it is saved.
 
-use iced::widget::{button, checkbox, column, container, radio, row, slider, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, container, radio, row, slider, space, text_input};
 use iced::{Element, Theme};
 use panna_core::{PageSize, PageSource};
 
@@ -352,10 +353,10 @@ pub fn extract_card<'a>(state: &Extracting, count: usize, bookmarks: usize) -> E
             choices,
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(ExtractEvent::Cancel)),
-                button("Extract…").on_press_maybe(ok.then_some(ev(ExtractEvent::Go))),
+                button(crate::i18n::text("Extract…")).on_press_maybe(ok.then_some(ev(ExtractEvent::Go))),
             ]
             .spacing(8),
         ]
@@ -465,17 +466,17 @@ pub fn crop_card<'a>(state: &Cropping) -> Element<'a, Message> {
             row![field(2, "Bottom"), field(3, "Left")].spacing(16),
             hint,
             checkbox(white)
-                .label("Remove white margins")
+                .label(crate::i18n::tr_str("Remove white margins"))
                 .text_size(13)
                 .on_toggle(move |v| ev(CropEvent::White(v))),
             radio("This page", false, all, |v| ev(CropEvent::All(v))),
             radio("All pages", true, all, |v| ev(CropEvent::All(v))),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(CropEvent::Cancel)),
-                button("Crop").on_press_maybe(ready.then_some(ev(CropEvent::Go))),
+                button(crate::i18n::text("Crop")).on_press_maybe(ready.then_some(ev(CropEvent::Go))),
             ]
             .spacing(8),
         ]
@@ -707,7 +708,7 @@ pub fn mark_card<'a>(state: &Marking, count: usize) -> Element<'a, Message> {
             ),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(MarkEvent::Cancel)),
                 button(if state.existing && state.replace { "Update" } else { "Add" })
@@ -751,17 +752,17 @@ pub fn flatten_card<'a>(state: Flattening) -> Element<'a, Message> {
             )
             .size(13),
             checkbox(state.comments)
-                .label("Comments, highlights, drawings and stamps")
+                .label(crate::i18n::tr_str("Comments, highlights, drawings and stamps"))
                 .on_toggle(move |v| ev(FlattenEvent::Comments(v))),
             checkbox(state.fields)
-                .label("Form fields, with what's filled in")
+                .label(crate::i18n::tr_str("Form fields, with what's filled in"))
                 .on_toggle(move |v| ev(FlattenEvent::Fields(v))),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(FlattenEvent::Cancel)),
-                button("Flatten").on_press_maybe(any.then_some(ev(FlattenEvent::Go))),
+                button(crate::i18n::text("Flatten")).on_press_maybe(any.then_some(ev(FlattenEvent::Go))),
             ]
             .spacing(8),
         ]
@@ -861,10 +862,10 @@ pub fn replace_card(state: &Replacing) -> Element<'_, Message> {
             .style(text::secondary),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(ReplaceEvent::Cancel)),
-                button("Replace").on_press_maybe(ok.then_some(ev(ReplaceEvent::Go))),
+                button(crate::i18n::text("Replace")).on_press_maybe(ok.then_some(ev(ReplaceEvent::Go))),
             ]
             .spacing(8),
         ]
@@ -1102,7 +1103,7 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
         Some((name, _)) => column![
             row![
                 text(format!("Picture: {name}")).size(13).width(iced::Fill),
-                button("Remove")
+                button(crate::i18n::text("Remove"))
                     .style(button::secondary)
                     .on_press(ev(WatermarkEvent::RemovePicture)),
             ]
@@ -1121,11 +1122,14 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
         .into(),
         None => column![
             row![
-                text_input("Text, such as DRAFT or CONFIDENTIAL", &state.text)
-                    .id(watermark_input_id())
-                    .on_input(move |v| ev(WatermarkEvent::Text(v)))
-                    .on_submit(ev(WatermarkEvent::Go)),
-                button("Picture…")
+                text_input(
+                    crate::i18n::tr_str("Text, such as DRAFT or CONFIDENTIAL"),
+                    &state.text
+                )
+                .id(watermark_input_id())
+                .on_input(move |v| ev(WatermarkEvent::Text(v)))
+                .on_submit(ev(WatermarkEvent::Go)),
+                button(crate::i18n::text("Picture…"))
                     .style(button::secondary)
                     .on_press(ev(WatermarkEvent::ChoosePicture)),
             ]
@@ -1167,7 +1171,7 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
             )),
             row![
                 checkbox(state.paper.is_some())
-                    .label("Page colour")
+                    .label(crate::i18n::tr_str("Page colour"))
                     .on_toggle(move |v| ev(WatermarkEvent::UsePaper(v))),
                 swatches(&PAPERS, &PAPER_NAMES, state.paper, move |i| ev(
                     WatermarkEvent::Paper(i)
@@ -1193,7 +1197,7 @@ pub fn watermark_card<'a>(state: &Watermarking, count: usize) -> Element<'a, Mes
             ),
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(WatermarkEvent::Cancel)),
                 button(if state.existing && state.replace {

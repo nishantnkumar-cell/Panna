@@ -1,16 +1,18 @@
 //! The Search a folder card, as Acrobat's Advanced Search: finds words in every PDF in a
 //! folder (and the folders inside it, if wanted), one file at a time so it can show how far
 //! it has got and stop, and lists each match with the text around it. Picking one opens the
-//! file at that page.
+//! file at that page. Each file's text can be kept in an index on this computer, so searching
+//! it again while it's unchanged needn't read it.
 
 use std::path::PathBuf;
 
+use crate::i18n::text;
 use iced::widget::{
-    Column, button, checkbox, column, container, rich_text, row, scrollable, space, span, text, text_input,
+    Column, button, checkbox, column, container, rich_text, row, scrollable, space, span, text_input,
 };
 use iced::{Center, Color, Element, Fill, Task};
 use panna_core::FindOptions;
-use panna_core::folder::Found;
+use panna_core::folder::{Found, Index};
 
 use crate::Message;
 use crate::icons::{self, Icon};
@@ -25,7 +27,16 @@ pub struct FolderSearch {
     pub options: FindOptions,
     pub subfolders: bool,
     pub folder: Option<PathBuf>,
+    /// Keep each file's text in the index, and read it from there.
+    pub use_index: bool,
+    /// Files the index holds, and its size in bytes.
+    index_size: (usize, u64),
     run: Option<Run>,
+}
+
+/// Where the index is kept: in the system's cache folder for Panna.
+fn index() -> Option<Index> {
+    crate::settings::cache_dir().map(|d| Index::new(d.join("search-index")))
 }
 
 impl Default for FolderSearch {
@@ -35,6 +46,8 @@ impl Default for FolderSearch {
             options: FindOptions::default(),
             subfolders: true,
             folder: None,
+            use_index: true,
+            index_size: (0, 0),
             run: None,
         }
     }
@@ -47,6 +60,8 @@ struct Run {
     done: usize,
     /// Each file with matches, and its matches.
     found: Vec<(PathBuf, Vec<Found>)>,
+    /// Files whose text came from the index.
+    from_index: usize,
     failed: Vec<(String, String)>,
     stopped: bool,
 }
@@ -67,7 +82,9 @@ pub enum Event {
     Choose,
     Chosen(Option<PathBuf>),
     Search,
-    Done(usize, Result<Vec<Found>, String>),
+    Done(usize, Result<(Vec<Found>, bool), String>),
+    UseIndex(bool),
+    ClearIndex,
     Stop,
     /// Opens file `file` of the results at `page`.
     Show(PathBuf, usize),
@@ -80,6 +97,11 @@ impl FolderSearch {
         if let Some(run) = &mut self.run {
             run.stopped = true;
         }
+    }
+
+    /// Measures the index again, for the card.
+    pub fn refresh_index_size(&mut self) {
+        self.index_size = index().map_or((0, 0), |i| i.size());
     }
 
     pub fn running(&self) -> bool {
@@ -98,11 +120,21 @@ impl FolderSearch {
             Event::MatchCase(on) => self.options.match_case = on,
             Event::WholeWord(on) => self.options.whole_word = on,
             Event::Subfolders(on) => self.subfolders = on,
+            Event::UseIndex(on) => self.use_index = on,
+            Event::ClearIndex => {
+                if !self.running() {
+                    if let Some(index) = index() {
+                        // What couldn't be removed shows in the size that's left.
+                        let _ = index.clear();
+                    }
+                    self.refresh_index_size();
+                }
+            }
             Event::Choose => {
                 let task = Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Choose the folder of PDFs to search")
+                            .set_title(crate::i18n::tr_str("Choose the folder of PDFs to search"))
                             .pick_folder()
                             .await
                             .map(|f| f.path().to_path_buf())
@@ -140,6 +172,7 @@ impl FolderSearch {
                     files,
                     done: 0,
                     found: Vec::new(),
+                    from_index: 0,
                     failed,
                     stopped: false,
                 });
@@ -151,8 +184,11 @@ impl FolderSearch {
                     && index == run.done
                 {
                     let file = run.files.get(index).cloned().unwrap_or_default();
+                    if let Ok((_, true)) = &result {
+                        run.from_index += 1;
+                    }
                     match result {
-                        Ok(found) if !found.is_empty() => run.found.push((file, found)),
+                        Ok((found, _)) if !found.is_empty() => run.found.push((file, found)),
                         Ok(_) => {}
                         Err(e) => run.failed.push((
                             file.file_name()
@@ -162,6 +198,9 @@ impl FolderSearch {
                         )),
                     }
                     run.done += 1;
+                    if run.finished() {
+                        self.refresh_index_size();
+                    }
                 }
                 let task = self.next();
                 return (Some(self), task);
@@ -206,9 +245,16 @@ impl FolderSearch {
             return Task::none();
         };
         let (index, query, options) = (run.done, run.query.clone(), self.options);
+        let kept = self.use_index.then(self::index).flatten();
         let (tx, rx) = futures_channel::oneshot::channel();
         std::thread::spawn(move || {
-            let result = panna_core::folder::search(&file, &query, options, panna_core::Limits::default());
+            let result = panna_core::folder::search_indexed(
+                &file,
+                &query,
+                options,
+                panna_core::Limits::default(),
+                kept.as_ref(),
+            );
             let _ = tx.send(result);
         });
         Task::perform(rx, move |result| {
@@ -236,7 +282,7 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         text("Search a folder of PDFs").size(16),
         row![
             icons::glyph::<Message>(Icon::Search, true),
-            text_input("Words to find", &state.query)
+            text_input(crate::i18n::tr_str("Words to find"), &state.query)
                 .id(input_id())
                 .on_input(move |q| ev(Event::Query(q)))
                 .on_submit(ev(Event::Search))
@@ -246,7 +292,7 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         .align_y(Center),
         row![
             text(folder).size(13).width(Fill),
-            button("Choose folder…")
+            button(crate::i18n::text("Choose folder…"))
                 .style(button::secondary)
                 .on_press_maybe((!running).then_some(ev(Event::Choose))),
         ]
@@ -254,16 +300,36 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         .align_y(Center),
         row![
             checkbox(state.subfolders)
-                .label("Include folders inside it")
+                .label(crate::i18n::tr_str("Include folders inside it"))
                 .on_toggle(move |v| ev(Event::Subfolders(v))),
             checkbox(state.options.match_case)
-                .label("Match case")
+                .label(crate::i18n::tr_str("Match case"))
                 .on_toggle(move |v| ev(Event::MatchCase(v))),
             checkbox(state.options.whole_word)
-                .label("Whole words")
+                .label(crate::i18n::tr_str("Whole words"))
                 .on_toggle(move |v| ev(Event::WholeWord(v))),
         ]
         .spacing(14),
+        row![
+            checkbox(state.use_index)
+                .label(crate::i18n::tr_str(
+                    "Keep an index on this computer for faster searches"
+                ))
+                .on_toggle(move |v| ev(Event::UseIndex(v)))
+                .width(Fill),
+            button(
+                text(if state.index_size.0 == 0 {
+                    "Index is empty".to_owned()
+                } else {
+                    format!("Clear index ({})", crate::sidebar::size_text(state.index_size.1))
+                })
+                .wrapping(text::Wrapping::None)
+            )
+            .style(button::secondary)
+            .on_press_maybe((state.index_size.0 > 0 && !running).then_some(ev(Event::ClearIndex))),
+        ]
+        .spacing(8)
+        .align_y(Center),
     ]
     .spacing(10)
     .width(560);
@@ -285,8 +351,13 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
             } else {
                 ""
             };
+            let indexed = if run.from_index > 0 {
+                format!(", {} read from the index", run.from_index)
+            } else {
+                String::new()
+            };
             format!(
-                "{matches} {} in {} of {} files{stopped}",
+                "{matches} {} in {} of {} files{stopped}{indexed}",
                 if matches == 1 { "match" } else { "matches" },
                 run.found.len(),
                 run.done
@@ -357,13 +428,16 @@ pub fn card(state: &FolderSearch) -> Element<'_, Message> {
         row![
             space::horizontal(),
             if running {
-                button("Stop").style(button::secondary).on_press(ev(Event::Stop))
+                button(crate::i18n::text("Stop"))
+                    .style(button::secondary)
+                    .on_press(ev(Event::Stop))
             } else {
-                button("Close")
+                button(crate::i18n::text("Close"))
                     .style(button::secondary)
                     .on_press(ev(Event::Close))
             },
-            button("Search").on_press_maybe(state.can_search().then_some(ev(Event::Search))),
+            button(crate::i18n::text("Search"))
+                .on_press_maybe(state.can_search().then_some(ev(Event::Search))),
         ]
         .spacing(8),
     );
@@ -386,6 +460,7 @@ mod tests {
             files: vec!["a.pdf".into(), "b.pdf".into(), "c.pdf".into()],
             done: 0,
             found: Vec::new(),
+            from_index: 0,
             failed: Vec::new(),
             stopped: false,
         });
@@ -396,14 +471,17 @@ mod tests {
             after: String::new(),
         };
         // Finished files are taken in order; a late answer for another file is ignored.
-        let (state, _) = state.update(Event::Done(0, Ok(vec![hit.clone()])));
-        let (state, _) = state.unwrap().update(Event::Done(5, Ok(vec![hit.clone()])));
-        let (state, _) = state.unwrap().update(Event::Done(1, Ok(Vec::new())));
+        let (state, _) = state.update(Event::Done(0, Ok((vec![hit.clone()], true))));
+        let (state, _) = state
+            .unwrap()
+            .update(Event::Done(5, Ok((vec![hit.clone()], false))));
+        let (state, _) = state.unwrap().update(Event::Done(1, Ok((Vec::new(), false))));
         let (state, _) = state.unwrap().update(Event::Done(2, Err("locked".into())));
         let state = state.unwrap();
         let run = state.run.as_ref().unwrap();
         assert!(run.finished());
         assert_eq!(run.found.len(), 1);
+        assert_eq!(run.from_index, 1);
         assert_eq!(run.found[0].0, PathBuf::from("a.pdf"));
         assert_eq!(run.failed, [("c.pdf".to_owned(), "locked".to_owned())]);
         assert!(!state.running());

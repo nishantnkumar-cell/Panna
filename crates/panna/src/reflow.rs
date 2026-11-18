@@ -6,7 +6,8 @@
 /// type sizes.
 pub type Reflowed = (u64, usize, std::sync::Arc<Vec<(String, f32)>>);
 
-use iced::widget::{Column, column, container, row, scrollable, space, text};
+use crate::i18n::text;
+use iced::widget::{Column, column, container, row, scrollable, space};
 use iced::{Center, Element, Fill, font};
 
 use crate::Message;

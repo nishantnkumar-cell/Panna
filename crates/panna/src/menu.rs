@@ -5,9 +5,8 @@
 //! title and row has a fixed size, which is what lets the panel and its submenus be placed
 //! without measuring anything.
 
-use iced::widget::{
-    Column, Row, button, container, mouse_area, opaque, pin, rich_text, row, space, span, text,
-};
+use crate::i18n::text;
+use iced::widget::{Column, Row, button, container, mouse_area, opaque, pin, rich_text, row, space, span};
 use iced::{Center, Element, Fill, Point, Size, Theme};
 
 use crate::icons::{self, Icon};
@@ -90,7 +89,7 @@ impl Menu {
     }
 
     fn title_width(self) -> f32 {
-        self.name().chars().count() as f32 * 7.2 + 20.0
+        crate::i18n::translate(self.name()).chars().count() as f32 * 7.2 + 20.0
     }
 
     /// Left edge of the title, and so of the menu under it.
@@ -341,7 +340,9 @@ impl State {
             let (before, rest) = name.split_at(k);
             let (letter, after) = rest.split_at(1);
             // macOS has no Alt key letters for menus, so nothing is underlined there.
-            let label: Element<'a, M> = if cfg!(target_os = "macos") {
+            // In another language the English letter isn't in the name: Alt still opens the menu.
+            let translated = crate::i18n::language() != crate::i18n::Language::English;
+            let label: Element<'a, M> = if cfg!(target_os = "macos") || translated {
                 text(name).size(13).into()
             } else {
                 rich_text::<(), M, Theme, iced::Renderer>([

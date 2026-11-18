@@ -793,7 +793,11 @@ pub(crate) fn rebuild(
                         }
                         let script = runs_script(&annot);
                         if (clean.comments && subtype != "Link" && subtype != "Widget")
-                            || (clean.attachments && subtype == "FileAttachment")
+                            || (clean.attachments
+                                && matches!(
+                                    subtype.as_str(),
+                                    "FileAttachment" | "Screen" | "Movie" | "RichMedia" | "3D"
+                                ))
                             || (clean.scripts && subtype == "Link" && script)
                         {
                             continue;
@@ -1846,7 +1850,7 @@ pub(crate) fn page_content(page: &Dict<'_>) -> Vec<u8> {
     out
 }
 
-fn flate_stream(dict: &str, data: &[u8]) -> Vec<u8> {
+pub(super) fn flate_stream(dict: &str, data: &[u8]) -> Vec<u8> {
     let packed = super::pack::deflate(data);
     let mut body = format!(
         "<< {dict}/Filter /FlateDecode /Length {} >>\nstream\n",

@@ -4,7 +4,8 @@
 
 use std::fmt;
 
-use iced::widget::{button, checkbox, column, container, pick_list, row, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, container, pick_list, row, space, text_input};
 use iced::{Center, Element};
 
 use crate::Message;
@@ -46,11 +47,11 @@ impl Appearance {
 
 impl fmt::Display for Appearance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             Appearance::System => "Match the system",
             Appearance::Light => "Light",
             Appearance::Dark => "Dark",
-        })
+        }))
     }
 }
 
@@ -90,11 +91,11 @@ impl OpenZoom {
 
 impl fmt::Display for OpenZoom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             OpenZoom::ActualSize => "Actual size",
             OpenZoom::FitWidth => "Fit width",
             OpenZoom::FitPage => "Fit page",
-        })
+        }))
     }
 }
 
@@ -105,6 +106,7 @@ pub enum Event {
     Appearance(Appearance),
     Zoom(OpenZoom),
     Unit(Unit),
+    Language(crate::i18n::Language),
     SingleKeys(bool),
     PresentLoop(bool),
     PresentSeconds(u32),
@@ -121,6 +123,7 @@ pub struct View<'a> {
     pub appearance: Appearance,
     pub zoom: OpenZoom,
     pub unit: Unit,
+    pub language: crate::i18n::Language,
     pub single_keys: bool,
     pub present_loop: bool,
     pub present_seconds: u32,
@@ -149,6 +152,14 @@ pub fn card(view: View<'_>) -> Element<'_, Message> {
         .spacing(8)
         .align_y(Center),
         row![
+            label("Language"),
+            pick_list(crate::i18n::Language::ALL, Some(view.language), move |l| ev(
+                Event::Language(l)
+            )),
+        ]
+        .spacing(8)
+        .align_y(Center),
+        row![
             label("Appearance"),
             pick_list(Appearance::ALL, Some(view.appearance), move |a| ev(
                 Event::Appearance(a)
@@ -172,12 +183,14 @@ pub fn card(view: View<'_>) -> Element<'_, Message> {
         .spacing(8)
         .align_y(Center),
         checkbox(view.single_keys)
-            .label("Use single-key accelerators to access tools (H hand, Z zoom, S note, U highlight…)")
+            .label(crate::i18n::tr_str(
+                "Use single-key accelerators to access tools (H hand, Z zoom, S note, U highlight…)"
+            ))
             .on_toggle(move |on| ev(Event::SingleKeys(on))),
         row![
             label("Full screen, pages only"),
             checkbox(view.present_loop)
-                .label("Loop after the last page")
+                .label(crate::i18n::tr_str("Loop after the last page"))
                 .on_toggle(move |on| ev(Event::PresentLoop(on))),
         ]
         .spacing(8)
@@ -185,7 +198,7 @@ pub fn card(view: View<'_>) -> Element<'_, Message> {
         row![
             label(""),
             checkbox(view.present_seconds > 0)
-                .label("Advance every")
+                .label(crate::i18n::tr_str("Advance every"))
                 .on_toggle(move |on| ev(Event::PresentSeconds(if on { 5 } else { 0 }))),
             text_input(
                 "5",
@@ -207,7 +220,7 @@ pub fn card(view: View<'_>) -> Element<'_, Message> {
         .align_y(Center),
         row![
             label("Default PDF app"),
-            button("Make Panna the default…")
+            button(crate::i18n::text("Make Panna the default…"))
                 .style(button::secondary)
                 .on_press(ev(Event::DefaultApp)),
         ]
@@ -221,7 +234,7 @@ pub fn card(view: View<'_>) -> Element<'_, Message> {
     }
     body = body.push(row![
         space::horizontal(),
-        button("Done").on_press(ev(Event::Close))
+        button(crate::i18n::text("Done")).on_press(ev(Event::Close))
     ]);
     container(body).padding(16).style(container::rounded_box).into()
 }

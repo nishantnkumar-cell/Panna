@@ -47,6 +47,24 @@ fn exercise(data: &[u8]) -> Option<Document> {
         x1: 10_000.0,
         y1: 10_000.0,
     };
+    if doc.page_count() > 0 {
+        // What `open_render` saves: a note, added as an incremental update.
+        let note = panna_core::Annotation {
+            page: 0,
+            kind: panna_core::Kind::Note { x: 10.0, y: 10.0 },
+            color: panna_core::Color::YELLOW,
+            opacity: 1.0,
+            width: 1.0,
+            contents: "fuzz".into(),
+            author: String::new(),
+            dashed: false,
+            fill: None,
+            ends: Default::default(),
+        };
+        if let Ok(saved) = doc.with_annotations(&[note]) {
+            let _ = Document::from_bytes(saved, None, limits());
+        }
+    }
     let saves = [
         doc.redacted(&[(0, vec![whole])], &["seed".to_owned()]),
         doc.flattened(true, true),

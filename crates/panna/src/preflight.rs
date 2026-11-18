@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use iced::widget::{Column, button, column, container, row, scrollable, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, container, row, scrollable, space, text_input};
 use iced::{Element, Fill, Theme};
 use panna_core::{AccessFinding, AccessRule, Finding};
 
@@ -20,6 +21,8 @@ pub enum Event {
     RunAccessibility,
     /// Save a PDF/A copy.
     Convert,
+    /// Save a PDF/X-4 copy, with a colour profile chosen first.
+    ConvertPrint,
     /// Save a copy with tags added.
     Tag,
     /// Save a copy with thin lines widened.
@@ -106,6 +109,14 @@ impl Report {
         }
     }
 
+    /// The findings on a PDF/X-4 copy just saved as `name`.
+    pub fn saved_print(name: String, findings: Vec<Finding>) -> Self {
+        Self {
+            saved: Some(name),
+            ..Self::print(findings)
+        }
+    }
+
     pub fn accessibility(findings: Vec<AccessFinding>) -> Self {
         Self {
             kind: Kind::Accessibility,
@@ -170,6 +181,15 @@ impl Report {
                 "Not yet PDF/A".to_owned(),
                 "These keep the document from being archival PDF (PDF/A-2b):",
             ),
+            (Kind::PdfX, Some(name)) if clean => (
+                format!("Saved {name}"),
+                "The copy meets PDF/X-4's main rules, for the printing condition chosen. Not \
+                 every rule of the standard is checked.",
+            ),
+            (Kind::PdfX, Some(name)) => (
+                format!("Saved {name}"),
+                "The copy is closer to PDF/X-4, but these couldn't be fixed by Panna:",
+            ),
             (Kind::PdfX, _) if clean => (
                 "Meets PDF/X-4's main rules".to_owned(),
                 "Fonts are embedded, the printing condition is named, every page gives its \
@@ -178,8 +198,8 @@ impl Report {
             ),
             (Kind::PdfX, _) => (
                 "Not yet PDF/X".to_owned(),
-                "These keep the document from being PDF/X-4, for printing. Making PDF/X needs \
-                 the printer's colour profile, so Panna checks but doesn't convert:",
+                "These keep the document from being PDF/X-4, for printing. A PDF/X copy can \
+                 fix most of them, with the print shop's colour profile:",
             ),
             (Kind::Accessibility, Some(name)) if clean => (
                 format!("Saved {name}"),
@@ -220,7 +240,7 @@ impl Report {
                 let detail = match item.element {
                     Some(element) => {
                         let typed = self.alts.get(&element).map_or("", String::as_str);
-                        let input = text_input("Describe what it shows", typed)
+                        let input = text_input(crate::i18n::tr_str("Describe what it shows"), typed)
                             .size(12)
                             .on_input(move |v| Message::Preflight(Event::Alt(element, v)));
                         Element::from(row![detail.width(80), input].spacing(6).align_y(iced::Center))
@@ -246,10 +266,19 @@ impl Report {
         let mut buttons = row![space::horizontal()].spacing(8);
         if self.kind == Kind::PdfA {
             buttons = buttons.push(
-                button("Save a PDF/A copy…")
+                button(crate::i18n::text("Save a PDF/A copy…"))
                     .style(button::secondary)
                     .on_press_maybe(
                         (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::Convert)),
+                    ),
+            );
+        }
+        if self.kind == Kind::PdfX {
+            buttons = buttons.push(
+                button(crate::i18n::text("Save a PDF/X-4 copy…"))
+                    .style(button::secondary)
+                    .on_press_maybe(
+                        (self.saved.is_none() && !clean).then_some(Message::Preflight(Event::ConvertPrint)),
                     ),
             );
         }
@@ -268,14 +297,14 @@ impl Report {
         }
         if self.thin {
             buttons = buttons.push(
-                button("Save with thin lines widened…")
+                button(crate::i18n::text("Save with thin lines widened…"))
                     .style(button::secondary)
                     .on_press(Message::Preflight(Event::FixLines)),
             );
         }
         if self.untagged && self.saved.is_none() {
             buttons = buttons.push(
-                button("Save a tagged copy…")
+                button(crate::i18n::text("Save a tagged copy…"))
                     .style(button::secondary)
                     .on_press(Message::Preflight(Event::Tag)),
             );
@@ -284,7 +313,7 @@ impl Report {
             text(title).size(16),
             text(summary).size(13),
             scrollable(list).height(height),
-            buttons.push(button("Close").on_press(close)),
+            buttons.push(button(crate::i18n::text("Close")).on_press(close)),
         ]
         .spacing(10);
         container(container(body).width(420))

@@ -7,7 +7,8 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{Column, button, column, container, pick_list, row, scrollable, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, container, pick_list, row, scrollable, space, text_input};
 use iced::{Center, Element, Fill, Font, Length, Theme, font};
 use panna_core::{ObjRef, OutlineItem};
 
@@ -67,12 +68,12 @@ impl Style {
 
 impl std::fmt::Display for Style {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(&crate::i18n::translate(match self {
             Style::Plain => "Plain",
             Style::Bold => "Bold",
             Style::Italic => "Italic",
             Style::BoldItalic => "Bold & italic",
-        })
+        }))
     }
 }
 
@@ -495,7 +496,7 @@ impl Editor {
             };
             let picked = selected == Some(i);
             if let (true, Some(name)) = (picked, &self.renaming) {
-                let input = text_input("Bookmark name", name)
+                let input = text_input(crate::i18n::tr_str("Bookmark name"), name)
                     .id(name_id())
                     .size(13)
                     .padding([3, 6])

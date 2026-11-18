@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/panna-core", "crates/panna-print", "crates/panna-sandbox", "crates/panna"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -38,3 +38,6 @@ strip = true
 # Keep unwinding so engine panics on malformed PDFs can be caught instead of aborting.
 panic = "unwind"
 overflow-checks = true
+
+[patch.crates-io]
+hayro = { path = "vendor/hayro" }

@@ -200,3 +200,19 @@ fn worker_opens_and_renders_from_disk() {
     assert_eq!((page.width, page.height), (396, 306), "rotated a quarter turn");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_thumbnail_is_the_first_page_at_the_size_asked() {
+    let dir = std::env::temp_dir().join(format!("panna-thumb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = dir.join("letter.pdf");
+    std::fs::write(&pdf, sample_pdf(2)).unwrap();
+    let png = panna_core::thumbnail_file(&pdf, 128).unwrap();
+    let picture = image::load_from_memory(&png).unwrap();
+    // US Letter is taller than wide: 128 pixels down, 98 (of 98.9) across.
+    assert_eq!((picture.width(), picture.height()), (98, 128));
+    let junk = dir.join("junk.pdf");
+    std::fs::write(&junk, b"not a PDF").unwrap();
+    assert!(panna_core::thumbnail_file(&junk, 128).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

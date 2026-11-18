@@ -3,8 +3,9 @@
 
 use std::ops::Range;
 
+use crate::i18n::text;
 use iced::widget::scrollable::Viewport;
-use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space, text};
+use iced::widget::{Column, button, column, container, image, row, rule, scrollable, space};
 use iced::{Center, Element, Fill, Theme};
 use panna_core::{Annotation, Attachment, Comment, CommentId, Layer, OutlineItem, PageSize};
 
@@ -223,6 +224,8 @@ pub struct ViewData<'a> {
     pub unsaved: &'a [Annotation],
     pub removed: &'a [CommentId],
     pub attachments: &'a [Attachment],
+    /// The document is a PDF Portfolio.
+    pub portfolio: bool,
     pub signatures: &'a [panna_core::Signature],
     pub trusted: &'a [panna_core::Cert],
     pub layers: &'a [Layer],
@@ -329,7 +332,7 @@ impl Sidebar {
         ];
 
         let content = match self.tab {
-            Tab::Files if has_files => files(data.attachments),
+            Tab::Files if has_files => files(data.attachments, data.portfolio),
             Tab::Layers if has_layers => layers(data.layers, data.layers_shown),
             Tab::Articles if has_articles => articles(data.articles),
             Tab::Changes if data.comparison.is_some() => data
@@ -514,10 +517,14 @@ fn layers<'a>(layers: &'a [Layer], shown: &[bool]) -> Element<'a, Message> {
         .into()
 }
 
-/// Attached files, each with a button that saves a copy. They are never opened from here.
-fn files(attachments: &[Attachment]) -> Element<'_, Message> {
+/// Attached files, each with a button that saves a copy. Only PDFs can be opened, in Panna,
+/// as any other PDF is; other files are only ever saved.
+fn files(attachments: &[Attachment], portfolio: bool) -> Element<'_, Message> {
     let items = attachments.iter().enumerate().map(|(index, file)| {
         let mut details = Vec::new();
+        if let Some(media) = file.media {
+            details.push(media.label().to_owned());
+        }
         if let Some(size) = file.size {
             details.push(size_text(size));
         }
@@ -556,17 +563,33 @@ fn files(attachments: &[Attachment]) -> Element<'_, Message> {
                     .wrapping(text::Wrapping::WordOrGlyph),
             );
         }
-        row![
-            about.spacing(2).width(Fill),
-            icons::button(Icon::Save, "Save a copy…", Some(Message::SaveAttachment(index))),
-        ]
-        .spacing(6)
-        .align_y(Center)
+        let mut line = row![about.spacing(2).width(Fill)].spacing(6).align_y(Center);
+        if file.media.is_none() && file.is_pdf() {
+            line = line.push(icons::button(
+                Icon::Open,
+                "Open in Panna",
+                Some(Message::OpenAttachment(index)),
+            ));
+        }
+        line.push(icons::button(
+            Icon::Save,
+            "Save a copy…",
+            Some(Message::SaveAttachment(index)),
+        ))
         .into()
     });
-    scrollable(Column::with_children(items).spacing(10).padding(PAD).width(Fill))
-        .height(Fill)
-        .into()
+    let mut list = Column::new().spacing(10).padding(PAD).width(Fill);
+    if portfolio {
+        list = list.push(
+            text(format!(
+                "PDF Portfolio · {} {}",
+                attachments.len(),
+                if attachments.len() == 1 { "file" } else { "files" }
+            ))
+            .size(13),
+        );
+    }
+    scrollable(list.extend(items)).height(Fill).into()
 }
 
 /// A file size in bytes, KB or MB.

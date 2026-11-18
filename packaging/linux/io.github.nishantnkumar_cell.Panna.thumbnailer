@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=panna
+Exec=panna --thumbnail %i %o %s
+MimeType=application/pdf;

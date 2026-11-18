@@ -122,3 +122,31 @@ fn only_what_is_chosen_goes() {
     assert!(has(&out, "Jo Bloggs") && has(&out, "app.alert(1)") && has(&out, "A note"));
     assert_eq!(open(out).comments().len(), 1);
 }
+
+/// Videos and 3D models played on a page go with the attached files.
+#[test]
+fn embedded_media_go_with_attachments() {
+    let doc = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /3D /Rect [0 0 100 100] /3DD 6 0 R >>",
+            "<< /Type /Annot /Subtype /Link /Rect [100 10 120 30] /A << /S /URI /URI (https://example.org) >> >>",
+            "<< /Type /3D /Subtype /U3D /Length 12 >>\nstream\nsecret-model\nendstream",
+        ],
+        "",
+    ));
+    assert_eq!(doc.info().unwrap().attachments.len(), 1);
+    let out = doc
+        .cleaned(Cleanup {
+            attachments: true,
+            ..Cleanup::default()
+        })
+        .unwrap();
+    assert!(!has(&out, "secret-model"));
+    let out = open(out);
+    let info = out.info().unwrap();
+    assert!(info.attachments.is_empty());
+    assert_eq!(info.links.len(), 1);
+}

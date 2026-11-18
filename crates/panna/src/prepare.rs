@@ -1,8 +1,9 @@
 //! Preparing a form: adding text fields, check boxes, drop-downs, list boxes and radio
 //! buttons to pages, and deleting fields, each as a page change that can be undone from the page tools.
 
+use crate::i18n::text;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, pin, row, space, text, text_editor, text_input,
+    button, checkbox, column, container, pick_list, pin, row, space, text_editor, text_input,
 };
 use iced::{Center, Element, Theme};
 use panna_core::{Field, FieldKind, NewField, NewFieldKind, ObjRef, RadioButton, TextBox};
@@ -967,7 +968,7 @@ impl Preparer {
                 let mut body = column![
                     text(title).size(16),
                     text("Name").size(12),
-                    text_input("Name", name)
+                    text_input(crate::i18n::tr_str("Name"), name)
                         .id(name_id())
                         .on_input(move |v| ev(Event::Name(v)))
                         .on_submit_maybe(ready.then_some(ev(Event::Done))),
@@ -978,7 +979,7 @@ impl Preparer {
                 if *tool == Tool::Text {
                     body = body.push(
                         checkbox(*multiline)
-                            .label("Several lines")
+                            .label(crate::i18n::tr_str("Several lines"))
                             .on_toggle(move |v| ev(Event::Multiline(v))),
                     );
                 }
@@ -997,7 +998,10 @@ impl Preparer {
                     let chosen = BUTTON_ACTIONS.get(*action).copied();
                     body = body
                         .push(text("Caption").size(12))
-                        .push(text_input("Button", caption).on_input(move |v| ev(Event::Caption(v))))
+                        .push(
+                            text_input(crate::i18n::tr_str("Button"), caption)
+                                .on_input(move |v| ev(Event::Caption(v))),
+                        )
                         .push(text("When pressed").size(12))
                         .push(
                             pick_list(BUTTON_ACTIONS, chosen, move |a: &'static str| {
@@ -1008,8 +1012,10 @@ impl Preparer {
                             .width(iced::Fill),
                         );
                     if *action == 2 {
-                        body = body
-                            .push(text_input("Page number", target).on_input(move |v| ev(Event::Target(v))));
+                        body = body.push(
+                            text_input(crate::i18n::tr_str("Page number"), target)
+                                .on_input(move |v| ev(Event::Target(v))),
+                        );
                     }
                 }
                 if *tool == Tool::Image {
@@ -1037,16 +1043,16 @@ impl Preparer {
                 }
                 body.push(
                     checkbox(*required)
-                        .label("Must be filled in")
+                        .label(crate::i18n::tr_str("Must be filled in"))
                         .on_toggle(move |v| ev(Event::Required(v))),
                 )
                 .push(
                     row![
                         space::horizontal(),
-                        button("Cancel")
+                        button(crate::i18n::text("Cancel"))
                             .style(button::secondary)
                             .on_press(ev(Event::Cancel)),
-                        button("Add").on_press_maybe(ready.then_some(ev(Event::Done))),
+                        button(crate::i18n::text("Add")).on_press_maybe(ready.then_some(ev(Event::Done))),
                     ]
                     .spacing(8),
                 )

@@ -1,9 +1,10 @@
 //! Fill & Sign: a signature and initials, drawn or typed once and placed as often as needed,
 //! plus the date and check marks. Signatures are kept only while the app is open.
 
+use crate::i18n::text;
 use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _, point};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
-use iced::widget::{Column, button, column, container, image, row, space, text, text_input};
+use iced::widget::{Column, button, column, container, image, row, space, text_input};
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Theme, mouse};
 use panna_core::{Color, StampImage};
 
@@ -227,7 +228,7 @@ impl Signer {
     /// The Fill & Sign card, or the pad while one is being made.
     pub fn card(&self) -> Element<'_, Message> {
         let ev = |e: Event| Message::Annotate(annotate::Event::Sign(e));
-        let cancel = button("Cancel")
+        let cancel = button(crate::i18n::text("Cancel"))
             .style(button::secondary)
             .on_press(Message::Annotate(annotate::Event::EditCancel));
         let body: Element<'_, Message> = if let Some(pad) = &self.pad {
@@ -308,8 +309,10 @@ impl Signer {
                 text("Kept only until Panna closes.").size(12),
                 row![
                     space::horizontal(),
-                    button("Back").style(button::secondary).on_press(ev(Event::Back)),
-                    button("Place it").on_press_maybe(ready.then(|| ev(Event::Use))),
+                    button(crate::i18n::text("Back"))
+                        .style(button::secondary)
+                        .on_press(ev(Event::Back)),
+                    button(crate::i18n::text("Place it")).on_press_maybe(ready.then(|| ev(Event::Use))),
                 ]
                 .spacing(8),
             ]

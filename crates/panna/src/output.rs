@@ -8,7 +8,8 @@
 
 use std::cell::RefCell;
 
-use iced::widget::{Column, checkbox, column, image, pick_list, row, space, text};
+use crate::i18n::text;
+use iced::widget::{Column, checkbox, column, image, pick_list, row, space};
 use iced::{Center, Element, Point, Size};
 
 use crate::Message;
@@ -307,7 +308,7 @@ pub fn panel<'a>(
     body = body.push(
         row![
             checkbox(state.warn)
-                .label("Mark where the inks pass")
+                .label(crate::i18n::tr_str("Mark where the inks pass"))
                 .text_size(13)
                 .on_toggle(move |v| ev(Event::Warn(v))),
             pick_list(Limit::ALL, Some(state.limit), move |l| ev(Event::Limit(l)))

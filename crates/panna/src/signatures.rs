@@ -2,7 +2,8 @@
 //! its certificate says about the signer, and whether it leads to a certificate the user
 //! trusts.
 
-use iced::widget::{Column, button, column, row, scrollable, text};
+use crate::i18n::text;
+use iced::widget::{Column, button, column, row, scrollable};
 use iced::{Center, Element, Fill};
 use panna_core::{Cert, SigStatus, Signature, trusted_by};
 

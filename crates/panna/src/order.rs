@@ -4,8 +4,9 @@
 
 use std::path::PathBuf;
 
+use crate::i18n::text;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
-use iced::widget::{Column, button, column, container, pick_list, row, scrollable, space, text};
+use iced::widget::{Column, button, column, container, pick_list, row, scrollable, space};
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
 use panna_core::{ORDER_ROLES, OrderItem, ReadingOrder};
 
@@ -170,7 +171,7 @@ struct Role(String);
 
 impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&role_name(&self.0))
+        f.write_str(&crate::i18n::translate(&role_name(&self.0)))
     }
 }
 

@@ -59,7 +59,7 @@ pub struct Choice {
 
 impl std::fmt::Display for Choice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.label)
+        f.write_str(&crate::i18n::translate(&self.label))
     }
 }
 

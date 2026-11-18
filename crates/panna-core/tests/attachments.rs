@@ -100,7 +100,99 @@ fn attachment_names_cant_disguise_programs() {
             description: String::new(),
             size: None,
             page: None,
+            media: None,
         };
         assert_eq!(file.is_program(), program, "{name}");
     }
+}
+
+/// Videos, sounds and 3D models on a page are listed with the attachments, to be saved.
+#[test]
+fn embedded_media_are_listed() {
+    let doc = Document::from_bytes(
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 7 0 R 8 0 R 11 0 R] >>",
+                // A screen annotation playing a clip through a rendition selector.
+                "<< /Type /Annot /Subtype /Screen /Rect [0 0 100 100] /A << /S /Rendition /R << /S /SR /R [<< /S /MR /C << /S /MCD /CT (audio/mpeg) /D 5 0 R >> >>] >> >> >>",
+                "<< /Type /Filespec /UF (song.mp3) /EF << /F 6 0 R >> >>",
+                "<< /Type /EmbeddedFile /Length 3 >>\nstream\nID3\nendstream",
+                // A 3D model.
+                "<< /Type /Annot /Subtype /3D /Rect [0 0 100 100] /3DD 9 0 R >>",
+                // Rich media with a video asset.
+                "<< /Type /Annot /Subtype /RichMedia /Rect [0 0 100 100] /RichMediaContent << /Assets << /Names [(clip.mp4) 10 0 R] >> >> >>",
+                "<< /Type /3D /Subtype /U3D /Length 3 >>\nstream\nU3D\nendstream",
+                "<< /Type /Filespec /UF (clip.mp4) /EF << /F 12 0 R >> >>",
+                // A movie kept in a file outside the PDF: nothing to save, so not listed.
+                "<< /Type /Annot /Subtype /Movie /Rect [0 0 100 100] /Movie << /F (outside.mov) >> >>",
+                "<< /Type /EmbeddedFile /Length 4 >>\nstream\nmoov\nendstream",
+            ],
+            "",
+        ),
+        None,
+        Limits::default(),
+    )
+    .unwrap();
+    let files = doc.info().unwrap().attachments;
+    let found: Vec<_> = files.iter().map(|f| (f.name.as_str(), f.page, f.media)).collect();
+    use panna_core::Media;
+    assert_eq!(
+        found,
+        [
+            ("song.mp3", Some(0), Some(Media::Sound)),
+            ("3D model, page 1.u3d", Some(0), Some(Media::Model3D)),
+            ("clip.mp4", Some(0), Some(Media::Video)),
+        ]
+    );
+    assert_eq!(doc.attachment(0).unwrap(), b"ID3");
+    assert_eq!(doc.attachment(1).unwrap(), b"U3D");
+    assert_eq!(doc.attachment(2).unwrap(), b"moov");
+}
+
+/// A portfolio made from files holds them in order, says it's a portfolio, and opens on its
+/// attachments.
+#[test]
+fn a_portfolio_holds_its_files() {
+    let files = vec![
+        ("zebra notes.txt".to_owned(), b"stripes".to_vec()),
+        ("Résumé.pdf".to_owned(), b"%PDF-1.7 not really".to_vec()),
+        ("photo.jpg".to_owned(), vec![0xFF, 0xD8, 0xFF, 0x00]),
+    ];
+    let bytes = panna_core::make_portfolio(&files);
+    let doc = Document::from_bytes(bytes, None, Limits::default()).unwrap();
+    let info = doc.info().unwrap();
+    assert!(info.portfolio);
+    assert_eq!(info.pages.len(), 1);
+    let names: Vec<_> = info
+        .attachments
+        .iter()
+        .map(|a| (a.name.as_str(), a.size))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("zebra notes.txt", Some(7)),
+            ("Résumé.pdf", Some(19)),
+            ("photo.jpg", Some(4))
+        ]
+    );
+    for (i, (_, data)) in files.iter().enumerate() {
+        assert_eq!(&doc.attachment(i).unwrap(), data);
+    }
+    assert_eq!(info.initial_view.panel, panna_core::OpenPanel::Attachments);
+    let text = doc.page_text(0).unwrap().text();
+    assert!(
+        text.contains("PDF Portfolio") && text.contains("zebra notes.txt"),
+        "{text}"
+    );
+    // An ordinary document isn't one.
+    assert!(
+        !Document::from_bytes(attached(), None, Limits::default())
+            .unwrap()
+            .info()
+            .unwrap()
+            .portfolio
+    );
 }

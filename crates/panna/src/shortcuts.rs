@@ -8,6 +8,57 @@ use crate::annotate;
 use crate::find::Event;
 use crate::menu::{self, Menu, Nav};
 
+/// Keys that steer automatic scrolling, as in Acrobat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollKey {
+    /// A number key: 0 slowest to 9 fastest.
+    Speed(u8),
+    /// Down (`true`) or Up.
+    Arrow(bool),
+    /// The minus key turns the direction around.
+    Reverse,
+    /// Right (`true`) or Left jumps to the next or previous page.
+    Page(bool),
+}
+
+pub const SCROLL_FASTEST: u8 = 9;
+/// About the speed automatic scrolling had before it could be changed.
+pub const SCROLL_DEFAULT: u8 = 4;
+
+/// Points of screen scrolled each second at a speed from 0 to 9.
+pub fn scroll_rate(speed: u8) -> f32 {
+    const RATES: [f32; 10] = [15.0, 25.0, 40.0, 60.0, 90.0, 130.0, 180.0, 250.0, 340.0, 450.0];
+    RATES.get(usize::from(speed)).copied().unwrap_or(450.0)
+}
+
+/// The keys that steer automatic scrolling while it's on; others work as usual.
+pub fn auto_scroll_keys(event: &keyboard::Event) -> Option<ScrollKey> {
+    let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+        return None;
+    };
+    if modifiers.command() || modifiers.alt() {
+        return None;
+    }
+    match key.as_ref() {
+        Key::Named(Named::ArrowDown) => Some(ScrollKey::Arrow(true)),
+        Key::Named(Named::ArrowUp) => Some(ScrollKey::Arrow(false)),
+        Key::Named(Named::ArrowRight) => Some(ScrollKey::Page(true)),
+        Key::Named(Named::ArrowLeft) => Some(ScrollKey::Page(false)),
+        Key::Character("-" | "−") => Some(ScrollKey::Reverse),
+        Key::Character(c) => {
+            let mut chars = c.chars();
+            match (chars.next(), chars.next()) {
+                (Some(d), None) => d
+                    .to_digit(10)
+                    .and_then(|d| u8::try_from(d).ok())
+                    .map(ScrollKey::Speed),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 pub fn map(event: keyboard::Event) -> Option<Message> {
     // Holding Space picks the Hand tool until it's let go, as in Acrobat.
     if let keyboard::Event::KeyReleased {
@@ -357,5 +408,37 @@ mod tests {
             press(Key::Named(Named::End), Modifiers::empty()),
             Some(Message::GoToPage(usize::MAX))
         ));
+    }
+
+    #[test]
+    fn auto_scroll_keys_set_speed_and_direction() {
+        let ev = |key: Key, modifiers: Modifiers| keyboard::Event::KeyPressed {
+            modified_key: key.clone(),
+            key,
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        };
+        let empty = Modifiers::empty();
+        assert_eq!(
+            auto_scroll_keys(&ev(Key::Character("7".into()), empty)),
+            Some(ScrollKey::Speed(7))
+        );
+        assert_eq!(
+            auto_scroll_keys(&ev(Key::Character("-".into()), empty)),
+            Some(ScrollKey::Reverse)
+        );
+        assert_eq!(
+            auto_scroll_keys(&ev(Key::Named(Named::ArrowUp), empty)),
+            Some(ScrollKey::Arrow(false))
+        );
+        // Ctrl+1 still zooms.
+        assert_eq!(
+            auto_scroll_keys(&ev(Key::Character("1".into()), Modifiers::COMMAND)),
+            None
+        );
+        assert!(scroll_rate(0) < scroll_rate(SCROLL_DEFAULT) && scroll_rate(SCROLL_DEFAULT) < scroll_rate(9));
     }
 }

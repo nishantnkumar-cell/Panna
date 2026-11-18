@@ -1,4 +1,5 @@
-//! Spell checking, offline, with the American English dictionary built in (see `dict/`).
+//! Spell checking, offline, with American, British, Canadian and Australian English
+//! dictionaries built in (see `dict/`).
 //!
 //! The dictionary is in Hunspell's format: word stems with flags, and an affix file whose
 //! rules make the other forms (plurals, past tenses and so on). The English affix rules are
@@ -9,8 +10,56 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::OnceLock;
 
+// The four English dictionaries share one affix file.
 const AFF: &str = include_str!("../dict/en_US.aff");
 const DIC: &str = include_str!("../dict/en_US.dic");
+const DIC_GB: &str = include_str!("../dict/en_GB.dic");
+const DIC_CA: &str = include_str!("../dict/en_CA.dic");
+const DIC_AU: &str = include_str!("../dict/en_AU.dic");
+
+/// A language to check spelling in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Language {
+    #[default]
+    EnglishUs,
+    EnglishGb,
+    EnglishCa,
+    EnglishAu,
+}
+
+impl Language {
+    pub const ALL: [Language; 4] = [
+        Language::EnglishUs,
+        Language::EnglishGb,
+        Language::EnglishCa,
+        Language::EnglishAu,
+    ];
+
+    /// Its tag, as stored in the settings.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Language::EnglishUs => "en-US",
+            Language::EnglishGb => "en-GB",
+            Language::EnglishCa => "en-CA",
+            Language::EnglishAu => "en-AU",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|l| l.as_str().eq_ignore_ascii_case(s))
+    }
+}
+
+impl std::fmt::Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Language::EnglishUs => "English (United States)",
+            Language::EnglishGb => "English (United Kingdom)",
+            Language::EnglishCa => "English (Canada)",
+            Language::EnglishAu => "English (Australia)",
+        })
+    }
+}
 
 /// Longest word looked at; anything longer isn't a word.
 const MAX_WORD: usize = 64;
@@ -188,8 +237,22 @@ impl Dictionary {
 
     /// The built-in American English dictionary, read the first time it's asked for.
     pub fn english() -> &'static Dictionary {
-        static ENGLISH: OnceLock<Dictionary> = OnceLock::new();
-        ENGLISH.get_or_init(|| Dictionary::parse(AFF, DIC))
+        Self::get(Language::EnglishUs)
+    }
+
+    /// The built-in dictionary for `language`, read the first time it's asked for.
+    pub fn get(language: Language) -> &'static Dictionary {
+        static US: OnceLock<Dictionary> = OnceLock::new();
+        static GB: OnceLock<Dictionary> = OnceLock::new();
+        static CA: OnceLock<Dictionary> = OnceLock::new();
+        static AU: OnceLock<Dictionary> = OnceLock::new();
+        let (cell, dic) = match language {
+            Language::EnglishUs => (&US, DIC),
+            Language::EnglishGb => (&GB, DIC_GB),
+            Language::EnglishCa => (&CA, DIC_CA),
+            Language::EnglishAu => (&AU, DIC_AU),
+        };
+        cell.get_or_init(|| Dictionary::parse(AFF, dic))
     }
 
     /// Whether `word` is spelled right: as written, or in lower case when it starts a
@@ -453,5 +516,18 @@ mod tests {
         }
         assert!(d.suggest("recieve", 5).contains(&"receive".to_owned()));
         assert!(d.suggest("teh", 5).contains(&"the".to_owned()));
+    }
+
+    #[test]
+    fn each_english_spells_its_own_way() {
+        let us = Dictionary::get(Language::EnglishUs);
+        let gb = Dictionary::get(Language::EnglishGb);
+        let au = Dictionary::get(Language::EnglishAu);
+        assert!(us.check("colors") && !us.check("colours"));
+        assert!(gb.check("colours") && gb.check("organise"));
+        assert!(au.check("colours"));
+        for l in Language::ALL {
+            assert_eq!(Language::parse(l.as_str()), Some(l));
+        }
     }
 }

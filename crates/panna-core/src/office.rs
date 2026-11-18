@@ -1,6 +1,5 @@
-//! Saving pages as Office files: a Word document (.docx) of the text, in paragraphs, with
-//! headings where the type is larger and a page break between pages (layout, pictures and
-//! tables aren't kept); a PowerPoint presentation (.pptx) with a picture of each page as a
+//! Saving pages as Office files: the parts a Word document (.docx) shares with the other
+//! exports (see [`crate::word`] for the document itself); a PowerPoint presentation (.pptx) with a picture of each page as a
 //! slide; or an Excel workbook (.xlsx) with a sheet for each page, a row for each line of
 //! text, and columns where the words line up.
 
@@ -9,12 +8,20 @@ use std::io::Write;
 use crate::text::Line;
 use crate::{Document, SaveError};
 
-/// A paragraph: its text, font size in points, and heading level (0 for body text).
+/// A paragraph: its text, font size in points, and heading level (0 for body text), with
+/// where it sits on the page in points (y down).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Paragraph {
     pub(crate) text: String,
     pub(crate) size: f32,
     pub(crate) level: u8,
+    pub(crate) x0: f32,
+    pub(crate) x1: f32,
+    pub(crate) y0: f32,
+    pub(crate) y1: f32,
+    /// The first line's left edge, for a first-line indent.
+    pub(crate) first_x: f32,
+    pub(crate) lines: usize,
 }
 
 pub(crate) enum Block {
@@ -45,11 +52,22 @@ pub(crate) fn paragraphs(lines: &[Line]) -> Vec<Paragraph> {
                     para.text.push(' ');
                 }
                 para.text.push_str(&line.text);
+                para.x0 = para.x0.min(line.x0);
+                para.x1 = para.x1.max(line.x1);
+                para.y0 = para.y0.min(line.y0);
+                para.y1 = para.y1.max(line.y1);
+                para.lines += 1;
             }
             _ => out.push(Paragraph {
                 text: line.text.clone(),
                 size: line.size,
                 level: 0,
+                x0: line.x0,
+                x1: line.x1,
+                y0: line.y0,
+                y1: line.y1,
+                first_x: line.x0,
+                lines: 1,
             }),
         }
         prev = Some(line);
@@ -87,36 +105,48 @@ pub(crate) fn blocks(doc: &Document, pages: &[usize]) -> Result<Vec<Block>, Save
         }
         out.extend(paragraphs(&text.lines()).into_iter().map(Block::Paragraph));
     }
-    // Characters at each size, in half points.
-    let mut sizes: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    for b in &out {
-        if let Block::Paragraph(p) = b {
-            *sizes.entry(half_points(p.size)).or_default() += p.text.chars().count();
-        }
-    }
-    let body = sizes
-        .iter()
-        .max_by_key(|(size, count)| (**count, std::cmp::Reverse(**size)))
-        .map_or(22, |(size, _)| *size) as f32
-        / 2.0;
+    let body = body_size(out.iter().filter_map(|b| match b {
+        Block::Paragraph(p) => Some(p),
+        Block::PageBreak => None,
+    }));
     for b in &mut out {
-        if let Block::Paragraph(p) = b
-            && p.text.chars().count() <= 200
-        {
-            p.level = if p.size >= body * 1.6 {
-                1
-            } else if p.size >= body * 1.2 {
-                2
-            } else {
-                0
-            };
+        if let Block::Paragraph(p) = b {
+            p.level = level(p, body);
         }
     }
     Ok(out)
 }
 
+/// The size most of the text is in, in points.
+pub(crate) fn body_size<'a>(paragraphs: impl Iterator<Item = &'a Paragraph>) -> f32 {
+    // Characters at each size, in half points.
+    let mut sizes: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for p in paragraphs {
+        *sizes.entry(half_points(p.size)).or_default() += p.text.chars().count();
+    }
+    sizes
+        .iter()
+        .max_by_key(|(size, count)| (**count, std::cmp::Reverse(**size)))
+        .map_or(22, |(size, _)| *size) as f32
+        / 2.0
+}
+
+/// A paragraph's heading level beside body text of size `body`: larger paragraphs that are
+/// short enough are headings.
+pub(crate) fn level(p: &Paragraph, body: f32) -> u8 {
+    if p.text.chars().count() > 200 {
+        0
+    } else if p.size >= body * 1.6 {
+        1
+    } else if p.size >= body * 1.2 {
+        2
+    } else {
+        0
+    }
+}
+
 /// A size in points as Word's half points, within what Word allows.
-fn half_points(size: f32) -> u32 {
+pub(crate) fn half_points(size: f32) -> u32 {
     if size.is_finite() {
         (size * 2.0).round().clamp(2.0, 3276.0) as u32
     } else {
@@ -124,67 +154,12 @@ fn half_points(size: f32) -> u32 {
     }
 }
 
-fn document_xml(blocks: &[Block]) -> String {
-    let mut body = String::new();
-    // A new page starts with its first paragraph, or with an empty one when it has none.
-    let mut new_page = false;
-    for b in blocks {
-        match b {
-            Block::PageBreak => {
-                if new_page {
-                    body.push_str("<w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>");
-                }
-                new_page = true;
-            }
-            Block::Paragraph(p) => {
-                let style = match p.level {
-                    1 => "<w:pStyle w:val=\"Heading1\"/>",
-                    2 => "<w:pStyle w:val=\"Heading2\"/>",
-                    _ => "",
-                };
-                let page = if std::mem::take(&mut new_page) {
-                    "<w:pageBreakBefore/>"
-                } else {
-                    ""
-                };
-                let sz = half_points(p.size);
-                body.push_str(&format!(
-                    "<w:p><w:pPr>{style}{page}</w:pPr><w:r><w:rPr><w:sz w:val=\"{sz}\"/><w:szCs w:val=\"{sz}\"/></w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
-                    xml(&p.text)
-                ));
-            }
-        }
-    }
-    if new_page {
-        body.push_str("<w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>");
-    }
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:document \
-         xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{body}<w:sectPr>\
-         <w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" \
-         w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
-    )
-}
-
-const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
-<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
-<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
-<Default Extension=\"xml\" ContentType=\"application/xml\"/>\
-<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
-<Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>\
-</Types>";
-
-const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+pub(crate) const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
 <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
 <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
 </Relationships>";
 
-const DOCUMENT_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
-<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>\
-</Relationships>";
-
-const STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+pub(crate) const STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
 <w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
 <w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:pPrDefault></w:docDefaults>\
 <w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>\
@@ -197,7 +172,7 @@ const STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\
 </w:styles>";
 
 /// A ZIP archive of `files` (name and contents), each compressed.
-fn zip(files: &[(&str, &[u8])]) -> Result<Vec<u8>, SaveError> {
+pub(crate) fn zip(files: &[(&str, &[u8])]) -> Result<Vec<u8>, SaveError> {
     zip_stored_first(files, false)
 }
 
@@ -265,18 +240,6 @@ pub(crate) fn zip_stored_first(files: &[(&str, &[u8])], stored_first: bool) -> R
     out.extend(at.to_le_bytes());
     out.extend(0u16.to_le_bytes());
     Ok(out)
-}
-
-/// `pages` of `doc` as a .docx file.
-pub(crate) fn docx(doc: &Document, pages: &[usize]) -> Result<Vec<u8>, SaveError> {
-    let document = document_xml(&blocks(doc, pages)?);
-    zip(&[
-        ("[Content_Types].xml", CONTENT_TYPES.as_bytes()),
-        ("_rels/.rels", RELS.as_bytes()),
-        ("word/document.xml", document.as_bytes()),
-        ("word/_rels/document.xml.rels", DOCUMENT_RELS.as_bytes()),
-        ("word/styles.xml", STYLES.as_bytes()),
-    ])
 }
 
 const NS: &str = "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" \
@@ -454,9 +417,8 @@ pub(crate) fn pptx(slides: &[(Vec<u8>, f64, f64)]) -> Result<Vec<u8>, SaveError>
     zip(&refs)
 }
 
-/// Rows of cells from lines: a column starts at each left edge that cells share, give or
-/// take, so text that lines up lands in the same column.
-fn table(lines: &[Line]) -> Vec<Vec<(usize, String)>> {
+/// Where columns start: at each left edge that cells share, give or take.
+pub(crate) fn columns(lines: &[Line]) -> Vec<f32> {
     let size = {
         let mut sizes: Vec<f32> = lines.iter().map(|l| l.size).filter(|s| *s > 0.0).collect();
         sizes.sort_by(f32::total_cmp);
@@ -470,6 +432,13 @@ fn table(lines: &[Line]) -> Vec<Vec<(usize, String)>> {
             columns.push(x);
         }
     }
+    columns
+}
+
+/// Rows of cells from lines, each cell in the column it starts in (see [`columns`]), so text
+/// that lines up lands in the same column.
+pub(crate) fn table(lines: &[Line]) -> Vec<Vec<(usize, String)>> {
+    let columns = columns(lines);
     lines
         .iter()
         .map(|line| {

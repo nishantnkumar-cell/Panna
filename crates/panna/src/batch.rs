@@ -4,7 +4,8 @@
 
 use std::path::PathBuf;
 
-use iced::widget::{button, checkbox, column, container, row, scrollable, space, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, container, row, scrollable, space, text_input};
 use iced::{Center, Element, Task};
 use panna_core::batch::Step;
 
@@ -131,7 +132,7 @@ impl Batch {
                 let task = Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Choose the folder of PDFs")
+                            .set_title(crate::i18n::tr_str("Choose the folder of PDFs"))
                             .pick_folder()
                             .await
                             .map(|f| f.path().to_path_buf())
@@ -145,7 +146,7 @@ impl Batch {
                 let task = Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .set_title("Choose where to save the results")
+                            .set_title(crate::i18n::tr_str("Choose where to save the results"))
                             .pick_folder()
                             .await
                             .map(|f| f.path().to_path_buf())
@@ -248,7 +249,7 @@ pub fn card(state: &Batch) -> Element<'_, Message> {
         tick("Make scanned pages searchable (OCR)", state.recognise, Choice::Recognise),
         row![
             tick("Add a watermark:", state.watermark, Choice::Watermark),
-            text_input("DRAFT", &state.watermark_text)
+            text_input(crate::i18n::tr_str("DRAFT"), &state.watermark_text)
                 .on_input(move |t| ev(Event::WatermarkText(t)))
                 .width(150),
         ]
@@ -267,10 +268,11 @@ pub fn card(state: &Batch) -> Element<'_, Message> {
             body = body.push(
                 row![
                     space::horizontal(),
-                    button("Cancel")
+                    button(crate::i18n::text("Cancel"))
                         .style(button::secondary)
                         .on_press(ev(Event::Close)),
-                    button("Choose the folder…").on_press_maybe(has_steps.then_some(ev(Event::Start))),
+                    button(crate::i18n::text("Choose the folder…"))
+                        .on_press_maybe(has_steps.then_some(ev(Event::Start))),
                 ]
                 .spacing(8),
             );
@@ -312,15 +314,17 @@ pub fn card(state: &Batch) -> Element<'_, Message> {
             let buttons = if run.finished() {
                 row![
                     space::horizontal(),
-                    button("Run again…")
+                    button(crate::i18n::text("Run again…"))
                         .style(button::secondary)
                         .on_press_maybe(has_steps.then_some(ev(Event::Start))),
-                    button("Done").on_press(ev(Event::Close)),
+                    button(crate::i18n::text("Done")).on_press(ev(Event::Close)),
                 ]
             } else {
                 row![
                     space::horizontal(),
-                    button("Stop").style(button::secondary).on_press(ev(Event::Stop)),
+                    button(crate::i18n::text("Stop"))
+                        .style(button::secondary)
+                        .on_press(ev(Event::Stop)),
                 ]
             };
             body = body.push(buttons.spacing(8));

@@ -5,7 +5,8 @@
 use std::io::Read as _;
 use std::process::{Command, Stdio};
 
-use iced::widget::{button, checkbox, column, container, pick_list, row, space, text};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, container, pick_list, row, space};
 use iced::{Element, Theme};
 
 use crate::Message;
@@ -330,7 +331,7 @@ pub fn card(state: &Scanning) -> Element<'_, Message> {
                     row![
                         pick_list(Dpi::ALL, Some(state.dpi), move |v| ev(Event::Dpi(v))).text_size(13),
                         checkbox(state.colour)
-                            .label("In colour")
+                            .label(crate::i18n::tr_str("In colour"))
                             .on_toggle(move |v| ev(Event::Colour(v))),
                     ]
                     .spacing(12)
@@ -353,7 +354,7 @@ pub fn card(state: &Scanning) -> Element<'_, Message> {
     body = body.push(
         row![
             small(status).width(iced::Fill),
-            button("Remove the last")
+            button(crate::i18n::text("Remove the last"))
                 .style(button::secondary)
                 .on_press_maybe((count > 0 && !state.busy).then_some(ev(Event::RemoveLast))),
             button(if count == 0 { "Scan a page" } else { "Scan another" })
@@ -370,10 +371,11 @@ pub fn card(state: &Scanning) -> Element<'_, Message> {
     body = body.push(
         row![
             space::horizontal(),
-            button("Cancel")
+            button(crate::i18n::text("Cancel"))
                 .style(button::secondary)
                 .on_press(ev(Event::Cancel)),
-            button("Make a PDF…").on_press_maybe((count > 0 && !state.busy).then_some(ev(Event::Done))),
+            button(crate::i18n::text("Make a PDF…"))
+                .on_press_maybe((count > 0 && !state.busy).then_some(ev(Event::Done))),
         ]
         .spacing(8),
     );

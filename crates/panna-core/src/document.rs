@@ -48,6 +48,9 @@ pub struct DocumentInfo {
     pub weak_protection: bool,
     /// Files attached to the document and its pages.
     pub attachments: Vec<crate::Attachment>,
+    /// The document is a PDF Portfolio: its attached files are what it's for.
+    #[serde(default)]
+    pub portfolio: bool,
     /// Layers that can be shown or hidden.
     pub layers: Vec<crate::Layer>,
     /// Digital signatures, each checked.
@@ -457,6 +460,8 @@ impl Document {
                 links,
                 protected,
                 weak_protection,
+                portfolio: catch_unwind(AssertUnwindSafe(|| crate::attachments::is_portfolio(&self.pdf)))
+                    .unwrap_or(false),
                 attachments,
                 layers,
                 pages,
@@ -1333,6 +1338,16 @@ impl Document {
             archive: true,
             ..crate::Cleanup::default()
         })
+    }
+
+    /// A PDF/X-4 copy for printing with `profile` as its printing condition, made as an
+    /// incremental update (see [`crate::PrintProfile`]). What can't be fixed this way, such as
+    /// fonts that aren't embedded, stays, so check the copy with [`Document::preflight_x`].
+    pub fn print_ready(&self, profile: &crate::PrintProfile) -> Result<Vec<u8>, crate::SaveError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::edit::to_pdfx(&self.pdf, &self.bytes, profile)
+        }))
+        .map_err(|_| crate::SaveError::EngineCrashed)?
     }
 
     /// The sound of a spoken comment, by its sound stream.

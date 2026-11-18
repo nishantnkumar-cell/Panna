@@ -4,7 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use iced::widget::{container, pin, row, space, text};
+use crate::i18n::text;
+use iced::widget::{container, pin, row, space};
 use iced::{Center, Element, Theme};
 use panna_core::{PictureChange, TextBox};
 

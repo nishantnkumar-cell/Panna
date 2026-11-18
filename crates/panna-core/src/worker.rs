@@ -202,6 +202,7 @@ enum Reply {
     Accessibility(AccessReply),
     /// Writes a PDF/A copy.
     Archive(PathBuf, ArchiveReply),
+    PrintReady(PathBuf, crate::PrintProfile, ArchiveReply),
     Tag(PathBuf, TagReply),
     /// Writes a copy with thin lines widened.
     Hairlines(PathBuf, f32, HairlinesReply),
@@ -528,6 +529,22 @@ impl RenderWorker {
         });
     }
 
+    /// Writes a PDF/X-4 copy of the document (with the changes last given to it) with
+    /// `profile` as its printing condition to `path`, and replies with what still keeps the
+    /// copy from being PDF/X-4.
+    pub fn save_print_ready(
+        &self,
+        path: PathBuf,
+        profile: crate::PrintProfile,
+        reply: impl FnOnce(Result<Vec<crate::Finding>, SaveError>) + Send + 'static,
+    ) {
+        let _ = self.jobs.send(Job {
+            index: self.serial.fetch_add(1, Ordering::Relaxed),
+            kind: Kind::Pages,
+            reply: Reply::PrintReady(path, profile, Box::new(reply)),
+        });
+    }
+
     /// Writes a copy of the document (with the changes last given to it) with tags added for
     /// screen readers to `path`, and replies with the accessibility check of the copy.
     pub fn save_tagged(
@@ -691,7 +708,7 @@ pub(crate) fn export_files<'a>(
                 return Ok(Vec::new());
             };
             let pages: Vec<usize> = export.pages.iter().map(|(i, _)| *i).collect();
-            Ok(vec![(path.clone(), crate::office::docx(doc, &pages)?)])
+            Ok(vec![(path.clone(), crate::word::docx(doc, cache, &pages)?)])
         }
         ExportFormat::Excel => {
             let Some((_, path)) = export.pages.first() else {
@@ -765,6 +782,19 @@ pub fn describe_file(
         }),
         _ => Err(SaveError::EngineCrashed),
     }
+}
+
+/// The first page of the file at `source` as a PNG no more than `size` pixels on its longer
+/// side, drawn in the locked-down process, as file managers show it. Blocks.
+pub fn thumbnail_file(source: &Path, size: u32) -> Result<Vec<u8>, SaveError> {
+    let limits = crate::Limits::default();
+    let bytes = Document::read_file(source, limits).map_err(|_| SaveError::Damaged)?;
+    let (mut doc, info) = crate::Isolated::open(bytes, None, limits).map_err(|_| SaveError::Damaged)?;
+    let page = info.pages.first().ok_or(SaveError::NoSuchPage(0))?;
+    let longer = page.width.max(page.height).max(1.0);
+    let scale = size.clamp(16, 1024) as f32 / longer;
+    let drawn = doc.render(0, scale).map_err(|_| SaveError::NoSuchPage(0))?;
+    crate::export::picture(&drawn, crate::ExportFormat::Png)
 }
 
 /// The reading order of the tagged file at `source` (see [`crate::ReadingOrder`]), read in
@@ -950,6 +980,12 @@ fn run(path: PathBuf, password: Option<String>, limits: Limits, on_open: OpenRep
                         Ok(findings)
                     }))
                 }
+                Reply::PrintReady(path, profile, reply) => reply(
+                    ask!(Op::PrintReady(profile), Archived).and_then(|(bytes, findings)| {
+                        write_atomically(&path, &bytes)?;
+                        Ok(findings)
+                    }),
+                ),
                 Reply::Tag(path, reply) => reply(ask!(Op::Tagged, Tagged).and_then(|(bytes, findings)| {
                     write_atomically(&path, &bytes)?;
                     Ok(findings)

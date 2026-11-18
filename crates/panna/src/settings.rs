@@ -49,6 +49,14 @@ pub struct Settings {
     pub recent: Vec<PathBuf>,
     /// Words added to the spelling dictionary, in lower case.
     pub words: Vec<String>,
+    /// Shortcuts the user has changed.
+    pub keys: crate::keymap::Keymap,
+    /// Folder search keeps an index of each file's text.
+    pub search_index: bool,
+    /// The language spelling is checked in.
+    pub spelling_language: panna_core::spell::Language,
+    /// The language the interface is shown in.
+    pub language: crate::i18n::Language,
 }
 
 impl Default for Settings {
@@ -71,6 +79,10 @@ impl Default for Settings {
             redact: RedactLook::default(),
             recent: Vec::new(),
             words: Vec::new(),
+            keys: crate::keymap::Keymap::default(),
+            search_index: true,
+            spelling_language: panna_core::spell::Language::default(),
+            language: crate::i18n::Language::default(),
         }
     }
 }
@@ -120,7 +132,7 @@ impl Settings {
                 continue;
             };
             let key = key.trim();
-            if out.bars.parse_line(key, value, finite) {
+            if out.bars.parse_line(key, value, finite) || out.keys.parse_line(key, value) {
                 continue;
             }
             match key {
@@ -136,6 +148,14 @@ impl Settings {
                 "view.open_zoom" => out.open_zoom = OpenZoom::parse(value.trim()).unwrap_or(out.open_zoom),
                 "measure.unit" => out.unit = Unit::parse(value.trim()).unwrap_or(out.unit),
                 "keys.single" => out.single_keys = value.trim() != "false",
+                "spelling.language" => {
+                    out.spelling_language =
+                        panna_core::spell::Language::parse(value.trim()).unwrap_or(out.spelling_language);
+                }
+                "search.index" => out.search_index = value.trim() != "false",
+                "ui.language" => {
+                    out.language = crate::i18n::Language::parse(value.trim()).unwrap_or(out.language)
+                }
                 "present.loop" => out.present_loop = value.trim() == "true",
                 "present.seconds" => {
                     out.present_seconds = value.trim().parse::<u32>().map_or(0, |s| s.min(MAX_SECONDS));
@@ -195,6 +215,13 @@ impl Settings {
         if !self.author.contains(['\n', '\r']) {
             out.push_str(&format!("comments.author={}\n", self.author));
         }
+        self.keys.serialize(&mut out);
+        out.push_str(&format!(
+            "search.index={}\nspelling.language={}\nui.language={}\n",
+            self.search_index,
+            self.spelling_language.as_str(),
+            self.language.as_str()
+        ));
         for word in &self.words {
             out.push_str(&format!("spelling.word={word}\n"));
         }
@@ -238,6 +265,21 @@ fn finite(s: &str) -> Option<f32> {
 
 fn file_path() -> Option<PathBuf> {
     Some(config_dir()?.join("settings.txt"))
+}
+
+/// Panna's folder in the OS cache directory, for things that can be made again.
+pub fn cache_dir() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+    }?;
+    Some(base.join("Panna"))
 }
 
 /// Panna's folder in the OS config directory.
@@ -288,6 +330,18 @@ mod tests {
             },
             recent: vec![PathBuf::from("/a/b c=d.pdf"), PathBuf::from("C:\\x.pdf")],
             words: vec!["panna".into(), "acrobat's".into()],
+            keys: {
+                let mut keys = crate::keymap::Keymap::default();
+                keys.set(
+                    crate::keymap::Action::Save,
+                    crate::keymap::Chord::parse("Ctrl+Shift+F2"),
+                );
+                keys.set(crate::keymap::Action::Print, None);
+                keys
+            },
+            search_index: false,
+            spelling_language: panna_core::spell::Language::EnglishGb,
+            language: crate::i18n::Language::Hindi,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

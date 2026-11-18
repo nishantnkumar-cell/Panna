@@ -1,0 +1,3398 @@
+# Hindi (हिन्दी) translations of Panna's interface. See src/i18n.rs for the format.
+
+Same font
+= वही फ़ॉन्ट
+
+Single spacing
+= एकल पंक्ति अंतर
+
+Double spacing
+= दोहरा पंक्ति अंतर
+
+{0} lines
+= {0} पंक्तियाँ
+
+Click where the text starts.
+= जहाँ से पाठ शुरू हो, वहाँ क्लिक करें।
+
+Click, or drag a box, where the picture goes.
+= जहाँ चित्र लगाना है, वहाँ क्लिक करें या बॉक्स खींचें।
+
+Drag a box over what the link covers.
+= लिंक जिस हिस्से पर हो, उस पर बॉक्स खींचें।
+
+Click a line of text to change it.
+= बदलने के लिए पाठ की किसी पंक्ति पर क्लिक करें।
+
+Add text to the page
+= पृष्ठ पर पाठ जोड़ें
+
+Add a picture to the page
+= पृष्ठ पर चित्र जोड़ें
+
+Add a link to a page or address
+= किसी पृष्ठ या पते का लिंक जोड़ें
+
+Change text on the page
+= पृष्ठ का पाठ बदलें
+
+Stop adding to pages (Esc)
+= पृष्ठों में जोड़ना बंद करें (Esc)
+
+Cancel
+= रद्द करें
+
+Bold
+= मोटा
+
+Italic
+= तिरछा
+
+Line up on the left
+= बाईं ओर संरेखित करें
+
+Centre
+= बीच में
+
+Line up on the right
+= दाईं ओर संरेखित करें
+
+Line spacing
+= पंक्ति अंतर
+
+How far apart the lines are
+= पंक्तियों के बीच कितनी दूरी हो
+
+Add text
+= पाठ जोड़ें
+
+Type here
+= यहाँ लिखें
+
+The text becomes part of the page.
+= पाठ पृष्ठ का हिस्सा बन जाता है।
+
+Add
+= जोड़ें
+
+Change a paragraph
+= अनुच्छेद बदलें
+
+Change text
+= पाठ बदलें
+
+Change
+= बदलें
+
+Goes to page {0}.
+= पृष्ठ {0} पर जाता है।
+
+Opens {uri}
+= {uri} खोलता है
+
+Type a page number, a web address or an email address.
+= पृष्ठ संख्या, वेब पता या ईमेल पता लिखें।
+
+Add a link
+= लिंक जोड़ें
+
+Page number, web address or email address
+= पृष्ठ संख्या, वेब पता या ईमेल पता
+
+Select text
+= पाठ चुनें
+
+Highlight text
+= पाठ हाइलाइट करें
+
+Underline text
+= पाठ को रेखांकित करें
+
+Strike through text
+= पाठ को काटें
+
+Replace text: select the words, then type the new ones
+= पाठ बदलें: शब्द चुनें, फिर नए शब्द लिखें
+
+Insert text: click where the words go, then type them
+= पाठ डालें: जहाँ शब्द आने हैं वहाँ क्लिक करें, फिर लिखें
+
+Erase parts of freehand drawings
+= हाथ से बनी रेखाओं के हिस्से मिटाएँ
+
+Draw a polygon line: click each point, double-click or Enter to finish
+= बहुभुज रेखा बनाएँ: हर बिंदु पर क्लिक करें, समाप्त करने के लिए डबल-क्लिक या Enter दबाएँ
+
+Add a sticky note
+= चिपकने वाला नोट जोड़ें
+
+Add a text box
+= पाठ बॉक्स जोड़ें
+
+Add a callout: drag from what it points at to where the text goes
+= कॉलआउट जोड़ें: जिस चीज़ की ओर इशारा हो वहाँ से, पाठ की जगह तक खींचें
+
+Attach a file: click where its paperclip goes
+= फ़ाइल संलग्न करें: जहाँ पेपरक्लिप लगानी है वहाँ क्लिक करें
+
+Record audio: click where its speaker goes, then speak
+= ऑडियो रिकॉर्ड करें: जहाँ स्पीकर लगाना है वहाँ क्लिक करें, फिर बोलें
+
+Draw freehand
+= हाथ से बनाएँ
+
+Draw a rectangle
+= आयत बनाएँ
+
+Draw an ellipse
+= दीर्घवृत्त बनाएँ
+
+Draw an arrow
+= तीर बनाएँ
+
+Draw a line
+= रेखा बनाएँ
+
+Draw a polygon: click each corner, double-click or Enter to finish
+= बहुभुज बनाएँ: हर कोने पर क्लिक करें, समाप्त करने के लिए डबल-क्लिक या Enter दबाएँ
+
+Draw a cloud: click each corner, double-click or Enter to finish
+= बादल बनाएँ: हर कोने पर क्लिक करें, समाप्त करने के लिए डबल-क्लिक या Enter दबाएँ
+
+Add a stamp such as Approved or Draft: click, or drag to size it
+= "स्वीकृत" या "मसौदा" जैसी मुहर जोड़ें: क्लिक करें, या आकार देने के लिए खींचें
+
+Fill & Sign: add your signature, initials, the date or a check mark where you click
+= भरें और हस्ताक्षर करें: जहाँ क्लिक करें वहाँ अपना हस्ताक्षर, आद्याक्षर, तारीख या सही का निशान जोड़ें
+
+{what} ({key})
+= {what} ({key})
+
+Select
+= चुनें
+
+Highlight
+= हाइलाइट
+
+Underline
+= रेखांकन
+
+Strike out
+= काटें
+
+Replace text
+= पाठ बदलें
+
+Insert text
+= पाठ डालें
+
+Eraser
+= रबड़
+
+Polygon line
+= बहुभुज रेखा
+
+Sticky note
+= चिपकने वाला नोट
+
+Text box
+= पाठ बॉक्स
+
+Callout
+= कॉलआउट
+
+Attach file
+= फ़ाइल संलग्न करें
+
+Record audio
+= ऑडियो रिकॉर्ड करें
+
+Draw
+= बनाएँ
+
+Rectangle
+= आयत
+
+Ellipse
+= दीर्घवृत्त
+
+Arrow
+= तीर
+
+Line
+= रेखा
+
+Polygon
+= बहुभुज
+
+Cloud
+= बादल
+
+Stamp
+= मुहर
+
+Fill & Sign
+= भरें और हस्ताक्षर करें
+
+{0} pt
+= {0} पॉइंट
+
+No fill
+= कोई भराव नहीं
+
+White
+= सफ़ेद
+
+Grey
+= धूसर
+
+Yellow
+= पीला
+
+Green
+= हरा
+
+Blue
+= नीला
+
+Red
+= लाल
+
+Black
+= काला
+
+Start
+= शुरुआत
+
+End
+= अंत
+
+Sound clip, {0}
+= ध्वनि क्लिप, {0}
+
+Status set to {0}
+= स्थिति {0} की गई
+
+{0} set by {1}
+= {1} ने {0} किया
+
+Opacity {0}%
+= अपारदर्शिता {0}%
+
+{width} pt
+= {width} पॉइंट
+
+Dashed lines
+= डैश वाली रेखाएँ
+
+Fill
+= भराव
+
+Undo ({m}Z)
+= पूर्ववत करें ({m}Z)
+
+Redo ({m}Y)
+= फिर से करें ({m}Y)
+
+Reply
+= जवाब दें
+
+Note
+= नोट
+
+Edit note
+= नोट संपादित करें
+
+Edit text box
+= पाठ बॉक्स संपादित करें
+
+Edit callout
+= कॉलआउट संपादित करें
+
+Replace with
+= इससे बदलें
+
+Comment
+= टिप्पणी
+
+Save
+= सहेजें
+
+Your own words
+= आपके अपने शब्द
+
+A picture, such as a signature or logo…
+= कोई चित्र, जैसे हस्ताक्षर या लोगो…
+
+Approved
+= स्वीकृत
+
+Final
+= अंतिम
+
+Confidential
+= गोपनीय
+
+Expired
+= समाप्त
+
+Purple
+= बैंगनी
+
+The microphone didn't start.
+= माइक्रोफ़ोन शुरू नहीं हुआ।
+
+The recording couldn't be finished.
+= रिकॉर्डिंग पूरी नहीं हो सकी।
+
+No microphone was found.
+= कोई माइक्रोफ़ोन नहीं मिला।
+
+The microphone can't be used: {e}
+= माइक्रोफ़ोन का उपयोग नहीं हो सकता: {e}
+
+The microphone's sound format ({other}) isn't supported.
+= माइक्रोफ़ोन का ध्वनि प्रारूप ({other}) समर्थित नहीं है।
+
+The microphone didn't start: {e}
+= माइक्रोफ़ोन शुरू नहीं हुआ: {e}
+
+The speakers didn't start.
+= स्पीकर शुरू नहीं हुए।
+
+No speakers were found.
+= कोई स्पीकर नहीं मिला।
+
+The speakers can't be used: {e}
+= स्पीकर का उपयोग नहीं हो सकता: {e}
+
+The speakers' sound format ({other}) isn't supported.
+= स्पीकर का ध्वनि प्रारूप ({other}) समर्थित नहीं है।
+
+The speakers didn't start: {e}
+= स्पीकर शुरू नहीं हुए: {e}
+
+Choose the folder of PDFs
+= PDF वाला फ़ोल्डर चुनें
+
+Choose where to save the results
+= चुनें कि परिणाम कहाँ सहेजे जाएँ
+
+The folder couldn't be read: {e}
+= फ़ोल्डर पढ़ा नहीं जा सका: {e}
+
+It stopped unexpectedly.
+= यह अचानक रुक गया।
+
+Batch actions
+= एक साथ कई फ़ाइलों पर काम
+
+Runs these steps, in this order, on every PDF in a folder, and saves each result under its own name in another folder.
+= ये चरण इसी क्रम में फ़ोल्डर की हर PDF पर चलाता है, और हर परिणाम को उसी नाम से दूसरे फ़ोल्डर में सहेजता है।
+
+Make scanned pages searchable (OCR)
+= स्कैन किए पृष्ठों को खोजने योग्य बनाएँ (OCR)
+
+Add a watermark:
+= वॉटरमार्क जोड़ें:
+
+Add page numbers (Page 1 of 9)
+= पृष्ठ संख्याएँ जोड़ें (पृष्ठ 1 / 9)
+
+Flatten comments and form fields
+= टिप्पणियों और फ़ॉर्म फ़ील्ड को पृष्ठ में मिलाएँ
+
+Remove hidden information and comments
+= छिपी जानकारी और टिप्पणियाँ हटाएँ
+
+Make the files smaller
+= फ़ाइलें छोटी करें
+
+Choose the folder…
+= फ़ोल्डर चुनें…
+
+There are no PDFs in that folder.
+= उस फ़ोल्डर में कोई PDF नहीं है।
+
+Working on {0} of {total}: {name}
+= {total} में से {0} पर काम चल रहा है: {name}
+
+{name}: {why}
+= {name}: {why}
+
+These weren't saved:
+= ये सहेजे नहीं गए:
+
+Run again…
+= फिर से चलाएँ…
+
+Done
+= पूरा हुआ
+
+Stop
+= रोकें
+
+Plain
+= सादा
+
+Bold & italic
+= मोटा और तिरछा
+
+Default
+= डिफ़ॉल्ट
+
+Orange
+= नारंगी
+
+Page {0}
+= पृष्ठ {0}
+
+Add a bookmark for this page
+= इस पृष्ठ के लिए बुकमार्क जोड़ें
+
+Rename bookmark
+= बुकमार्क का नाम बदलें
+
+Move bookmark up
+= बुकमार्क ऊपर ले जाएँ
+
+Move bookmark down
+= बुकमार्क नीचे ले जाएँ
+
+Move bookmark out a level
+= बुकमार्क को एक स्तर बाहर ले जाएँ
+
+Move bookmark in, under the one above
+= बुकमार्क को अंदर, ऊपर वाले के नीचे ले जाएँ
+
+Bookmark colour and style
+= बुकमार्क का रंग और शैली
+
+Expand all bookmarks
+= सभी बुकमार्क खोलें
+
+Collapse all bookmarks
+= सभी बुकमार्क समेटें
+
+Delete bookmark and the ones under it
+= बुकमार्क और उसके नीचे वाले हटाएँ
+
+This document has no bookmarks.
+= इस दस्तावेज़ में कोई बुकमार्क नहीं है।
+
+Show the bookmarks under it
+= इसके नीचे के बुकमार्क दिखाएँ
+
+Hide the bookmarks under it
+= इसके नीचे के बुकमार्क छिपाएँ
+
+Bookmark name
+= बुकमार्क का नाम
+
+(untitled)
+= (बिना नाम)
+
+Select a bookmark to change its colour and style.
+= रंग और शैली बदलने के लिए कोई बुकमार्क चुनें।
+
+{name}, until {until}
+= {name}, {until} तक
+
+{name}, from {issuer}, until {until}
+= {name}, {issuer} से, {until} तक
+
+The certificate store couldn't be read.
+= प्रमाणपत्र भंडार पढ़ा नहीं जा सका।
+
+That certificate can't be used.
+= उस प्रमाणपत्र का उपयोग नहीं हो सकता।
+
+Windows didn't sign.
+= Windows ने हस्ताक्षर नहीं किए।
+
+Signing was cancelled.
+= हस्ताक्षर रद्द कर दिया गया।
+
+Windows couldn't sign with that certificate.
+= Windows उस प्रमाणपत्र से हस्ताक्षर नहीं कर सका।
+
+The certificate store is read on Windows only.
+= प्रमाणपत्र भंडार केवल Windows पर पढ़ा जाता है।
+
+That picture is too large.
+= वह चित्र बहुत बड़ा है।
+
+Add files to combine
+= जोड़ने के लिए फ़ाइलें चुनें
+
+PDFs and pictures
+= PDF और चित्र
+
+Combined
+= संयुक्त
+
+Save the combined PDF as
+= संयुक्त PDF को इस रूप में सहेजें
+
+PDF documents
+= PDF दस्तावेज़
+
+Save it under a new name: that file is one being combined.
+= इसे नए नाम से सहेजें: वह फ़ाइल जोड़ी जा रही फ़ाइलों में से एक है।
+
+Couldn't write the PDF: {e}
+= PDF लिखी नहीं जा सकी: {e}
+
+Combining stopped unexpectedly.
+= जोड़ना अचानक रुक गया।
+
+Move up
+= ऊपर ले जाएँ
+
+Move down
+= नीचे ले जाएँ
+
+Take out of the list
+= सूची से हटाएँ
+
+Combine files
+= फ़ाइलें जोड़ें
+
+No files yet.
+= अभी कोई फ़ाइल नहीं।
+
+Add files…
+= फ़ाइलें जोड़ें…
+
+Combining {count} files…
+= {count} फ़ाइलें जोड़ी जा रही हैं…
+
+Combine and save as…
+= जोड़ें और इस रूप में सहेजें…
+
+By page
+= पृष्ठ के अनुसार
+
+By author
+= लेखक के अनुसार
+
+By date, newest first
+= तारीख के अनुसार, नई पहले
+
+By type
+= प्रकार के अनुसार
+
+All types
+= सभी प्रकार
+
+All reviewers
+= सभी समीक्षक
+
+Any status
+= कोई भी स्थिति
+
+Any check
+= कोई भी निशान
+
+Checked
+= निशान लगा
+
+Unchecked
+= बिना निशान
+
+No name
+= कोई नाम नहीं
+
+No comments yet. Use the comment tools to add some.
+= अभी कोई टिप्पणी नहीं। टिप्पणी जोड़ने के लिए टिप्पणी उपकरणों का उपयोग करें।
+
+{n} of {total}
+= {total} में से {n}
+
+{n} comments
+= {n} टिप्पणियाँ
+
+Hide the filters
+= फ़िल्टर छिपाएँ
+
+Filter comments by type, reviewer, status or checkmark
+= टिप्पणियों को प्रकार, समीक्षक, स्थिति या निशान से छाँटें
+
+Save a list of the comments, by page, as a PDF…
+= टिप्पणियों की पृष्ठवार सूची PDF के रूप में सहेजें…
+
+Print with each page's comments after it…
+= हर पृष्ठ के बाद उसकी टिप्पणियों के साथ प्रिंट करें…
+
+Show all
+= सब दिखाएँ
+
+No comments match the filters.
+= कोई टिप्पणी फ़िल्टर से मेल नहीं खाती।
+
+Not saved yet
+= अभी सहेजा नहीं गया
+
+Play or stop ({0})
+= चलाएँ या रोकें ({0})
+
+Delete this comment
+= यह टिप्पणी हटाएँ
+
+Delete this reply
+= यह जवाब हटाएँ
+
+Take the checkmark off (Shift+K)
+= निशान हटाएँ (Shift+K)
+
+Add a checkmark, for your own tracking (Shift+K)
+= अपनी निगरानी के लिए निशान लगाएँ (Shift+K)
+
+Review status
+= समीक्षा की स्थिति
+
+Added
+= जोड़ा गया
+
+Removed
+= हटाया गया
+
+Changed
+= बदला गया
+
+No differences in the text.
+= पाठ में कोई अंतर नहीं।
+
+{n} differences
+= {n} अंतर
+
+Compared with {0}
+= {0} से तुलना की गई
+
+Stop comparing
+= तुलना बंद करें
+
+Previous difference
+= पिछला अंतर
+
+Next difference
+= अगला अंतर
+
+Page {0} · {1}
+= पृष्ठ {0} · {1}
+
+Showing the first {MAX_LISTED} of {0} differences.
+= {0} अंतरों में से पहले {MAX_LISTED} दिखाए जा रहे हैं।
+
+Green is only in this file; red, struck through, only in the other.
+= हरा केवल इस फ़ाइल में है; लाल, कटा हुआ, केवल दूसरी में।
+
+New blank PDF
+= नई खाली PDF
+
+Page size
+= पृष्ठ का आकार
+
+Portrait
+= खड़ा
+
+Landscape
+= आड़ा
+
+Pages
+= पृष्ठ
+
+Create…
+= बनाएँ…
+
+The resolution goes from 36 to 1200 dots per inch.
+= रिज़ॉल्यूशन 36 से 1200 डॉट प्रति इंच तक हो सकता है।
+
+{0} into one text file
+= {0} एक पाठ फ़ाइल में
+
+{0} into one PowerPoint presentation, a picture of each page as a slide
+= {0} एक PowerPoint प्रस्तुति में, हर पृष्ठ का चित्र एक स्लाइड के रूप में
+
+{0}, a picture each
+= {0}, हर एक का एक चित्र
+
+Resolution
+= रिज़ॉल्यूशन
+
+Export pages
+= पृष्ठ निर्यात करें
+
+Plain text
+= सादा पाठ
+
+Word document (.docx)
+= Word दस्तावेज़ (.docx)
+
+PowerPoint presentation (.pptx)
+= PowerPoint प्रस्तुति (.pptx)
+
+Excel workbook (.xlsx)
+= Excel वर्कबुक (.xlsx)
+
+Web page (.html)
+= वेब पेज (.html)
+
+Rich Text (.rtf)
+= रिच टेक्स्ट (.rtf)
+
+E-book (.epub)
+= ई-बुक (.epub)
+
+PNG pictures (sharp, larger)
+= PNG चित्र (साफ़, बड़े)
+
+JPEG pictures (photos, smaller)
+= JPEG चित्र (फ़ोटो, छोटे)
+
+Such as 1-3, 5 (1 to {count})
+= जैसे 1-3, 5 (1 से {count})
+
+Export…
+= निर्यात करें…
+
+{n} pages
+= {n} पृष्ठ
+
+Searching… {0}%
+= खोज जारी है… {0}%
+
+No matches
+= कोई मेल नहीं
+
+Result {0} of {1}{more}
+= परिणाम {1}{more} में से {0}
+
+{0}{more} results
+= {0}{more} परिणाम
+
+Search document
+= दस्तावेज़ में खोजें
+
+Clear search (Esc)
+= खोज साफ़ करें (Esc)
+
+Match case
+= अक्षरों का आकार मिलाएँ
+
+Whole words only
+= केवल पूरे शब्द
+
+Search a folder of PDFs ({0}Shift+F)
+= PDF के फ़ोल्डर में खोजें ({0}Shift+F)
+
+Previous result (Shift+F3)
+= पिछला परिणाम (Shift+F3)
+
+Next result (Enter or F3)
+= अगला परिणाम (Enter या F3)
+
+Type in the search box to find text in this document.
+= इस दस्तावेज़ में पाठ खोजने के लिए खोज बॉक्स में लिखें।
+
+No results yet.
+= अभी कोई परिणाम नहीं।
+
+Showing the first {MAX_LISTED} of {0} results.
+= {0} परिणामों में से पहले {MAX_LISTED} दिखाए जा रहे हैं।
+
+Choose the folder of PDFs to search
+= खोजने के लिए PDF का फ़ोल्डर चुनें
+
+No folder chosen
+= कोई फ़ोल्डर नहीं चुना गया
+
+Search a folder of PDFs
+= PDF के फ़ोल्डर में खोजें
+
+Words to find
+= खोजने वाले शब्द
+
+Choose folder…
+= फ़ोल्डर चुनें…
+
+Include folders inside it
+= इसके अंदर के फ़ोल्डर भी शामिल करें
+
+Whole words
+= पूरे शब्द
+
+Keep an index on this computer for faster searches
+= तेज़ खोज के लिए इस कंप्यूटर पर सूचकांक रखें
+
+Index is empty
+= सूचकांक खाली है
+
+Clear index ({0})
+= सूचकांक साफ़ करें ({0})
+
+Showing the first {MAX_LISTED} matches.
+= पहले {MAX_LISTED} मेल दिखाए जा रहे हैं।
+
+These weren't searched:
+= इनमें खोज नहीं हुई:
+
+Close
+= बंद करें
+
+Search
+= खोजें
+
+Choose a picture for this field
+= इस फ़ील्ड के लिए चित्र चुनें
+
+Sign here with a certificate
+= यहाँ प्रमाणपत्र से हस्ताक्षर करें
+
+Does nothing here (it needs a script)
+= यहाँ कुछ नहीं करता (इसे स्क्रिप्ट चाहिए)
+
+Clears the form
+= फ़ॉर्म साफ़ करता है
+
+Goes to page {0}
+= पृष्ठ {0} पर जाता है
+
+Prints the document
+= दस्तावेज़ प्रिंट करता है
+
+Goes to the next page
+= अगले पृष्ठ पर जाता है
+
+Goes to the previous page
+= पिछले पृष्ठ पर जाता है
+
+Goes to the first page
+= पहले पृष्ठ पर जाता है
+
+Goes to the last page
+= अंतिम पृष्ठ पर जाता है
+
+As the viewer chooses
+= जैसा व्यूअर चुने
+
+Fit page
+= पूरा पृष्ठ
+
+Fit width
+= पूरी चौड़ाई
+
+Pages only
+= केवल पृष्ठ
+
+Bookmarks
+= बुकमार्क
+
+Page thumbnails
+= पृष्ठ थंबनेल
+
+Attached files
+= संलग्न फ़ाइलें
+
+Layers
+= परतें
+
+Single page
+= एक पृष्ठ
+
+Single page, scrolling
+= एक पृष्ठ, स्क्रॉल के साथ
+
+Two pages
+= दो पृष्ठ
+
+Two pages, scrolling
+= दो पृष्ठ, स्क्रॉल के साथ
+
+Two pages, cover alone
+= दो पृष्ठ, आवरण अलग
+
+Two pages, cover alone, scrolling
+= दो पृष्ठ, आवरण अलग, स्क्रॉल के साथ
+
+When this file opens
+= जब यह फ़ाइल खुले
+
+Page
+= पृष्ठ
+
+Zoom
+= ज़ूम
+
+Show
+= दिखाएँ
+
+Page layout
+= पृष्ठ लेआउट
+
+Full screen
+= पूर्ण स्क्रीन
+
+Use the current view
+= वर्तमान दृश्य का उपयोग करें
+
+Apply
+= लागू करें
+
+Open
+= खोलें
+
+Save as
+= इस रूप में सहेजें
+
+Print
+= प्रिंट करें
+
+Close the document
+= दस्तावेज़ बंद करें
+
+Document properties
+= दस्तावेज़ के गुण
+
+Find
+= ढूँढें
+
+Find next
+= अगला ढूँढें
+
+Find previous
+= पिछला ढूँढें
+
+Check spelling
+= वर्तनी जाँचें
+
+Undo
+= पूर्ववत करें
+
+Redo
+= फिर से करें
+
+Copy
+= कॉपी करें
+
+Select all
+= सब चुनें
+
+Preferences
+= प्राथमिकताएँ
+
+Zoom in
+= ज़ूम बढ़ाएँ
+
+Zoom out
+= ज़ूम घटाएँ
+
+Actual size
+= वास्तविक आकार
+
+Fit visible
+= दिखने वाला भाग फ़िट करें
+
+Reflow
+= पुनर्प्रवाह
+
+Next page
+= अगला पृष्ठ
+
+Previous page
+= पिछला पृष्ठ
+
+First page
+= पहला पृष्ठ
+
+Last page
+= अंतिम पृष्ठ
+
+Go to page
+= पृष्ठ पर जाएँ
+
+Rotate the view clockwise
+= दृश्य को दक्षिणावर्त घुमाएँ
+
+Rotate the view anticlockwise
+= दृश्य को वामावर्त घुमाएँ
+
+Insert a blank page
+= खाली पृष्ठ डालें
+
+Insert a file
+= फ़ाइल डालें
+
+Delete pages
+= पृष्ठ हटाएँ
+
+Rotate pages
+= पृष्ठ घुमाएँ
+
+Add a bookmark
+= बुकमार्क जोड़ें
+
+Navigation pane
+= नेविगेशन पट्टी
+
+All tools
+= सभी उपकरण
+
+Comment tools
+= टिप्पणी उपकरण
+
+Read mode
+= पढ़ने का मोड
+
+Full screen, pages only
+= पूर्ण स्क्रीन, केवल पृष्ठ
+
+Full screen with the tools
+= उपकरणों के साथ पूर्ण स्क्रीन
+
+Scroll automatically
+= अपने आप स्क्रॉल करें
+
+Read aloud, or stop
+= ज़ोर से पढ़ें, या रोकें
+
+Rulers
+= रूलर
+
+Grid
+= ग्रिड
+
+Snap to grid and guides
+= ग्रिड और गाइड से चिपकाएँ
+
+Press a key…
+= कोई कुंजी दबाएँ…
+
+None
+= कोई नहीं
+
+No shortcut
+= कोई शॉर्टकट नहीं
+
+Back to the default
+= डिफ़ॉल्ट पर वापस
+
+Keyboard shortcuts
+= कीबोर्ड शॉर्टकट
+
+Reset all
+= सब रीसेट करें
+
+No number
+= कोई संख्या नहीं
+
+From
+= से
+
+Numbers
+= संख्याएँ
+
+Prefix
+= उपसर्ग
+
+Start at
+= यहाँ से शुरू
+
+Remove this range
+= यह श्रेणी हटाएँ
+
+Pages show: {0}{more}
+= पृष्ठों पर दिखेगा: {0}{more}
+
+Page labels
+= पृष्ठ लेबल
+
+Add a range from this page
+= इस पृष्ठ से एक श्रेणी जोड़ें
+
+Point at a page to look closer
+= पास से देखने के लिए पृष्ठ पर पॉइंटर ले जाएँ
+
+Loupe
+= आवर्धक लेंस
+
+Magnify
+= आवर्धन
+
+Close the loupe
+= आवर्धक लेंस बंद करें
+
+Pan & zoom
+= खिसकाएँ और ज़ूम करें
+
+Close pan & zoom
+= खिसकाएँ और ज़ूम बंद करें
+
+Making the PDF stopped.
+= PDF बनाना रुक गया।
+
+Couldn't read “{name}”: {e}
+= “{name}” पढ़ी नहीं जा सकी: {e}
+
+Making the PDF stopped unexpectedly.
+= PDF बनाना अचानक रुक गया।
+
+The clipboard couldn't be read.
+= क्लिपबोर्ड पढ़ा नहीं जा सका।
+
+Save the new PDF as
+= नई PDF को इस रूप में सहेजें
+
+A PDF Portfolio can hold up to {0} files.
+= एक PDF पोर्टफ़ोलियो में अधिकतम {0} फ़ाइलें हो सकती हैं।
+
+Couldn't read {name}: {e}
+= {name} पढ़ी नहीं जा सकी: {e}
+
+Those files are too large together for one PDF.
+= वे फ़ाइलें मिलकर एक PDF के लिए बहुत बड़ी हैं।
+
+Couldn't save the PDF Portfolio: {e}
+= PDF पोर्टफ़ोलियो सहेजा नहीं जा सका: {e}
+
+Write an email?
+= ईमेल लिखें?
+
+Open this link in your browser?
+= यह लिंक अपने ब्राउज़र में खोलें?
+
+Your mail program will open.
+= आपका ईमेल प्रोग्राम खुलेगा।
+
+Panna stays offline; your browser opens the page.
+= पन्ना ऑफ़लाइन रहता है; पेज आपका ब्राउज़र खोलता है।
+
+Copy link
+= लिंक कॉपी करें
+
+Reset the form?
+= फ़ॉर्म रीसेट करें?
+
+Every field goes back to its starting value. You can still close without saving to keep what the file has.
+= हर फ़ील्ड अपने शुरुआती मान पर लौट जाता है। फ़ाइल में जो है उसे रखने के लिए आप अब भी बिना सहेजे बंद कर सकते हैं।
+
+Reset
+= रीसेट करें
+
+Open PDF
+= PDF खोलें
+
+Couldn't open a new window: {e}
+= नई विंडो नहीं खुल सकी: {e}
+
+The new window shows the document as last saved, without your unsaved changes.
+= नई विंडो दस्तावेज़ को पिछली बार सहेजे रूप में दिखाती है, बिना आपके न सहेजे बदलावों के।
+
+{shown} was the shortcut for {0}, which now has none.
+= {shown} {0} का शॉर्टकट था, जिसका अब कोई शॉर्टकट नहीं है।
+
+{0} was the shortcut for {1}, which now has none.
+= {0} {1} का शॉर्टकट था, जिसका अब कोई शॉर्टकट नहीं है।
+
+Panna {0}\n\nAn offline PDF viewer and editor, written in Rust. Nothing you open leaves this computer.
+= पन्ना {0}\n\nRust में लिखा एक ऑफ़लाइन PDF व्यूअर और संपादक। आप जो भी खोलते हैं, वह इस कंप्यूटर से बाहर नहीं जाता।
+
+Save form data as
+= फ़ॉर्म डेटा इस रूप में सहेजें
+
+Form data (FDF)
+= फ़ॉर्म डेटा (FDF)
+
+Form data (XFDF)
+= फ़ॉर्म डेटा (XFDF)
+
+Fill in the form from
+= फ़ॉर्म यहाँ से भरें
+
+Form data
+= फ़ॉर्म डेटा
+
+None of the fields in that file could be filled in on this form.
+= उस फ़ाइल का कोई भी फ़ील्ड इस फ़ॉर्म में भरा नहीं जा सका।
+
+Couldn't read the form data: {e}
+= फ़ॉर्म डेटा पढ़ा नहीं जा सका: {e}
+
+Making a PDF of the scanned pages…
+= स्कैन किए पृष्ठों की PDF बन रही है…
+
+Recognising text in pages without any…
+= बिना पाठ वाले पृष्ठों में पाठ पहचाना जा रहा है…
+
+Save a smaller copy as
+= छोटी प्रति इस रूप में सहेजें
+
+Saved a copy {0} smaller: {1} instead of {2}.
+= प्रति {0} छोटी सहेजी गई: {2} के बजाय {1}।
+
+Saved a copy. This file was already about as small as it gets.
+= प्रति सहेजी गई। यह फ़ाइल पहले से ही लगभग जितनी छोटी हो सकती है उतनी है।
+
+Save comments as
+= टिप्पणियाँ इस रूप में सहेजें
+
+Comments (XFDF)
+= टिप्पणियाँ (XFDF)
+
+Comments (FDF)
+= टिप्पणियाँ (FDF)
+
+Comparing with {name}…
+= {name} से तुलना हो रही है…
+
+The files couldn't be compared.
+= फ़ाइलों की तुलना नहीं हो सकी।
+
+Add comments from
+= इससे टिप्पणियाँ जोड़ें
+
+Comments
+= टिप्पणियाँ
+
+Couldn't read the comments: {e}
+= टिप्पणियाँ पढ़ी नहीं जा सकीं: {e}
+
+None of the comments in that file fit this document.
+= उस फ़ाइल की कोई भी टिप्पणी इस दस्तावेज़ में नहीं बैठती।
+
+Added {added} comments. {skipped} didn't fit this document and were left out.
+= {added} टिप्पणियाँ जोड़ी गईं। {skipped} इस दस्तावेज़ में नहीं बैठीं और छोड़ दी गईं।
+
+Looking for fields…
+= फ़ील्ड खोजे जा रहे हैं…
+
+Fields couldn't be looked for: {e}
+= फ़ील्ड खोजे नहीं जा सके: {e}
+
+Fields couldn't be looked for.
+= फ़ील्ड खोजे नहीं जा सके।
+
+Save a PDF/A copy as
+= PDF/A प्रति इस रूप में सहेजें
+
+Choose the print shop's colour profile
+= प्रिंट शॉप की रंग प्रोफ़ाइल चुनें
+
+ICC colour profile
+= ICC रंग प्रोफ़ाइल
+
+Couldn't read the profile: {e}
+= प्रोफ़ाइल पढ़ी नहीं जा सकी: {e}
+
+Save a PDF/X-4 copy as
+= PDF/X-4 प्रति इस रूप में सहेजें
+
+Save a tagged copy as
+= टैग की गई प्रति इस रूप में सहेजें
+
+Save with thin lines widened as
+= पतली रेखाएँ चौड़ी करके इस रूप में सहेजें
+
+No lines thinner than 0.25 pt were found, so nothing was saved.
+= 0.25 pt से पतली कोई रेखा नहीं मिली, इसलिए कुछ नहीं सहेजा गया।
+
+{count} {lines} widened to 0.25 pt in the copy, which is open now.
+= प्रति में {count} {lines} 0.25 pt तक चौड़ी की गईं, जो अब खुली है।
+
+Save your changes first: descriptions are added to the saved file.
+= पहले अपने बदलाव सहेजें: विवरण सहेजी गई फ़ाइल में जोड़े जाते हैं।
+
+Save a described copy as
+= विवरण वाली प्रति इस रूप में सहेजें
+
+No more places for fields were found.
+= फ़ील्ड के लिए और जगहें नहीं मिलीं।
+
+Added 1 field. Undo it from the page tools if it isn't right.
+= 1 फ़ील्ड जोड़ा गया। सही न हो तो पृष्ठ उपकरणों से पूर्ववत करें।
+
+Added {n} fields. Undo them from the page tools if they aren't right.
+= {n} फ़ील्ड जोड़े गए। सही न हों तो पृष्ठ उपकरणों से पूर्ववत करें।
+
+Couldn't open the picture: {e}
+= चित्र खोला नहीं जा सका: {e}
+
+The picture couldn't be read.
+= चित्र पढ़ा नहीं जा सका।
+
+Couldn't copy the picture: {e}
+= चित्र कॉपी नहीं हो सका: {e}
+
+Couldn't open the link: {e}
+= लिंक खोला नहीं जा सका: {e}
+
+This button runs a script, which Panna doesn't run.
+= यह बटन एक स्क्रिप्ट चलाता है, जिसे पन्ना नहीं चलाता।
+
+Choose a picture for the field
+= फ़ील्ड के लिए चित्र चुनें
+
+Pictures
+= चित्र
+
+Save your changes before signing, so the signature covers them.
+= हस्ताक्षर से पहले अपने बदलाव सहेजें, ताकि हस्ताक्षर उन्हें भी शामिल करे।
+
+Make a PDF from pictures
+= चित्रों से PDF बनाएँ
+
+Making a PDF of {0}…
+= {0} की PDF बन रही है…
+
+{0} pictures
+= {0} चित्र
+
+Save your changes first: the reading order is read from the saved file.
+= पहले अपने बदलाव सहेजें: पढ़ने का क्रम सहेजी गई फ़ाइल से पढ़ा जाता है।
+
+Reading the tags stopped unexpectedly.
+= टैग पढ़ना अचानक रुक गया।
+
+Save a copy in the new reading order as
+= नए पढ़ने के क्रम में प्रति इस रूप में सहेजें
+
+Saving stopped unexpectedly.
+= सहेजना अचानक रुक गया।
+
+Choose a picture for the watermark
+= वॉटरमार्क के लिए चित्र चुनें
+
+Splitting the pages into files…
+= पृष्ठ फ़ाइलों में बाँटे जा रहे हैं…
+
+The pages fit in one file.
+= पृष्ठ एक ही फ़ाइल में आ जाते हैं।
+
+Saved {n} files.
+= {n} फ़ाइलें सहेजी गईं।
+
+Stamp a picture
+= चित्र की मुहर लगाएँ
+
+Attach a file
+= फ़ाइल संलग्न करें
+
+That file is too big to attach (the most is {0} MB).
+= वह फ़ाइल संलग्न करने के लिए बहुत बड़ी है (अधिकतम {0} MB)।
+
+Couldn't open the file: {e}
+= फ़ाइल खोली नहीं जा सकी: {e}
+
+The file couldn't be read.
+= फ़ाइल पढ़ी नहीं जा सकी।
+
+This sound couldn't be read.
+= यह ध्वनि पढ़ी नहीं जा सकी।
+
+Image
+= छवि
+
+Save the comment summary as
+= टिप्पणी सारांश इस रूप में सहेजें
+
+Save attached file as
+= संलग्न फ़ाइल इस रूप में सहेजें
+
+Couldn't make a copy to open: {e}
+= खोलने के लिए प्रति नहीं बन सकी: {e}
+
+Choose the files for the PDF Portfolio
+= PDF पोर्टफ़ोलियो के लिए फ़ाइलें चुनें
+
+Save the PDF Portfolio as
+= PDF पोर्टफ़ोलियो इस रूप में सहेजें
+
+Packing {0} files into a PDF Portfolio…
+= {0} फ़ाइलें PDF पोर्टफ़ोलियो में रखी जा रही हैं…
+
+The bookmarks couldn't be changed: {e}
+= बुकमार्क बदले नहीं जा सके: {e}
+
+The protection couldn't be changed, so nothing was saved: {e}
+= सुरक्षा बदली नहीं जा सकी, इसलिए कुछ नहीं सहेजा गया: {e}
+
+The pages couldn't be changed: {e}
+= पृष्ठ बदले नहीं जा सके: {e}
+
+Text recognised. It can now be found, selected and copied; save to keep it.
+= पाठ पहचाना गया। अब इसे खोजा, चुना और कॉपी किया जा सकता है; रखने के लिए सहेजें।
+
+Save PDF as
+= PDF इस रूप में सहेजें
+
+Insert pages from
+= इससे पृष्ठ डालें
+
+Replace pages with pages from
+= पृष्ठों को इसके पृष्ठों से बदलें
+
+Save the files in
+= फ़ाइलें यहाँ सहेजें
+
+Save pages as
+= पृष्ठ इस रूप में सहेजें
+
+Choose a certificate to trust
+= भरोसे के लिए प्रमाणपत्र चुनें
+
+Certificates
+= प्रमाणपत्र
+
+Couldn't change the trusted certificates: {e}
+= भरोसेमंद प्रमाणपत्र बदले नहीं जा सके: {e}
+
+Couldn't scan: {e}
+= स्कैन नहीं हो सका: {e}
+
+Save the scanned pages as
+= स्कैन किए पृष्ठ इस रूप में सहेजें
+
+Choose a certificate file
+= प्रमाणपत्र फ़ाइल चुनें
+
+Certificate files
+= प्रमाणपत्र फ़ाइलें
+
+That file is too large to be a certificate file.
+= वह फ़ाइल प्रमाणपत्र फ़ाइल होने के लिए बहुत बड़ी है।
+
+Couldn't read the certificate file: {e}
+= प्रमाणपत्र फ़ाइल पढ़ी नहीं जा सकी: {e}
+
+Save the signed copy as
+= हस्ताक्षरित प्रति इस रूप में सहेजें
+
+Export as a Word document
+= Word दस्तावेज़ के रूप में निर्यात करें
+
+Word documents
+= Word दस्तावेज़
+
+Export as a PowerPoint presentation
+= PowerPoint प्रस्तुति के रूप में निर्यात करें
+
+PowerPoint presentations
+= PowerPoint प्रस्तुतियाँ
+
+Export as an Excel workbook
+= Excel वर्कबुक के रूप में निर्यात करें
+
+Excel workbooks
+= Excel वर्कबुक
+
+Export as a web page
+= वेब पेज के रूप में निर्यात करें
+
+Web pages
+= वेब पेज
+
+Export as Rich Text
+= Rich Text के रूप में निर्यात करें
+
+Rich Text files
+= Rich Text फ़ाइलें
+
+Export as an e-book
+= ई-बुक के रूप में निर्यात करें
+
+EPUB e-books
+= EPUB ई-बुक
+
+Export text as
+= पाठ इस रूप में निर्यात करें
+
+Text files
+= पाठ फ़ाइलें
+
+Save the pictures in
+= चित्र यहाँ सहेजें
+
+Compare with
+= इससे तुलना करें
+
+Add a picture
+= चित्र जोड़ें
+
+There's no text there to change.
+= वहाँ बदलने के लिए कोई पाठ नहीं है।
+
+Replace the picture with
+= चित्र को इससे बदलें
+
+New tab
+= नया टैब
+
+Close this document (Ctrl+W)
+= यह दस्तावेज़ बंद करें (Ctrl+W)
+
+Couldn't start the renderer: {e}
+= रेंडरर शुरू नहीं हो सका: {e}
+
+Open… ({m}O)
+= खोलें… ({m}O)
+
+Save ({m}S)
+= सहेजें ({m}S)
+
+Print… ({m}P)
+= प्रिंट करें… ({m}P)
+
+Document properties ({m}D)
+= दस्तावेज़ गुण ({m}D)
+
+({current} of {page_count})
+= ({page_count} में से {current})
+
+Previous page (Page Up)
+= पिछला पृष्ठ (Page Up)
+
+Go to page ({m}Shift+N)
+= पृष्ठ पर जाएँ ({m}Shift+N)
+
+Next page (Page Down)
+= अगला पृष्ठ (Page Down)
+
+Zoom out ({m}Minus)
+= छोटा करें ({m}Minus)
+
+Actual size ({m}1)
+= वास्तविक आकार ({m}1)
+
+Zoom in ({m}Plus)
+= बड़ा करें ({m}Plus)
+
+Fit width ({m}2)
+= चौड़ाई में फ़िट करें ({m}2)
+
+Fit page ({m}0)
+= पृष्ठ फ़िट करें ({m}0)
+
+Hide sidebar (F4)
+= साइडबार छिपाएँ (F4)
+
+Show sidebar (F4)
+= साइडबार दिखाएँ (F4)
+
+Single page: click for two pages side by side
+= एकल पृष्ठ: साथ-साथ दो पृष्ठों के लिए क्लिक करें
+
+Two pages: click to show the cover page alone
+= दो पृष्ठ: आवरण पृष्ठ अलग दिखाने के लिए क्लिक करें
+
+Two pages with cover: click for single page
+= आवरण सहित दो पृष्ठ: एकल पृष्ठ के लिए क्लिक करें
+
+Rotate the view left
+= दृश्य बाएँ घुमाएँ
+
+Rotate the view right
+= दृश्य दाएँ घुमाएँ
+
+Read mode: hide the toolbars and panels ({0}H)
+= पढ़ने का मोड: टूलबार और पैनल छिपाएँ ({0}H)
+
+Page colours: {0} (click for {1})
+= पृष्ठ रंग: {0} ({1} के लिए क्लिक करें)
+
+Present, one page at a time ({m}L)
+= प्रस्तुत करें, एक बार में एक पृष्ठ ({m}L)
+
+Leave full screen (F11)
+= पूर्ण स्क्रीन छोड़ें (F11)
+
+Full screen (F11)
+= पूर्ण स्क्रीन (F11)
+
+Stop the hand tool (Esc)
+= हाथ उपकरण बंद करें (Esc)
+
+Hand: drag the pages to scroll
+= हाथ: स्क्रॉल करने के लिए पृष्ठ खींचें
+
+Stop the zoom tool (Esc)
+= ज़ूम उपकरण बंद करें (Esc)
+
+Zoom: drag a box over a page to zoom in to it
+= ज़ूम: पृष्ठ पर बॉक्स खींचकर उसे बड़ा करें
+
+Find ({m}F)
+= खोजें ({m}F)
+
+Stop taking snapshots (Esc)
+= स्नैपशॉट लेना बंद करें (Esc)
+
+Snapshot: drag over a page to copy a picture of it
+= स्नैपशॉट: पृष्ठ पर खींचकर उसका चित्र कॉपी करें
+
+Stop measuring (Esc)
+= मापना बंद करें (Esc)
+
+Measure distance, perimeter and area
+= दूरी, परिधि और क्षेत्रफल मापें
+
+Hide comment tools ({m}Shift+C)
+= टिप्पणी उपकरण छिपाएँ ({m}Shift+C)
+
+Comment and draw ({m}Shift+C)
+= टिप्पणी करें और चित्र बनाएँ ({m}Shift+C)
+
+Add or change text, pictures and links
+= पाठ, चित्र और लिंक जोड़ें या बदलें
+
+Prepare a form (add or delete fields)
+= फ़ॉर्म तैयार करें (फ़ील्ड जोड़ें या हटाएँ)
+
+All tools…
+= सभी उपकरण…
+
+New blank PDF…
+= नई खाली PDF…
+
+New PDF from pictures…
+= चित्रों से नई PDF…
+
+New PDF from the clipboard picture
+= क्लिपबोर्ड चित्र से नई PDF
+
+Scan pages…
+= पृष्ठ स्कैन करें…
+
+Open…
+= खोलें…
+
+Open recent
+= हाल की फ़ाइलें खोलें
+
+No recent files
+= कोई हाल की फ़ाइल नहीं
+
+Save as…
+= इस रूप में सहेजें…
+
+Save a smaller copy…
+= छोटी प्रति सहेजें…
+
+Export as text, Office, web, e-book or pictures…
+= निर्यात: पाठ, Office, वेब, ई-बुक, चित्र…
+
+Print…
+= प्रिंट करें…
+
+Print with comments…
+= टिप्पणियों सहित प्रिंट करें…
+
+Document properties…
+= दस्तावेज़ गुण…
+
+Combine files…
+= फ़ाइलें जोड़ें…
+
+Create a PDF Portfolio…
+= PDF पोर्टफ़ोलियो बनाएँ…
+
+Batch actions on a folder…
+= फ़ोल्डर पर सामूहिक क्रियाएँ…
+
+Quit Panna
+= पन्ना बंद करें
+
+Exit
+= बाहर निकलें
+
+Snapshot
+= स्नैपशॉट
+
+Find…
+= खोजें…
+
+Check spelling…
+= वर्तनी जाँचें…
+
+Search a folder of PDFs…
+= PDF के फ़ोल्डर में खोजें…
+
+Move, replace or delete pictures
+= चित्र हटाएँ, बदलें या खिसकाएँ
+
+Preferences…
+= प्राथमिकताएँ…
+
+Bottom bars: {0}
+= निचली पट्टियाँ: {0}
+
+Lock toolbars
+= टूलबार लॉक करें
+
+Reset toolbar layout
+= टूलबार लेआउट रीसेट करें
+
+Sidebar
+= साइडबार
+
+Toolbars
+= टूलबार
+
+Fit height
+= ऊँचाई में फ़िट करें
+
+Pan & zoom window
+= पैन और ज़ूम विंडो
+
+Two pages with cover
+= आवरण सहित दो पृष्ठ
+
+Enable scrolling
+= स्क्रॉलिंग चालू करें
+
+Page colours
+= पृष्ठ रंग
+
+Original
+= मूल
+
+Dark
+= गहरा
+
+Sepia
+= सीपिया
+
+Rulers & grids
+= रूलर और ग्रिड
+
+Clear guides
+= गाइड हटाएँ
+
+Split
+= विभाजित करें
+
+New window
+= नई विंडो
+
+Go to page…
+= पृष्ठ पर जाएँ…
+
+Previous view
+= पिछला दृश्य
+
+Next view
+= अगला दृश्य
+
+Scrolling {0}, speed {1} (0–9, ↑ ↓, − turns)
+= स्क्रॉलिंग {0}, गति {1} (0–9, ↑ ↓, − दिशा बदलता है)
+
+Shapes
+= आकृतियाँ
+
+Add comments from a file…
+= फ़ाइल से टिप्पणियाँ जोड़ें…
+
+Save comments to a file…
+= टिप्पणियाँ फ़ाइल में सहेजें…
+
+Summarize comments as a PDF…
+= टिप्पणियों का सारांश PDF के रूप में…
+
+Rotate this page left
+= यह पृष्ठ बाएँ घुमाएँ
+
+Rotate this page right
+= यह पृष्ठ दाएँ घुमाएँ
+
+Rotate pages…
+= पृष्ठ घुमाएँ…
+
+Move this page up
+= यह पृष्ठ ऊपर ले जाएँ
+
+Move this page down
+= यह पृष्ठ नीचे ले जाएँ
+
+Add a blank page after this one
+= इसके बाद एक खाली पृष्ठ जोड़ें
+
+Insert pages from a PDF…
+= PDF से पृष्ठ डालें…
+
+Insert a page from the clipboard
+= क्लिपबोर्ड से पृष्ठ डालें
+
+Duplicate this page
+= इस पृष्ठ की प्रतिलिपि बनाएँ
+
+Replace pages…
+= पृष्ठ बदलें…
+
+Extract or split pages…
+= पृष्ठ निकालें या बाँटें…
+
+Delete this page
+= यह पृष्ठ हटाएँ
+
+Delete pages…
+= पृष्ठ हटाएँ…
+
+Crop pages…
+= पृष्ठ काटें…
+
+Page numbers, headers and footers…
+= पृष्ठ संख्या, हेडर और फ़ुटर…
+
+Watermark or page colour…
+= वॉटरमार्क या पृष्ठ रंग…
+
+Page labels…
+= पृष्ठ लेबल…
+
+Flatten into the pages…
+= पृष्ठों में समाहित करें…
+
+Prepare a form
+= फ़ॉर्म तैयार करें
+
+Reset form
+= फ़ॉर्म रीसेट करें
+
+Fill in from a data file…
+= डेटा फ़ाइल से भरें…
+
+Save form data (FDF, XFDF)…
+= फ़ॉर्म डेटा सहेजें (FDF, XFDF)…
+
+Password protection…
+= पासवर्ड सुरक्षा…
+
+Redact (remove content for good)
+= रिडैक्ट करें (सामग्री स्थायी रूप से हटाएँ)
+
+Remove hidden information…
+= छिपी जानकारी हटाएँ…
+
+Sign with a certificate…
+= प्रमाणपत्र से हस्ताक्षर करें…
+
+Recognise text in scanned pages (OCR)
+= स्कैन किए पृष्ठों में पाठ पहचानें (OCR)
+
+Read aloud
+= ज़ोर से पढ़ें
+
+This page
+= यह पृष्ठ
+
+To the end
+= अंत तक
+
+Go on
+= जारी रखें
+
+Pause
+= रोकें
+
+Measure
+= मापें
+
+Hand
+= हाथ
+
+Zoom box
+= ज़ूम बॉक्स
+
+Compare with another file…
+= दूसरी फ़ाइल से तुलना करें…
+
+Check for PDF/A (archiving)
+= PDF/A (संग्रह) जाँचें
+
+Check for PDF/X (printing)
+= PDF/X (प्रिंटिंग) जाँचें
+
+Check accessibility
+= सुलभता जाँचें
+
+Output preview…
+= आउटपुट पूर्वावलोकन…
+
+Reading order…
+= पढ़ने का क्रम…
+
+Keyboard shortcuts…
+= कीबोर्ड शॉर्टकट…
+
+About Panna
+= पन्ना के बारे में
+
+Open another file
+= दूसरी फ़ाइल खोलें
+
+Opening {0}…
+= {0} खुल रही है…
+
+That password didn't work. Try again.
+= वह पासवर्ड काम नहीं किया। फिर से कोशिश करें।
+
+Enter the password to open it.
+= इसे खोलने के लिए पासवर्ड डालें।
+
+Password
+= पासवर्ड
+
+Choose another file
+= दूसरी फ़ाइल चुनें
+
+Playing {0} of {1}
+= {1} में से {0} चल रहा है
+
+Stop playing
+= चलाना बंद करें
+
+Recording… {0}
+= रिकॉर्डिंग… {0}
+
+Stop and add
+= रोकें और जोड़ें
+
+Leave read mode ({0}H)
+= पढ़ने का मोड छोड़ें ({0}H)
+
+Save your changes to “{name}”?
+= “{name}” में अपने बदलाव सहेजें?
+
+Your comments, drawings and form entries will be lost if you don't save them.
+= यदि आप नहीं सहेजते, तो आपकी टिप्पणियाँ, चित्रांकन और फ़ॉर्म प्रविष्टियाँ खो जाएँगी।
+
+Don't save
+= न सहेजें
+
+Password protection
+= पासवर्ड सुरक्षा
+
+Use stronger password protection?
+= अधिक मज़बूत पासवर्ड सुरक्षा का उपयोग करें?
+
+Some very old PDF readers can't open AES-256 files.
+= कुछ बहुत पुराने PDF रीडर AES-256 फ़ाइलें नहीं खोल सकते।
+
+Keep {method}
+= {method} रखें
+
+Use AES-256
+= AES-256 का उपयोग करें
+
+Open a PDF to get started
+= शुरू करने के लिए एक PDF खोलें
+
+Use the Open button, press Ctrl+O, or drop a file on this window.
+= खोलें बटन का उपयोग करें, Ctrl+O दबाएँ, या इस विंडो पर फ़ाइल छोड़ें।
+
+Recent files
+= हाल की फ़ाइलें
+
+Click a ruler to add a guide there; click it again to take it away
+= वहाँ गाइड जोड़ने के लिए रूलर पर क्लिक करें; हटाने के लिए फिर से क्लिक करें
+
+Copied
+= कॉपी हो गया
+
+Points
+= पॉइंट
+
+Inches
+= इंच
+
+Millimetres
+= मिलीमीटर
+
+Centimetres
+= सेंटीमीटर
+
+Click two points to measure between them.
+= उनके बीच मापने के लिए दो बिंदुओं पर क्लिक करें।
+
+Click each corner, and double-click the last.
+= हर कोने पर क्लिक करें, और आख़िरी पर डबल-क्लिक करें।
+
+Distance: {0} {1}
+= दूरी: {0} {1}
+
+Perimeter: {0} {1}
+= परिधि: {0} {1}
+
+Area: {0} sq {1}
+= क्षेत्रफल: {0} वर्ग {1}
+
+Distance
+= दूरी
+
+Perimeter
+= परिधि
+
+Area
+= क्षेत्रफल
+
+File
+= फ़ाइल
+
+Edit
+= संपादन
+
+View
+= दृश्य
+
+Forms
+= फ़ॉर्म
+
+Protect
+= सुरक्षा
+
+Tools
+= उपकरण
+
+Help
+= सहायता
+
+Paragraph
+= अनुच्छेद
+
+Heading {0}
+= शीर्षक {0}
+
+Figure
+= चित्र
+
+Table
+= तालिका
+
+List
+= सूची
+
+Caption
+= कैप्शन
+
+Section
+= खंड
+
+Reading order
+= पढ़ने का क्रम
+
+Close the reading order
+= पढ़ने का क्रम बंद करें
+
+Reading the tags…
+= टैग पढ़े जा रहे हैं…
+
+Page {0}: {1} of {2} elements. Screen readers read them in this order.
+= पृष्ठ {0}: {2} में से {1} तत्व। स्क्रीन रीडर इन्हें इसी क्रम में पढ़ते हैं।
+
+Read earlier
+= पहले पढ़ें
+
+Read later
+= बाद में पढ़ें
+
+Nothing on this page is tagged.
+= इस पृष्ठ पर कुछ भी टैग नहीं है।
+
+Saving…
+= सहेजा जा रहा है…
+
+Cyan
+= सियान
+
+Magenta
+= मैजेंटा
+
+Output preview, page {0}
+= आउटपुट पूर्वावलोकन, पृष्ठ {0}
+
+Close the output preview
+= आउटपुट पूर्वावलोकन बंद करें
+
+Drawing the page…
+= पृष्ठ बनाया जा रहा है…
+
+Ink
+= स्याही
+
+Pointer
+= पॉइंटर
+
+Mark where the inks pass
+= जहाँ स्याही सीमा पार करे वहाँ चिह्नित करें
+
+Spot inks in the document: {0}. They're shown mixed from the four process inks.
+= दस्तावेज़ में स्पॉट स्याहियाँ: {0}। इन्हें चार प्रोसेस स्याहियों के मिश्रण से दिखाया गया है।
+
+Turn this page left
+= यह पृष्ठ बाएँ घुमाएँ
+
+Turn this page right
+= यह पृष्ठ दाएँ घुमाएँ
+
+Insert pages from another PDF after this one
+= इसके बाद दूसरी PDF से पृष्ठ डालें
+
+Insert the picture on the clipboard as a page after this one
+= क्लिपबोर्ड का चित्र इसके बाद पृष्ठ के रूप में डालें
+
+Replace pages with pages from another PDF
+= पृष्ठों को दूसरी PDF के पृष्ठों से बदलें
+
+Save pages as a new PDF, or split into files
+= पृष्ठ नई PDF के रूप में सहेजें, या फ़ाइलों में बाँटें
+
+Crop pages
+= पृष्ठ काटें
+
+Page labels (i, ii, iii then 1, 2, 3)
+= पृष्ठ लेबल (i, ii, iii फिर 1, 2, 3)
+
+Add page numbers, headers and footers
+= पृष्ठ संख्या, हेडर और फ़ुटर जोड़ें
+
+Add a watermark or page colour
+= वॉटरमार्क या पृष्ठ रंग जोड़ें
+
+Flatten comments and form fields into the pages
+= टिप्पणियाँ और फ़ॉर्म फ़ील्ड पृष्ठों में समाहित करें
+
+Undo page change ({m}Z)
+= पृष्ठ बदलाव पूर्ववत करें ({m}Z)
+
+Page numbers go from 1 to {count}.
+= पृष्ठ संख्या 1 से {count} तक होती है।
+
+Enter the pages, such as 1-3, 5.
+= पृष्ठ डालें, जैसे 1-3, 5।
+
+Every page, in {bookmarks} files
+= हर पृष्ठ, {bookmarks} फ़ाइलों में
+
+{0} pages
+= {0} पृष्ठ
+
+Pages, such as 1-3, 5 (1 to {count})
+= पृष्ठ, जैसे 1-3, 5 (1 से {count})
+
+Save them as one PDF
+= इन्हें एक PDF के रूप में सहेजें
+
+Save each page as its own PDF
+= हर पृष्ठ को अलग PDF के रूप में सहेजें
+
+Save a PDF for each top-level bookmark
+= हर शीर्ष-स्तर बुकमार्क के लिए एक PDF सहेजें
+
+Save as PDFs of at most
+= अधिकतम इतने आकार की PDF के रूप में सहेजें
+
+MB each
+= MB प्रत्येक
+
+Extract or split pages
+= पृष्ठ निकालें या बाँटें
+
+Extract…
+= निकालें…
+
+Margins go from 0 to 2000 mm.
+= हाशिए 0 से 2000 mm तक होते हैं।
+
+Enter how much to trim from at least one edge.
+= कम से कम एक किनारे से कितना काटना है, डालें।
+
+Trim from the edges as the page is shown.
+= पृष्ठ जैसा दिखता है, उसके किनारों से काटें।
+
+Top
+= ऊपर
+
+Bottom
+= नीचे
+
+Remove white margins
+= सफ़ेद हाशिए हटाएँ
+
+All pages
+= सभी पृष्ठ
+
+Crop
+= काटें
+
+Page {page} of {pages}
+= पृष्ठ {page} / {pages}
+
+The {what} goes from {0} to {1}.
+= {what} {0} से {1} तक होता है।
+
+The first page number is a whole number, such as 1.
+= पहली पृष्ठ संख्या एक पूर्ण संख्या होती है, जैसे 1।
+
+Enter text for the header or the footer.
+= हेडर या फ़ुटर के लिए पाठ डालें।
+
+Remove all
+= सभी हटाएँ
+
+On the first page: {filled}
+= पहले पृष्ठ पर: {filled}
+
+Page numbers, headers and footers
+= पृष्ठ संख्या, हेडर और फ़ुटर
+
+Header
+= हेडर
+
+Footer
+= फ़ुटर
+
+{page} is the page number and {pages} the number of pages; {page:6} pads it to 6 digits, for Bates numbers. {date} is today's date.
+= {page} पृष्ठ संख्या है और {pages} पृष्ठों की गिनती; {page:6} इसे Bates संख्याओं के लिए 6 अंकों तक भरता है। {date} आज की तारीख़ है।
+
+Size
+= आकार
+
+Margin
+= हाशिया
+
+First number
+= पहली संख्या
+
+Replace the headers and footers already there
+= पहले से मौजूद हेडर और फ़ुटर बदलें
+
+Update
+= अपडेट करें
+
+Flatten into the pages
+= पृष्ठों में समाहित करें
+
+Comments, highlights, drawings and stamps
+= टिप्पणियाँ, हाइलाइट, चित्रांकन और मुहरें
+
+Form fields, with what's filled in
+= फ़ॉर्म फ़ील्ड, भरी गई जानकारी सहित
+
+Flatten
+= समाहित करें
+
+Replace pages
+= पृष्ठ बदलें
+
+Replace
+= बदलें
+
+Cream
+= क्रीम
+
+Pale yellow
+= हल्का पीला
+
+Pale blue
+= हल्का नीला
+
+Pale green
+= हल्का हरा
+
+Pale grey
+= हल्का धूसर
+
+The text size goes from 4 to 500 pt, or leave it empty to fit the page.
+= पाठ का आकार 4 से 500 pt तक होता है, या पृष्ठ में फ़िट करने के लिए खाली छोड़ें।
+
+The angle goes from -360 to 360 degrees.
+= कोण -360 से 360 डिग्री तक होता है।
+
+Enter the watermark's text, choose a picture, or choose a page colour.
+= वॉटरमार्क का पाठ डालें, चित्र चुनें, या पृष्ठ रंग चुनें।
+
+Picture: {name}
+= चित्र: {name}
+
+Remove
+= हटाएँ
+
+Width
+= चौड़ाई
+
+Angle
+= कोण
+
+Text, such as DRAFT or CONFIDENTIAL
+= पाठ, जैसे DRAFT या CONFIDENTIAL
+
+Picture…
+= चित्र…
+
+Colour
+= रंग
+
+Fit
+= फ़िट करें
+
+Watermark and page colour
+= वॉटरमार्क और पृष्ठ रंग
+
+Opacity
+= अपारदर्शिता
+
+Over the page
+= पृष्ठ के ऊपर
+
+Behind the page's text and pictures
+= पृष्ठ के पाठ और चित्रों के पीछे
+
+Page colour
+= पृष्ठ रंग
+
+Replace the watermark already there
+= पहले से मौजूद वॉटरमार्क बदलें
+
+Drag over the part of the picture to keep.
+= चित्र का जो हिस्सा रखना है उस पर खींचें।
+
+Drag to move it, or its corner to resize it.
+= खिसकाने के लिए खींचें, या आकार बदलने के लिए उसका कोना खींचें।
+
+Click a picture to pick it.
+= चुनने के लिए चित्र पर क्लिक करें।
+
+Turn left
+= बाएँ घुमाएँ
+
+Turn right
+= दाएँ घुमाएँ
+
+Flip left to right
+= बाएँ से दाएँ पलटें
+
+Flip upside down
+= उल्टा पलटें
+
+Crop: drag over the part to keep
+= काटें: जो हिस्सा रखना है उस पर खींचें
+
+Replace with another picture…
+= दूसरे चित्र से बदलें…
+
+Delete the picture
+= चित्र हटाएँ
+
+Stop editing pictures (Esc)
+= चित्र संपादन बंद करें (Esc)
+
+Match the system
+= सिस्टम के अनुसार
+
+Light
+= हल्का
+
+Your name on comments
+= टिप्पणियों पर आपका नाम
+
+Language
+= भाषा
+
+Appearance
+= रूप
+
+Open documents at
+= दस्तावेज़ यहाँ खोलें
+
+Files that say how they open still do.
+= जो फ़ाइलें बताती हैं कि वे कैसे खुलें, वे वैसे ही खुलती हैं।
+
+Measure in
+= इसमें मापें
+
+Use single-key accelerators to access tools (H hand, Z zoom, S note, U highlight…)
+= उपकरणों के लिए एक-कुंजी शॉर्टकट का उपयोग करें (H हाथ, Z ज़ूम, S नोट, U हाइलाइट…)
+
+Loop after the last page
+= आख़िरी पृष्ठ के बाद फिर से शुरू करें
+
+Advance every
+= आगे बढ़ें, हर
+
+Default PDF app
+= डिफ़ॉल्ट PDF ऐप
+
+Make Panna the default…
+= पन्ना को डिफ़ॉल्ट बनाएँ…
+
+In Settings, choose Panna for .pdf files.
+= सेटिंग्स में, .pdf फ़ाइलों के लिए पन्ना चुनें।
+
+Open Settings → Apps → Default apps, find Panna and choose it for .pdf files.
+= सेटिंग्स → ऐप्स → डिफ़ॉल्ट ऐप्स खोलें, पन्ना ढूँढें और इसे .pdf फ़ाइलों के लिए चुनें।
+
+Panna now opens PDF files.
+= अब पन्ना PDF फ़ाइलें खोलता है।
+
+Saved {name}
+= {name} सहेजी गई
+
+The copy meets PDF/A-2b's main rules. Not every rule of the standard is checked.
+= प्रति PDF/A-2b के मुख्य नियमों पर खरी है। मानक का हर नियम नहीं जाँचा जाता।
+
+The copy is closer to PDF/A, but these couldn't be fixed by Panna:
+= प्रति PDF/A के क़रीब है, पर पन्ना इन्हें ठीक नहीं कर सका:
+
+Meets PDF/A-2b's main rules
+= PDF/A-2b के मुख्य नियमों पर खरी
+
+Not yet PDF/A
+= अभी PDF/A नहीं
+
+These keep the document from being archival PDF (PDF/A-2b):
+= ये दस्तावेज़ को संग्रह-योग्य PDF (PDF/A-2b) बनने से रोकते हैं:
+
+The copy is closer to PDF/X-4, but these couldn't be fixed by Panna:
+= प्रति PDF/X-4 के क़रीब है, पर पन्ना इन्हें ठीक नहीं कर सका:
+
+Meets PDF/X-4's main rules
+= PDF/X-4 के मुख्य नियमों पर खरी
+
+Not yet PDF/X
+= अभी PDF/X नहीं
+
+No accessibility problems found
+= सुलभता की कोई समस्या नहीं मिली
+
+Accessibility problems
+= सुलभता समस्याएँ
+
+Describe what it shows
+= बताएँ कि इसमें क्या दिखता है
+
+Save a PDF/A copy…
+= PDF/A प्रति सहेजें…
+
+Save a PDF/X-4 copy…
+= PDF/X-4 प्रति सहेजें…
+
+Save descriptions
+= विवरण सहेजें
+
+Save a described copy…
+= विवरण वाली प्रति सहेजें…
+
+Save with thin lines widened…
+= पतली रेखाएँ चौड़ी करके सहेजें…
+
+Save a tagged copy…
+= टैग की गई प्रति सहेजें…
+
+Do nothing
+= कुछ न करें
+
+Clear the form
+= फ़ॉर्म साफ़ करें
+
+Go to a page
+= किसी पृष्ठ पर जाएँ
+
+Go to the next page
+= अगले पृष्ठ पर जाएँ
+
+Go to the previous page
+= पिछले पृष्ठ पर जाएँ
+
+Go to the first page
+= पहले पृष्ठ पर जाएँ
+
+Go to the last page
+= आख़िरी पृष्ठ पर जाएँ
+
+Text
+= पाठ
+
+Check box
+= चेक बॉक्स
+
+Choice
+= विकल्प
+
+Group
+= समूह
+
+Date
+= तारीख़
+
+Button
+= बटन
+
+Signature
+= हस्ताक्षर
+
+Text field
+= पाठ फ़ील्ड
+
+Radio buttons
+= रेडियो बटन
+
+Drop-down
+= ड्रॉप-डाउन
+
+Image field
+= चित्र फ़ील्ड
+
+Signature field
+= हस्ताक्षर फ़ील्ड
+
+Add a text field
+= पाठ फ़ील्ड जोड़ें
+
+Add a check box
+= चेक बॉक्स जोड़ें
+
+Add a drop-down list
+= ड्रॉप-डाउन सूची जोड़ें
+
+Add a list box
+= सूची बॉक्स जोड़ें
+
+Add radio buttons
+= रेडियो बटन जोड़ें
+
+Add a date field
+= तारीख़ फ़ील्ड जोड़ें
+
+Add a button
+= बटन जोड़ें
+
+Add an image field
+= चित्र फ़ील्ड जोड़ें
+
+Add a digital signature field
+= डिजिटल हस्ताक्षर फ़ील्ड जोड़ें
+
+Find fields automatically, from blanks, lines and boxes
+= खाली जगहों, रेखाओं और बॉक्सों से फ़ील्ड अपने-आप खोजें
+
+Stop preparing the form (Esc)
+= फ़ॉर्म तैयार करना बंद करें (Esc)
+
+{0} picked
+= {0} चुने गए
+
+Align left edges with the last picked
+= बाएँ किनारे आख़िरी चुने हुए से मिलाएँ
+
+Centre across on the last picked
+= आख़िरी चुने हुए पर क्षैतिज रूप से बीच में करें
+
+Align right edges with the last picked
+= दाएँ किनारे आख़िरी चुने हुए से मिलाएँ
+
+Align top edges with the last picked
+= ऊपरी किनारे आख़िरी चुने हुए से मिलाएँ
+
+Centre down on the last picked
+= आख़िरी चुने हुए पर लंबवत रूप से बीच में करें
+
+Align bottom edges with the last picked
+= निचले किनारे आख़िरी चुने हुए से मिलाएँ
+
+Make as wide as the last picked
+= आख़िरी चुने हुए जितना चौड़ा करें
+
+Make as tall as the last picked
+= आख़िरी चुने हुए जितना ऊँचा करें
+
+Delete the field and what's filled in
+= फ़ील्ड और उसमें भरी जानकारी हटाएँ
+
+This field is part of a group, so it can't be deleted here yet
+= यह फ़ील्ड एक समूह का हिस्सा है, इसलिए इसे अभी यहाँ से हटाया नहीं जा सकता
+
+Drag to move, drag the corner to resize, Shift+click to pick more
+= खिसकाने के लिए खींचें, आकार बदलने के लिए कोना खींचें, और चुनने के लिए Shift+क्लिक करें
+
+Click or drag to add a field. Click a field to pick it.
+= फ़ील्ड जोड़ने के लिए क्लिक करें या खींचें। चुनने के लिए फ़ील्ड पर क्लिक करें।
+
+Name
+= नाम
+
+Tip shown on hover (optional)
+= माउस रखने पर दिखने वाला संकेत (वैकल्पिक)
+
+Several lines
+= कई पंक्तियाँ
+
+Date format
+= तारीख़ का प्रारूप
+
+When pressed
+= दबाने पर
+
+Page number
+= पृष्ठ संख्या
+
+Whoever fills in the form clicks the field to choose its picture.
+= फ़ॉर्म भरने वाला व्यक्ति चित्र चुनने के लिए फ़ील्ड पर क्लिक करता है।
+
+Whoever fills in the form clicks the field to sign in it with a certificate.
+= फ़ॉर्म भरने वाला व्यक्ति प्रमाणपत्र से हस्ताक्षर करने के लिए फ़ील्ड पर क्लिक करता है।
+
+Choices, one per line, a button each
+= विकल्प, हर पंक्ति में एक, हर एक का एक बटन
+
+Choices, one per line
+= विकल्प, हर पंक्ति में एक
+
+Must be filled in
+= भरना ज़रूरी है
+
+Printing stopped unexpectedly.
+= प्रिंटिंग अचानक रुक गई।
+
+The pages couldn't be prepared for printing: {e}
+= पृष्ठ प्रिंटिंग के लिए तैयार नहीं हो सके: {e}
+
+Couldn't prepare the pages to print: {e}
+= प्रिंट के लिए पृष्ठ तैयार नहीं हो सके: {e}
+
+The pages couldn't be printed.
+= पृष्ठ प्रिंट नहीं हो सके।
+
+The system print dialog isn't available ({e}).
+= सिस्टम का प्रिंट डायलॉग उपलब्ध नहीं है ({e})।
+
+Response
+= उत्तर
+
+Enter a password, or choose what to restrict.
+= पासवर्ड डालें, या चुनें कि क्या प्रतिबंधित करना है।
+
+The two passwords to open it don't match.
+= खोलने वाले दोनों पासवर्ड मेल नहीं खाते।
+
+The two permissions passwords don't match.
+= अनुमतियों वाले दोनों पासवर्ड मेल नहीं खाते।
+
+Use a different password for permissions, or anyone who can open it could lift them.
+= अनुमतियों के लिए अलग पासवर्ड रखें, वरना इसे खोल सकने वाला कोई भी उन्हें हटा सकता है।
+
+Without a permissions password, nobody can lift these restrictions later, you included.
+= अनुमति पासवर्ड के बिना, बाद में कोई भी ये प्रतिबंध नहीं हटा सकता, आप भी नहीं।
+
+Takes effect when you save. Keep the passwords safe: a lost one can't be recovered.
+= सहेजने पर लागू होता है। पासवर्ड सुरक्षित रखें: खोया पासवर्ड वापस नहीं मिल सकता।
+
+Password to open (optional)
+= खोलने का पासवर्ड (वैकल्पिक)
+
+Type it again
+= फिर से लिखें
+
+Restrict printing, changes or copying
+= प्रिंटिंग, बदलाव या कॉपी करना प्रतिबंधित करें
+
+Allow printing
+= प्रिंटिंग की अनुमति दें
+
+Allow changes, comments and filling in forms
+= बदलाव, टिप्पणियों और फ़ॉर्म भरने की अनुमति दें
+
+Allow copying text and pictures
+= पाठ और चित्र कॉपी करने की अनुमति दें
+
+Permissions password, to lift the restrictions
+= प्रतिबंध हटाने के लिए अनुमति पासवर्ड
+
+Remove protection
+= सुरक्षा हटाएँ
+
+Remove hidden information
+= छिपी जानकारी हटाएँ
+
+Takes effect when you save. Undo brings it back until then.
+= सहेजने पर लागू होता है। तब तक पूर्ववत करने से यह वापस आ जाता है।
+
+Title, author, dates and the software that made it
+= शीर्षक, लेखक, तारीख़ें और इसे बनाने वाला सॉफ़्टवेयर
+
+Scripts and actions that run by themselves
+= अपने-आप चलने वाली स्क्रिप्ट और क्रियाएँ
+
+Attached files, and videos, sounds and 3D models on pages
+= संलग्न फ़ाइलें, और पृष्ठों पर वीडियो, ध्वनियाँ और 3D मॉडल
+
+Comments and markup (links and form fields stay)
+= टिप्पणियाँ और चिह्न (लिंक और फ़ॉर्म फ़ील्ड बने रहते हैं)
+
+Even and odd pages
+= सम और विषम पृष्ठ
+
+Even pages only
+= केवल सम पृष्ठ
+
+Odd pages only
+= केवल विषम पृष्ठ
+
+Pages of either orientation
+= किसी भी अभिविन्यास के पृष्ठ
+
+Landscape pages
+= लैंडस्केप पृष्ठ
+
+Portrait pages
+= पोर्ट्रेट पृष्ठ
+
+None of those pages match.
+= उनमें से कोई पृष्ठ मेल नहीं खाता।
+
+A document needs at least one page, so not every page can go.
+= दस्तावेज़ में कम से कम एक पृष्ठ ज़रूरी है, इसलिए सभी पृष्ठ नहीं हटाए जा सकते।
+
+Rotate
+= घुमाएँ
+
+{n} pages will be deleted. Undo brings them back until the file is closed.
+= {n} पृष्ठ हटाए जाएँगे। फ़ाइल बंद होने तक पूर्ववत करने से वे वापस आ जाते हैं।
+
+{n} pages will turn.
+= {n} पृष्ठ घूमेंगे।
+
+All
+= सभी
+
+Upside down
+= उल्टा
+
+Dark blue
+= गहरा नीला
+
+Repeat the last mark on every page
+= आख़िरी चिह्न हर पृष्ठ पर दोहराएँ
+
+Repeat it on odd pages
+= इसे विषम पृष्ठों पर दोहराएँ
+
+Repeat it on even pages
+= इसे सम पृष्ठों पर दोहराएँ
+
+Drag over what to remove. Click a mark to take it back.
+= जो हटाना है उस पर खींचें। वापस लेने के लिए चिह्न पर क्लिक करें।
+
+{n} areas marked.
+= {n} क्षेत्र चिह्नित।
+
+Mark the text Find matched
+= खोज में मिला पाठ चिह्नित करें
+
+Take back the last mark
+= आख़िरी चिह्न वापस लें
+
+Clear every mark
+= सभी चिह्न हटाएँ
+
+Find phone numbers, emails, card numbers and such, then mark what Find matched
+= फ़ोन नंबर, ईमेल, कार्ड नंबर आदि खोजें, फिर जो मिला उसे चिह्नित करें
+
+Repeat…
+= दोहराएँ…
+
+Repeat the last mark in the same place on other pages
+= आख़िरी चिह्न दूसरे पृष्ठों पर उसी जगह दोहराएँ
+
+Redaction properties: fill colour and overlay text…
+= रिडैक्शन गुण: भरने का रंग और ऊपर का पाठ…
+
+Remove what's marked, for good…
+= जो चिह्नित है उसे स्थायी रूप से हटाएँ…
+
+Stop redacting (Esc)
+= रिडैक्ट करना बंद करें (Esc)
+
+Redaction properties
+= रिडैक्शन गुण
+
+Overlay text
+= ऊपर का पाठ
+
+None, or words such as Redacted
+= कुछ नहीं, या Redacted जैसे शब्द
+
+Repeat the text to fill each box
+= हर बॉक्स भरने के लिए पाठ दोहराएँ
+
+Applies to marks redacted from now on.
+= अब से रिडैक्ट किए गए चिह्नों पर लागू होता है।
+
+Remove marked content for good?
+= चिह्नित सामग्री स्थायी रूप से हटाएँ?
+
+You can undo this until you close the file. Once it's saved, what was removed can't be recovered from the saved file.
+= फ़ाइल बंद करने तक आप इसे पूर्ववत कर सकते हैं। सहेजने के बाद, हटाई गई सामग्री सहेजी गई फ़ाइल से वापस नहीं मिल सकती।
+
+Reflow: the text wraps to fit the window
+= रीफ़्लो: पाठ विंडो में फ़िट होने के लिए लिपटता है
+
+Page {0} of {count}
+= पृष्ठ {0} / {count}
+
+Smaller text
+= छोटा पाठ
+
+Larger text
+= बड़ा पाठ
+
+Leave reflow ({0}4)
+= रीफ़्लो छोड़ें ({0}4)
+
+Reading the page's text…
+= पृष्ठ का पाठ पढ़ा जा रहा है…
+
+This page has no text to reflow. A scanned page needs its text recognised first (Tools › Make searchable).
+= इस पृष्ठ पर रीफ़्लो के लिए पाठ नहीं है। स्कैन किए पृष्ठ का पाठ पहले पहचानना होगा (उपकरण › खोजने योग्य बनाएँ)।
+
+{0} dpi
+= {0} dpi
+
+The scan was too large.
+= स्कैन बहुत बड़ा था।
+
+The scanner program stopped ({status}).
+= स्कैनर प्रोग्राम रुक गया ({status})।
+
+No scanner was found. Check that it's on and connected.
+= कोई स्कैनर नहीं मिला। जाँचें कि वह चालू और जुड़ा हुआ है।
+
+The scan didn't work.
+= स्कैन काम नहीं किया।
+
+Not on Windows.
+= Windows पर नहीं।
+
+Choose a scanner first.
+= पहले स्कैनर चुनें।
+
+The scan stopped.
+= स्कैन रुक गया।
+
+Looking for scanners stopped.
+= स्कैनर खोजना रुक गया।
+
+Scan pages
+= पृष्ठ स्कैन करें
+
+Each scan becomes a page. Windows asks which scanner and settings to use.
+= हर स्कैन एक पृष्ठ बनता है। Windows पूछता है कि कौन-सा स्कैनर और सेटिंग्स इस्तेमाल करनी हैं।
+
+Each scan becomes a page. When they're all in, make them into a PDF.
+= हर स्कैन एक पृष्ठ बनता है। सब हो जाने पर, उनकी PDF बनाएँ।
+
+Looking for scanners…
+= स्कैनर खोजे जा रहे हैं…
+
+Scanner
+= स्कैनर
+
+In colour
+= रंगीन
+
+Scanning…
+= स्कैन हो रहा है…
+
+No pages scanned yet.
+= अभी तक कोई पृष्ठ स्कैन नहीं हुआ।
+
+{n} pages scanned.
+= {n} पृष्ठ स्कैन हुए।
+
+Remove the last
+= आख़िरी हटाएँ
+
+Scan a page
+= पृष्ठ स्कैन करें
+
+Scan another
+= एक और स्कैन करें
+
+Make a PDF…
+= PDF बनाएँ…
+
+Save a smaller copy
+= छोटी प्रति सहेजें
+
+Also make sharp pictures smaller, to
+= तीखे चित्रों को भी छोटा करें, इतना
+
+Move sidebar to the right
+= साइडबार दाईं ओर ले जाएँ
+
+Move sidebar to the left
+= साइडबार बाईं ओर ले जाएँ
+
+Navigation
+= नेविगेशन
+
+Differences from the compared file
+= तुलना की गई फ़ाइल से अंतर
+
+Articles
+= लेख
+
+Signatures
+= हस्ताक्षर
+
+Results
+= परिणाम
+
+Articles run through boxes on several pages. Pick one to start reading it.
+= लेख कई पृष्ठों के बॉक्सों में चलते हैं। पढ़ना शुरू करने के लिए एक चुनें।
+
+Hiding a layer changes only what you see here, not the file.
+= परत छिपाने से केवल यहाँ दिखने वाला बदलता है, फ़ाइल नहीं।
+
+This is a program or script. It could harm your computer if you open it.
+= यह एक प्रोग्राम या स्क्रिप्ट है। इसे खोलने से आपके कंप्यूटर को नुकसान हो सकता है।
+
+Open in Panna
+= पन्ना में खोलें
+
+Save a copy…
+= प्रति सहेजें…
+
+PDF Portfolio · {0} {1}
+= PDF पोर्टफ़ोलियो · {0} {1}
+
+{bytes} bytes
+= {bytes} बाइट
+
+Initials
+= आद्याक्षर
+
+Your signature
+= आपके हस्ताक्षर
+
+Your initials
+= आपके आद्याक्षर
+
+Draw it
+= बनाएँ
+
+Type it
+= लिखें
+
+Clear
+= साफ़ करें
+
+Type your name
+= अपना नाम लिखें
+
+Type your initials
+= अपने आद्याक्षर लिखें
+
+Kept only until Panna closes.
+= केवल पन्ना बंद होने तक रखा जाता है।
+
+Back
+= वापस
+
+Place it
+= रखें
+
+Make your signature…
+= अपने हस्ताक्षर बनाएँ…
+
+Make your initials…
+= अपने आद्याक्षर बनाएँ…
+
+Make a new one
+= नया बनाएँ
+
+Today's date
+= आज की तारीख़
+
+Check mark
+= सही का निशान
+
+Cross
+= क्रॉस
+
+Valid: the document hasn't changed since it was signed.
+= मान्य: हस्ताक्षर के बाद से दस्तावेज़ नहीं बदला है।
+
+Not valid. {why}.
+= मान्य नहीं। {why}।
+
+Can't be checked.
+= जाँचा नहीं जा सकता।
+
+Can't be checked. {why}.
+= जाँचा नहीं जा सकता। {why}।
+
+Signed
+= हस्ताक्षरित
+
+Signed by {0}
+= {0} द्वारा हस्ताक्षरित
+
+Certifies the document: no changes are allowed.
+= दस्तावेज़ को प्रमाणित करता है: कोई बदलाव अनुमत नहीं।
+
+Certifies the document: filling in forms and signing are allowed.
+= दस्तावेज़ को प्रमाणित करता है: फ़ॉर्म भरना और हस्ताक्षर करना अनुमत है।
+
+Certifies the document: filling in forms, signing and comments are allowed.
+= दस्तावेज़ को प्रमाणित करता है: फ़ॉर्म भरना, हस्ताक्षर और टिप्पणियाँ अनुमत हैं।
+
+The certificate wasn't valid when this was signed.
+= हस्ताक्षर के समय प्रमाणपत्र मान्य नहीं था।
+
+Trusted: you've said you trust this certificate.
+= भरोसेमंद: आपने कहा है कि आप इस प्रमाणपत्र पर भरोसा करते हैं।
+
+Trusted: the certificate leads to {0}, which you trust.
+= भरोसेमंद: प्रमाणपत्र {0} तक जाता है, जिस पर आप भरोसा करते हैं।
+
+Stop trusting {0}
+= {0} पर भरोसा बंद करें
+
+Certificate issued by {0}, which you haven't said you trust.
+= प्रमाणपत्र {0} ने जारी किया है, जिस पर भरोसे की बात आपने नहीं कही है।
+
+Trust {0}
+= {0} पर भरोसा करें
+
+Signed on {time}, by the signer's clock
+= हस्ताक्षरकर्ता की घड़ी के अनुसार {time} को हस्ताक्षरित
+
+Reason: {0}
+= कारण: {0}
+
+Location: {0}
+= स्थान: {0}
+
+{0} · page {1}
+= {0} · पृष्ठ {1}
+
+You don't trust any certificates yet.
+= आप अभी किसी प्रमाणपत्र पर भरोसा नहीं करते।
+
+You trust 1 certificate.
+= आप 1 प्रमाणपत्र पर भरोसा करते हैं।
+
+You trust {n} certificates.
+= आप {n} प्रमाणपत्रों पर भरोसा करते हैं।
+
+Add a trusted certificate…
+= भरोसेमंद प्रमाणपत्र जोड़ें…
+
+Signing with a certificate from Windows
+= Windows के प्रमाणपत्र से हस्ताक्षर हो रहा है
+
+No certificate file chosen
+= कोई प्रमाणपत्र फ़ाइल नहीं चुनी गई
+
+Sign with a certificate
+= प्रमाणपत्र से हस्ताक्षर करें
+
+Choose…
+= चुनें…
+
+Or a certificate installed in Windows
+= या Windows में स्थापित प्रमाणपत्र
+
+The certificate file's password
+= प्रमाणपत्र फ़ाइल का पासवर्ड
+
+Reason (optional), such as I approve this document
+= कारण (वैकल्पिक), जैसे मैं इस दस्तावेज़ को स्वीकृत करता/करती हूँ
+
+Place (optional)
+= स्थान (वैकल्पिक)
+
+The signature goes in the signature field you clicked, and shows there.
+= हस्ताक्षर आपके क्लिक किए हस्ताक्षर फ़ील्ड में जाता है, और वहीं दिखता है।
+
+The signature goes in the field “{name}”, and shows there.
+= हस्ताक्षर “{name}” फ़ील्ड में जाता है, और वहीं दिखता है।
+
+Show on page {0}, at the
+= पृष्ठ {0} पर दिखाएँ, यहाँ:
+
+Certify: later changes other than filling in forms and signing will show as not allowed
+= प्रमाणित करें: फ़ॉर्म भरने और हस्ताक्षर के अलावा बाद के बदलाव अनुमत नहीं दिखेंगे
+
+Only the first signature can certify a document.
+= केवल पहला हस्ताक्षर ही दस्तावेज़ को प्रमाणित कर सकता है।
+
+Sign and save as…
+= हस्ताक्षर करें और इस रूप में सहेजें…
+
+Speech couldn't be started: {e}
+= वाणी शुरू नहीं हो सकी: {e}
+
+No speech program was found. Reading aloud uses Speech Dispatcher (spd-say) or eSpeak.
+= कोई वाणी प्रोग्राम नहीं मिला। ज़ोर से पढ़ने के लिए Speech Dispatcher (spd-say) या eSpeak चाहिए।
+
+The system's speech couldn't be found.
+= सिस्टम की वाणी नहीं मिली।
+
+The system's speech stopped with an error.
+= सिस्टम की वाणी त्रुटि के साथ रुक गई।
+
+Speech stopped: {e}
+= वाणी रुक गई: {e}
+
+There's no text to read on this page.
+= इस पृष्ठ पर पढ़ने के लिए कोई पाठ नहीं है।
+
+There's no more text to read.
+= पढ़ने के लिए और पाठ नहीं है।
+
+Reading aloud paused
+= ज़ोर से पढ़ना रुका हुआ है
+
+Reading aloud from page {0}
+= पृष्ठ {0} से ज़ोर से पढ़ा जा रहा है
+
+Reading page {0} aloud
+= पृष्ठ {0} ज़ोर से पढ़ा जा रहा है
+
+Reading the selected text aloud
+= चुना गया पाठ ज़ोर से पढ़ा जा रहा है
+
+Go on reading
+= पढ़ना जारी रखें
+
+Pause reading
+= पढ़ना रोकें
+
+Stop reading (Ctrl+Shift+E)
+= पढ़ना बंद करें (Ctrl+Shift+E)
+
+There's no text in comments or form fields to check.
+= टिप्पणियों या फ़ॉर्म फ़ील्ड में जाँचने के लिए कोई पाठ नहीं है।
+
+No more spelling mistakes in comments and form fields.
+= टिप्पणियों और फ़ॉर्म फ़ील्ड में और वर्तनी त्रुटियाँ नहीं हैं।
+
+In a comment on page {0}
+= पृष्ठ {0} की एक टिप्पणी में
+
+In a form field
+= एक फ़ॉर्म फ़ील्ड में
+
+In the form field “{name}”
+= फ़ॉर्म फ़ील्ड “{name}” में
+
+{place} ({0} of {1})
+= {place} ({1} में से {0})
+
+Change to
+= इसमें बदलें
+
+No suggestions.
+= कोई सुझाव नहीं।
+
+Suggestions
+= सुझाव
+
+Ignore
+= अनदेखा करें
+
+Ignore all
+= सभी अनदेखा करें
+
+Add to dictionary
+= शब्दकोश में जोड़ें
+
+Edit and review
+= संपादन और समीक्षा
+
+{0}: drag to move, drop near an edge to snap
+= {0}: खिसकाने के लिए खींचें, जोड़ने के लिए किनारे के पास छोड़ें
+
+Make a PDF from pictures…
+= चित्रों से PDF बनाएँ…
+
+Make a PDF from the picture on the clipboard…
+= क्लिपबोर्ड के चित्र से PDF बनाएँ…
+
+Combine files into one PDF…
+= फ़ाइलों को एक PDF में जोड़ें…
+
+Batch actions on a folder of PDFs…
+= PDF के फ़ोल्डर पर सामूहिक क्रियाएँ…
+
+Scan pages from a scanner…
+= स्कैनर से पृष्ठ स्कैन करें…
+
+Read this page aloud
+= यह पृष्ठ ज़ोर से पढ़ें
+
+Read aloud to the end
+= अंत तक ज़ोर से पढ़ें
+
+Add text, pictures or links to pages
+= पृष्ठों पर पाठ, चित्र या लिंक जोड़ें
+
+Output preview: inks and their coverage
+= आउटपुट पूर्वावलोकन: स्याहियाँ और उनका फैलाव
+
+Reading order of a tagged document
+= टैग किए दस्तावेज़ का पढ़ने का क्रम
+
+Remove content for good (redact)
+= सामग्री स्थायी रूप से हटाएँ (रिडैक्ट)
+
+Summarize comments (save as a PDF)…
+= टिप्पणियों का सारांश (PDF के रूप में सहेजें)…
+
+Fill in the form from a data file…
+= डेटा फ़ाइल से फ़ॉर्म भरें…
+
+Preferences… (Ctrl+,)
+= प्राथमिकताएँ… (Ctrl+,)
+
+That file is too large to be a certificate.
+= वह फ़ाइल प्रमाणपत्र होने के लिए बहुत बड़ी है।
+
+Too many certificates are trusted already.
+= पहले से ही बहुत सारे प्रमाणपत्रों पर भरोसा किया गया है।
+
+There's no settings folder to keep it in.
+= इसे रखने के लिए कोई सेटिंग्स फ़ोल्डर नहीं है।
+
+# Messages from the PDF engine (panna-core), shown in errors.
+
+This file wasn't opened: part of it expands to more than {mb} MB when unpacked. Files built like this are used to crash PDF readers.
+= यह फ़ाइल नहीं खोली गई: इसका एक हिस्सा खुलने पर {mb} MB से ज़्यादा हो जाता है। ऐसी फ़ाइलें PDF रीडर को क्रैश करने के लिए बनाई जाती हैं।
+
+This file wasn't opened: page {page} expands to more than {mb} MB when unpacked. Files built like this are used to crash PDF readers.
+= यह फ़ाइल नहीं खोली गई: पृष्ठ {page} खुलने पर {mb} MB से ज़्यादा हो जाता है। ऐसी फ़ाइलें PDF रीडर को क्रैश करने के लिए बनाई जाती हैं।
+
+This file wasn't opened: page {page} repeats drawings inside drawings so many times that it would never finish showing. Files built like this are used to freeze PDF readers.
+= यह फ़ाइल नहीं खोली गई: पृष्ठ {page} चित्रों के अंदर चित्र इतनी बार दोहराता है कि वह कभी पूरा नहीं दिखेगा। ऐसी फ़ाइलें PDF रीडर को अटकाने के लिए बनाई जाती हैं।
+
+This file wasn't opened: it has a picture that claims to be {width} × {height} pixels, too large to show safely.
+= यह फ़ाइल नहीं खोली गई: इसमें एक चित्र {width} × {height} पिक्सेल का होने का दावा करता है, जो सुरक्षित रूप से दिखाने के लिए बहुत बड़ा है।
+
+Couldn't read the file: {e}
+= फ़ाइल पढ़ी नहीं जा सकी: {e}
+
+The file is {size} MB, which is over the {limit} MB limit.
+= फ़ाइल {size} MB की है, जो {limit} MB की सीमा से ज़्यादा है।
+
+The document has {pages} pages, which is over the {limit} page limit.
+= दस्तावेज़ में {pages} पृष्ठ हैं, जो {limit} पृष्ठों की सीमा से ज़्यादा है।
+
+This PDF is password-protected.
+= यह PDF पासवर्ड से सुरक्षित है।
+
+This PDF uses an unsupported encryption method.
+= यह PDF एक असमर्थित एन्क्रिप्शन विधि का उपयोग करती है।
+
+This file isn't a valid PDF, or it is too damaged to open.
+= यह फ़ाइल मान्य PDF नहीं है, या खोलने के लिए बहुत क्षतिग्रस्त है।
+
+The PDF engine failed while reading this file.
+= इस फ़ाइल को पढ़ते समय PDF इंजन विफल हो गया।
+
+Page {n} doesn't exist.
+= पृष्ठ {n} मौजूद नहीं है।
+
+The page has an invalid size.
+= पृष्ठ का आकार अमान्य है।
+
+The PDF engine failed while drawing this page.
+= यह पृष्ठ बनाते समय PDF इंजन विफल हो गया।
+
+That isn't an ICC colour profile.
+= वह ICC रंग प्रोफ़ाइल नहीं है।
+
+That colour profile is too large.
+= वह रंग प्रोफ़ाइल बहुत बड़ी है।
+
+That's a profile for screens or other devices. PDF/X needs the printing condition's output profile, such as one from the print shop.
+= वह स्क्रीन या अन्य उपकरणों की प्रोफ़ाइल है। PDF/X को प्रिंटिंग की आउटपुट प्रोफ़ाइल चाहिए, जैसे प्रिंट शॉप से मिली प्रोफ़ाइल।
+
+PDF/X needs a CMYK, RGB or grey profile.
+= PDF/X को CMYK, RGB या ग्रे प्रोफ़ाइल चाहिए।
+
+This PDF's internal structure is damaged, so changes can't be added to it safely.
+= इस PDF की आंतरिक संरचना क्षतिग्रस्त है, इसलिए इसमें बदलाव सुरक्षित रूप से नहीं जोड़े जा सकते।
+
+This PDF's password protection uses a method Panna can't save changes into.
+= इस PDF की पासवर्ड सुरक्षा ऐसी विधि का उपयोग करती है जिसमें पन्ना बदलाव नहीं सहेज सकता।
+
+The PDF engine failed while preparing the changes.
+= बदलाव तैयार करते समय PDF इंजन विफल हो गया।
+
+Couldn't write the file: {e}
+= फ़ाइल लिखी नहीं जा सकी: {e}
+
+Those margins would leave too little of the page.
+= उन हाशियों से पृष्ठ का बहुत कम हिस्सा बचेगा।
+
+Only the owner can change this PDF's password protection. Open it with the owner password first.
+= केवल स्वामी ही इस PDF की पासवर्ड सुरक्षा बदल सकता है। पहले इसे स्वामी पासवर्ड से खोलें।
+
+PDF/X files can't have password protection. Remove it first, from Password protection in All tools.
+= PDF/X फ़ाइलों में पासवर्ड सुरक्षा नहीं हो सकती। पहले इसे सभी उपकरण में पासवर्ड सुरक्षा से हटाएँ।
+
+PDF/A files can't have password protection. Remove it first, from Password protection in All tools.
+= PDF/A फ़ाइलों में पासवर्ड सुरक्षा नहीं हो सकती। पहले इसे सभी उपकरण में पासवर्ड सुरक्षा से हटाएँ।
+
+Password-protected PDFs can't be signed yet. Remove the protection first, from Password protection in All tools.
+= पासवर्ड से सुरक्षित PDF पर अभी हस्ताक्षर नहीं हो सकते। पहले सभी उपकरण में पासवर्ड सुरक्षा से सुरक्षा हटाएँ।
+
+This PDF is already signed, so it can't be certified: only the first signature can certify a document.
+= यह PDF पहले से हस्ताक्षरित है, इसलिए इसे प्रमाणित नहीं किया जा सकता: केवल पहला हस्ताक्षर ही दस्तावेज़ प्रमाणित कर सकता है।
+
+Panna can't add tags to a password-protected PDF. Remove the protection first, from Password protection in All tools.
+= पन्ना पासवर्ड से सुरक्षित PDF में टैग नहीं जोड़ सकता। पहले सभी उपकरण में पासवर्ड सुरक्षा से सुरक्षा हटाएँ।
+
+This PDF has tags already.
+= इस PDF में पहले से टैग हैं।
+
+Panna can't change the lines in a password-protected PDF. Remove the protection first, from Password protection in All tools.
+= पन्ना पासवर्ड से सुरक्षित PDF की रेखाएँ नहीं बदल सकता। पहले सभी उपकरण में पासवर्ड सुरक्षा से सुरक्षा हटाएँ।
+
+These pages have text already, so there's nothing to recognise.
+= इन पृष्ठों पर पहले से पाठ है, इसलिए पहचानने के लिए कुछ नहीं है।
+
+No text was found on these pages.
+= इन पृष्ठों पर कोई पाठ नहीं मिला।
+
+Text recognition failed: {why}
+= पाठ पहचान विफल रही: {why}
+
+This PDF has no text to tag. If it's scanned, its text needs recognising first.
+= इस PDF में टैग करने के लिए पाठ नहीं है। यदि यह स्कैन की गई है, तो पहले इसका पाठ पहचानना होगा।
+
+A marked area covers a form field. Flatten the form first (in the page tools), then redact.
+= एक चिह्नित क्षेत्र फ़ॉर्म फ़ील्ड को ढकता है। पहले फ़ॉर्म को समाहित करें (पृष्ठ उपकरणों में), फिर रिडैक्ट करें।
+
+This PDF's author doesn't allow it to be printed. Opening it with the owner password allows printing.
+= इस PDF के लेखक ने इसे प्रिंट करने की अनुमति नहीं दी है। स्वामी पासवर्ड से खोलने पर प्रिंटिंग हो सकती है।
+
+# Spelling dictionaries.
+
+English (United States)
+= अंग्रेज़ी (संयुक्त राज्य अमेरिका)
+
+English (United Kingdom)
+= अंग्रेज़ी (यूनाइटेड किंगडम)
+
+English (Canada)
+= अंग्रेज़ी (कनाडा)
+
+English (Australia)
+= अंग्रेज़ी (ऑस्ट्रेलिया)
+
+of {n}
+= / {n}
+
+seconds
+= सेकंड

@@ -4,7 +4,8 @@
 
 use std::fmt;
 
-use iced::widget::{button, checkbox, column, pick_list, row, text, text_input};
+use crate::i18n::text;
+use iced::widget::{button, checkbox, column, pick_list, row, text_input};
 use iced::{Center, Element};
 use panna_core::{InitialView, OpenLayout, OpenPanel, OpenZoom};
 
@@ -73,13 +74,13 @@ impl PanelChoice {
 
 impl fmt::Display for PanelChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self.0 {
+        f.write_str(&crate::i18n::translate(match self.0 {
             OpenPanel::None => "Pages only",
             OpenPanel::Bookmarks => "Bookmarks",
             OpenPanel::Pages => "Page thumbnails",
             OpenPanel::Attachments => "Attached files",
             OpenPanel::Layers => "Layers",
-        })
+        }))
     }
 }
 
@@ -100,7 +101,7 @@ impl LayoutChoice {
 
 impl fmt::Display for LayoutChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self.0 {
+        f.write_str(&crate::i18n::translate(match self.0 {
             OpenLayout::Default => "As the viewer chooses",
             OpenLayout::SinglePage => "Single page",
             OpenLayout::Single => "Single page, scrolling",
@@ -108,7 +109,7 @@ impl fmt::Display for LayoutChoice {
             OpenLayout::Two => "Two pages, scrolling",
             OpenLayout::TwoPageCover => "Two pages, cover alone",
             OpenLayout::TwoCover => "Two pages, cover alone, scrolling",
-        })
+        }))
     }
 }
 
@@ -211,7 +212,7 @@ impl Editor {
             row![
                 label(""),
                 checkbox(self.view.full_screen)
-                    .label("Full screen")
+                    .label(crate::i18n::tr_str("Full screen"))
                     .size(16)
                     .text_size(13)
                     .on_toggle(move |on| ev(Event::FullScreen(on)))

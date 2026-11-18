@@ -38,10 +38,11 @@ mod sig;
 pub mod spell;
 mod text;
 mod view;
+mod word;
 mod worker;
 
 pub use access::{AccessFinding, AccessRule};
-pub use attachments::Attachment;
+pub use attachments::{Attachment, Media};
 pub use calc::{CalcOp, Calculation, Expr, Formula, number as calc_number, value_text as calc_value_text};
 pub use comments::{Comment, CommentId, CommentKind, ObjRef, ReviewState};
 pub use compare::{Change, ChangeKind};
@@ -56,7 +57,9 @@ pub use edit::{
     Watermark, blank_pdf, fill_header_footer, pictures_to_pdf, rgba_to_pdf, stamp_label, text_width, today,
     wrap,
 };
-pub use edit::{MAX_SOUND_SECONDS, Recording, Sound};
+pub use edit::{
+    MAX_PORTFOLIO_FILES, MAX_SOUND_SECONDS, PrintProfile, ProfileError, Recording, Sound, make_portfolio,
+};
 pub use export::{Export, ExportFormat};
 pub use formats::Format;
 pub use formdata::{DataFormat, export as export_form_data, import as import_form_data};
@@ -72,4 +75,4 @@ pub use remote::Isolated;
 pub use sig::{Cert, DigitalId, HeldKey, SigStatus, SignDigest, Signature, trusted_by};
 pub use text::{FindOptions, PageText, Paragraph, TextBox};
 pub use view::{InitialView, OpenLayout, OpenPanel, OpenZoom};
-pub use worker::{PageEdit, RenderWorker, describe_file, reading_order_file, reorder_file};
+pub use worker::{PageEdit, RenderWorker, describe_file, reading_order_file, reorder_file, thumbnail_file};

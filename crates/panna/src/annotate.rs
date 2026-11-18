@@ -1,9 +1,10 @@
 //! Annotation tools: the Comment toolbar, drawing in progress, and the list of unsaved annotations
 //! with undo and redo.
 
+use crate::i18n::text;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::{
-    Column, Row, button, column, container, pick_list, row, slider, space, text, text_editor, text_input,
+    Column, Row, button, column, container, pick_list, row, slider, space, text_editor, text_input,
     vertical_slider,
 };
 use iced::{Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, mouse};
@@ -310,7 +311,7 @@ pub struct InsideColor(pub Option<Color>, pub &'static str);
 
 impl std::fmt::Display for InsideColor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.1)
+        f.write_str(&crate::i18n::translate(self.1))
     }
 }
 
@@ -1970,7 +1971,7 @@ impl Annotate {
             let chosen = FILLS.iter().copied().find(|f| f.0 == fill);
             items.push(
                 pick_list(FILLS, chosen, move |f: InsideColor| ev(Event::Fill(f.0)))
-                    .placeholder("Fill")
+                    .placeholder(crate::i18n::tr_str("Fill"))
                     .text_size(12)
                     .padding([3, 6])
                     .width(list_width)
@@ -2024,12 +2025,12 @@ impl Annotate {
                 text(title).size(16),
                 text_editor(&editing.content)
                     .id(editor_id())
-                    .placeholder("Type here")
+                    .placeholder(crate::i18n::tr_str("Type here"))
                     .on_action(move |a| ev(Event::Edit(a)))
                     .height(120),
                 row![
                     space::horizontal(),
-                    button("Cancel")
+                    button(crate::i18n::text("Cancel"))
                         .style(button::secondary)
                         .on_press(ev(Event::EditCancel)),
                     button(done).on_press(ev(Event::EditDone)),
@@ -2093,11 +2094,12 @@ fn stamp_card(stamping: &Stamping) -> Element<'_, Message> {
         grid = grid.push(stamp(STAMPS.len() - 1, name));
     }
     let custom = row![
-        text_input("Your own words", &stamping.custom)
+        text_input(crate::i18n::tr_str("Your own words"), &stamping.custom)
             .id(stamp_input_id())
             .on_input(move |v| ev(Event::StampText(v)))
             .on_submit(ev(Event::StampCustom)),
-        button("Add").on_press_maybe((!stamping.custom.trim().is_empty()).then(|| ev(Event::StampCustom))),
+        button(crate::i18n::text("Add"))
+            .on_press_maybe((!stamping.custom.trim().is_empty()).then(|| ev(Event::StampCustom))),
     ]
     .spacing(6);
     let picture = button(text("A picture, such as a signature or logo…").size(13))
@@ -2112,7 +2114,7 @@ fn stamp_card(stamping: &Stamping) -> Element<'_, Message> {
             picture,
             row![
                 space::horizontal(),
-                button("Cancel")
+                button(crate::i18n::text("Cancel"))
                     .style(button::secondary)
                     .on_press(ev(Event::EditCancel)),
             ],
