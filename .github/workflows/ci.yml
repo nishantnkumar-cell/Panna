@@ -43,6 +43,9 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
       - run: cargo fmt --all --check
+      # The About box's list of third-party crates and licences must match Cargo.lock.
+      - if: runner.os == 'Linux'
+        run: python3 packaging/licences/make_list.py --check
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked
 

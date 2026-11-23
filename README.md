@@ -4,7 +4,9 @@
 
 
 An offline PDF viewer and editor for Windows, macOS and Linux, written in memory-safe Rust.
-It has no cloud features, no accounts and no telemetry. The app never touches the network.
+It has no cloud features, no accounts and no telemetry. The app never touches the network,
+except when you click **Check for updates** in the About box (the **?** at the right of the
+menu bar, or Help ▸ About Panna), which asks GitHub for the list of releases.
 
 **Status:** early preview. It opens PDFs and supports continuous scrolling, zoom, fit width
 and page navigation. Annotation and form filling come next. See [docs/FEATURES.md](docs/FEATURES.md).
@@ -88,6 +90,17 @@ To make Panna the default PDF app:
   PDF in Finder, choose File → Get Info, pick Panna under "Open with" and click Change All.
 - **Linux:** the menu entry registers Panna for PDFs; choose it as the default in your
   desktop's settings (Default Applications in KDE, Default Apps in GNOME).
+
+## Documentation
+
+User documentation lives in the [project wiki](https://github.com/nishantnkumar-cell/Panna/wiki),
+which the About box links to.
+
+## Licence
+
+Panna is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option. The About box lists every crate Panna is built from, with its licence; after changing
+`Cargo.lock`, refresh that list with `python3 packaging/licences/make_list.py` (CI checks it).
 
 ## Security
 
