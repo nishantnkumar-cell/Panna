@@ -356,8 +356,12 @@ impl State {
         None
     }
 
-    /// The menu bar: a title per menu.
-    pub fn bar<'a, M: Clone + 'a>(&self, on_event: impl Fn(Event) -> M + 'a) -> Element<'a, M> {
+    /// The menu bar: a title per menu, and `end` at the far right.
+    pub fn bar<'a, M: Clone + 'a>(
+        &self,
+        on_event: impl Fn(Event) -> M + 'a,
+        end: Element<'a, M>,
+    ) -> Element<'a, M> {
         let mut titles = Row::new().push(space().width(LEFT));
         for menu in Menu::ALL {
             let open = self.open == Some(menu);
@@ -387,6 +391,10 @@ impl State {
                 .on_press(on_event(Event::Title(menu)));
             titles = titles.push(mouse_area(title).on_enter(on_event(Event::HoverTitle(menu))));
         }
+        let titles = titles
+            .push(space::horizontal())
+            .push(end)
+            .push(space().width(LEFT));
         container(titles.align_y(Center))
             .height(HEIGHT)
             .width(Fill)

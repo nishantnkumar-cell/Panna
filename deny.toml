@@ -28,17 +28,21 @@ allow = [
     "Unicode-3.0",
     "0BSD",
     "Unlicense",
+    # webpki-roots: Mozilla's root certificates, used only by Check for updates.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"
 # The app is offline by design: no HTTP, TLS or network client crates may enter the tree.
+# The one exception is panna-update, which makes a single HTTPS request when the user clicks
+# Check for updates: ureq may be used only by panna-update, and rustls only by ureq.
 deny = [
     { name = "reqwest" },
     { name = "hyper" },
     { name = "h2" },
-    { name = "ureq" },
+    { name = "ureq", wrappers = ["panna-update"] },
     { name = "curl" },
     { name = "curl-sys" },
     { name = "isahc" },
@@ -46,7 +50,7 @@ deny = [
     { name = "openssl" },
     { name = "openssl-sys" },
     { name = "native-tls" },
-    { name = "rustls" },
+    { name = "rustls", wrappers = ["ureq"] },
     { name = "tungstenite" },
 ]
 
