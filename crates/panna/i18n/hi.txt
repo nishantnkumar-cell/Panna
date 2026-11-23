@@ -3466,3 +3466,15 @@ Panna is free software: you may use it under the MIT licence or the Apache Licen
 
 Panna is built from {n} open-source crates:
 = Panna {n} ओपन-सोर्स crates से बना है:
+
+Tool options
+= टूल विकल्प
+
+Selected comment
+= चुनी गई टिप्पणी
+
+Delete the selected comment (Delete)
+= चुनी गई टिप्पणी हटाएँ (Delete)
+
+Copy ({m}C)
+= कॉपी करें ({m}C)
