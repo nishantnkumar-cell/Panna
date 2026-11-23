@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-panna-sandbox = { path = "../panna-sandbox", version = "0.2.0" }
+panna-sandbox = { path = "../panna-sandbox", version = "0.3.0" }
 aes = "0.9"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 # Without the default "simd" feature: its image scaling uses hand-written SIMD (unsafe) on
