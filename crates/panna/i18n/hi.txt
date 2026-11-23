@@ -3399,3 +3399,15 @@ of {n}
 
 seconds
 = सेकंड
+
+Tool options
+= टूल विकल्प
+
+Selected comment
+= चुनी गई टिप्पणी
+
+Delete the selected comment (Delete)
+= चुनी गई टिप्पणी हटाएँ (Delete)
+
+Copy ({m}C)
+= कॉपी करें ({m}C)

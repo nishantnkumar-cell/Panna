@@ -153,6 +153,7 @@ pub enum Icon {
     ExpandAll,
     CollapseAll,
     Duplicate,
+    CopyText,
     Pause,
     Play,
     Dashed,
@@ -312,6 +313,7 @@ impl Icon {
             Icon::ExpandAll => include_bytes!("../icons/chevrons-up-down.svg"),
             Icon::CollapseAll => include_bytes!("../icons/chevrons-down-up.svg"),
             Icon::Duplicate => include_bytes!("../icons/copy-plus.svg"),
+            Icon::CopyText => include_bytes!("../icons/copy.svg"),
             Icon::Pause => include_bytes!("../icons/pause.svg"),
             Icon::Play => include_bytes!("../icons/play.svg"),
             Icon::Dashed => include_bytes!("../icons/square-dashed.svg"),
@@ -442,7 +444,7 @@ pub fn with_tip<'a, M: 'a>(content: impl Into<Element<'a, M>>, tip: impl Into<St
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 159] = [
+    const ALL: [Icon; 160] = [
         Icon::Open,
         Icon::PrevPage,
         Icon::NextPage,
@@ -585,6 +587,7 @@ mod tests {
         Icon::ExpandAll,
         Icon::CollapseAll,
         Icon::Duplicate,
+        Icon::CopyText,
         Icon::Pause,
         Icon::Play,
         Icon::Dashed,
