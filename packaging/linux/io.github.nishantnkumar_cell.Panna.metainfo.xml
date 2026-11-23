@@ -34,6 +34,9 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-11-23">
+      <description><p>Menus fit their text, each tool shows its own pointer, and a Tool options bar pops up for the active tool.</p></description>
+    </release>
     <release version="0.2.0" date="2026-11-18">
       <description><p>Adds a New button and Ctrl+N for a new blank PDF, .deb packages and ARM Flatpaks.</p></description>
     </release>

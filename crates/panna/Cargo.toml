@@ -11,7 +11,7 @@ name = "panna"
 path = "src/main.rs"
 
 [dependencies]
-panna-core = { path = "../panna-core", version = "0.2.0" }
+panna-core = { path = "../panna-core", version = "0.3.0" }
 iced = { version = "0.14", default-features = false, features = ["advanced", "wgpu", "tiny-skia", "crisp", "image-without-codecs", "svg", "canvas", "thread-pool", "linux-theme-detection", "x11", "wayland", "web-colors"] }
 rfd = "0.18"
 # Passwords typed into the app are wiped from memory when replaced or dropped.
@@ -25,13 +25,13 @@ ab_glyph = "0.2"
 # Recording and playing audio comments.
 cpal = "0.18"
 # Locks down the process that draws pages.
-panna-sandbox = { path = "../panna-sandbox", version = "0.2.0" }
+panna-sandbox = { path = "../panna-sandbox", version = "0.3.0" }
 # Check for updates (About box): the only crate allowed to use the network.
-panna-update = { path = "../panna-update", version = "0.2.0" }
+panna-update = { path = "../panna-update", version = "0.3.0" }
 
 # The Windows and macOS print dialogs.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
-panna-print = { path = "../panna-print", version = "0.2.0" }
+panna-print = { path = "../panna-print", version = "0.3.0" }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
