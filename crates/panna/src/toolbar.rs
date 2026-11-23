@@ -54,10 +54,13 @@ pub enum Bar {
     Review,
     /// The comment and drawing tools, shown while commenting is on.
     Comment,
+    /// The chosen comment tool's or selected comment's colour, lines and so on. It shows
+    /// itself only while there's something to set, like Acrobat's properties bar.
+    Options,
 }
 
 impl Bar {
-    pub const ALL: [Bar; 7] = [
+    pub const ALL: [Bar; 8] = [
         Bar::File,
         Bar::Page,
         Bar::Zoom,
@@ -65,6 +68,7 @@ impl Bar {
         Bar::Tools,
         Bar::Review,
         Bar::Comment,
+        Bar::Options,
     ];
 
     /// The name shown in View ▸ Toolbars.
@@ -77,6 +81,7 @@ impl Bar {
             Bar::Tools => "Tools",
             Bar::Review => "Edit and review",
             Bar::Comment => "Comment",
+            Bar::Options => "Tool options",
         }
     }
 
@@ -89,6 +94,7 @@ impl Bar {
             Bar::Tools => "tools",
             Bar::Review => "review",
             Bar::Comment => "comment",
+            Bar::Options => "options",
         }
     }
 
@@ -101,11 +107,13 @@ impl Bar {
             Bar::Review => (Dock::Top, 300.0),
             Bar::Page => (Dock::Bottom, 0.0),
             Bar::Zoom => (Dock::Bottom, 100.0),
-            Bar::Comment => (Dock::Floating, 0.0),
+            Bar::Comment | Bar::Options => (Dock::Floating, 0.0),
         };
+        // Tool options float just under the Comment bar.
+        let y = if self == Bar::Options { 176.0 } else { 130.0 };
         Place {
             dock,
-            pos: Point::new(16.0, 130.0),
+            pos: Point::new(16.0, y),
             along,
             shown: true,
         }
@@ -166,6 +174,7 @@ pub struct Layout {
     tools: Place,
     review: Place,
     comment: Place,
+    options: Place,
     pub bottom: Align,
     /// Locked bars have no grips, so they can't be dragged by accident.
     pub locked: bool,
@@ -181,6 +190,7 @@ impl Default for Layout {
             tools: Bar::Tools.default_place(),
             review: Bar::Review.default_place(),
             comment: Bar::Comment.default_place(),
+            options: Bar::Options.default_place(),
             bottom: Align::Center,
             locked: false,
         }
@@ -197,6 +207,7 @@ impl Layout {
             Bar::Tools => &self.tools,
             Bar::Review => &self.review,
             Bar::Comment => &self.comment,
+            Bar::Options => &self.options,
         }
     }
 
@@ -209,6 +220,7 @@ impl Layout {
             Bar::Tools => &mut self.tools,
             Bar::Review => &mut self.review,
             Bar::Comment => &mut self.comment,
+            Bar::Options => &mut self.options,
         }
     }
 

@@ -1869,14 +1869,55 @@ impl Annotate {
         Outcome::Changed
     }
 
-    /// The Comment toolbar's buttons: the tools, colours, opacity, and undo and redo, laid
-    /// out for a column when `vertical`.
+    /// The Comment toolbar's buttons: the tools, and undo and redo, laid out for a column
+    /// when `vertical`. The chosen tool's colour, opacity and lines are on the Tool options
+    /// bar, [`Self::option_items`].
     pub fn bar_items(&self, vertical: bool) -> Vec<Element<'_, Message>> {
         let ev = Message::Annotate;
         let mut items: Vec<Element<'_, Message>> = Tool::ALL
             .into_iter()
             .map(|tool| icons::toggle(tool.icon(), tool.tip(), self.tool == tool, ev(Event::Tool(tool))))
             .collect();
+        items.push(divider(vertical));
+        let m = icons::MOD;
+        items.push(icons::button(
+            Icon::Undo,
+            format!("Undo ({m}Z)"),
+            self.can_undo().then(|| ev(Event::Undo)),
+        ));
+        items.push(icons::button(
+            Icon::Redo,
+            format!("Redo ({m}Y)"),
+            self.can_redo().then(|| ev(Event::Redo)),
+        ));
+        items
+    }
+
+    /// Whether the Tool options bar has anything to offer: a comment is selected, or the
+    /// chosen tool draws something whose look can be picked. Like Acrobat's properties bar,
+    /// it comes and goes with the work at hand.
+    pub fn has_options(&self) -> bool {
+        self.open
+            && (self.picked_annotation().is_some()
+                || !matches!(self.tool, Tool::Select | Tool::Eraser | Tool::Stamp | Tool::Sign))
+    }
+
+    /// The Tool options bar: the colour, opacity, thickness, dashing, line endings and fill
+    /// of the chosen tool, or of the selected comment, which can also be deleted from here.
+    /// `None` when there's nothing to set.
+    pub fn option_items(&self, vertical: bool) -> Option<Vec<Element<'_, Message>>> {
+        if !self.has_options() {
+            return None;
+        }
+        let ev = Message::Annotate;
+        let mut items: Vec<Element<'_, Message>> = Vec::new();
+        let picked = self.picked_annotation().is_some();
+        // What the options apply to: the selected comment, or the chosen tool.
+        items.push(if picked {
+            icons::with_tip(icons::glyph(Icon::Pointer, true), "Selected comment")
+        } else {
+            icons::with_tip(icons::glyph(self.tool.icon(), true), self.tool.tip())
+        });
         items.push(divider(vertical));
         let current = self.picked_annotation().map_or_else(|| self.color(), |a| a.color);
         let swatches = SWATCHES
@@ -1978,19 +2019,15 @@ impl Annotate {
                     .into(),
             );
         }
-        items.push(divider(vertical));
-        let m = icons::MOD;
-        items.push(icons::button(
-            Icon::Undo,
-            format!("Undo ({m}Z)"),
-            self.can_undo().then(|| ev(Event::Undo)),
-        ));
-        items.push(icons::button(
-            Icon::Redo,
-            format!("Redo ({m}Y)"),
-            self.can_redo().then(|| ev(Event::Redo)),
-        ));
-        items
+        if picked {
+            items.push(divider(vertical));
+            items.push(icons::button(
+                Icon::Delete,
+                "Delete the selected comment (Delete)",
+                Some(ev(Event::DeletePicked)),
+            ));
+        }
+        Some(items)
     }
 
     /// The card for typing a note's or text box's text.

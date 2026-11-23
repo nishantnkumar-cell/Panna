@@ -16,6 +16,7 @@ mod combine;
 mod comments;
 mod compare;
 mod create;
+mod cursor;
 mod export;
 mod find;
 #[cfg(target_os = "macos")]
@@ -588,6 +589,11 @@ enum Message {
     PagePress(usize),
     PageDoubleClick(usize),
     PointerReleased,
+    /// The pointer moved, in window coordinates, while text was being selected.
+    SelectPointer(Point),
+    /// Highlights, underlines or strikes out the selected text with this tool, from the
+    /// little bar that pops up by a selection, then goes back to the tool that was in use.
+    QuickMark(annotate::Tool),
     Copy,
     Annotate(annotate::Event),
     Form(form::Event),
@@ -691,6 +697,9 @@ struct App {
     panning: Option<(Point, f32, f32)>,
     /// The pointer in the window, followed while the hand tool is on.
     cursor: Point,
+    /// Where, in the window, the bar of actions for the selected text pops up (by the pointer
+    /// where the selection ended); `None` hides it.
+    quick_at: Option<Point>,
     /// The zoom tool is on: dragging a box over a page zooms in to it.
     zoom_box: bool,
     measure: measure::Measure,
@@ -1392,6 +1401,7 @@ impl App {
             last_drawing: annotate::Tool::Pen,
             panning: None,
             cursor: Point::ORIGIN,
+            quick_at: None,
             zoom_box: false,
             snapshot: None,
             measure: measure::Measure::default(),
@@ -1498,6 +1508,9 @@ impl App {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                     Some(Message::PointerReleased)
+                }
+                iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                    Some(Message::SelectPointer(position))
                 }
                 _ => None,
             }));
@@ -1701,6 +1714,10 @@ impl App {
                 Task::none()
             }
             Message::Scrolled(viewport) => {
+                // The selection moved away from where its bar popped up.
+                if !self.selecting {
+                    self.quick_at = None;
+                }
                 let bounds = viewport.bounds();
                 let before = self.viewport;
                 if let Some((y, at)) = self.turned_to {
@@ -3892,7 +3909,27 @@ impl App {
                 if self.annotate.open && self.annotate.tool != annotate::Tool::Select {
                     return self.mark_selection();
                 }
+                // Offer what can be done with the text, by where the pointer let go.
+                self.quick_at = self.selection.is_some().then_some(self.cursor);
                 self.copy_primary()
+            }
+            Message::SelectPointer(position) => {
+                self.cursor = position;
+                Task::none()
+            }
+            Message::QuickMark(tool) => {
+                self.quick_at = None;
+                if self.saving {
+                    return Task::none();
+                }
+                let before = self.annotate.tool;
+                self.annotate.tool = tool;
+                let task = self.mark_selection();
+                // Replace text keeps its tool until the new words are typed.
+                if self.annotate.editing.is_none() {
+                    self.annotate.tool = before;
+                }
+                task
             }
             Message::Form(event) => {
                 if !self.saving {
@@ -5618,10 +5655,13 @@ impl App {
                 self.notice = None;
                 Task::none()
             }
-            Message::Copy => match self.selected_text() {
-                Some(text) => iced::clipboard::write(text),
-                None => Task::none(),
-            },
+            Message::Copy => {
+                self.quick_at = None;
+                match self.selected_text() {
+                    Some(text) => iced::clipboard::write(text),
+                    None => Task::none(),
+                }
+            }
         }
     }
 
@@ -7814,6 +7854,12 @@ impl App {
                 }
                 self.annotate.bar_items(vertical)
             }
+            Bar::Options => {
+                if !has_doc {
+                    return None;
+                }
+                return self.annotate.option_items(vertical);
+            }
         };
         Some(items)
     }
@@ -8919,6 +8965,12 @@ impl App {
         ];
         let mut layers = vec![window.into()];
         layers.extend(bars.floating);
+        if dialogs.is_empty()
+            && !self.menus.is_open()
+            && let Some(quick) = self.quick_bar()
+        {
+            layers.push(quick);
+        }
         layers.extend(dialogs);
         if let Some(menu) = self.menus.open() {
             layers.extend(self.menus.panels(
@@ -8929,6 +8981,61 @@ impl App {
             ));
         }
         Stack::with_children(layers).into()
+    }
+
+    /// The little bar of actions that pops up by selected text, as in Acrobat: copy it, or
+    /// highlight, underline or strike it out without switching tools.
+    fn quick_bar(&self) -> Option<Element<'_, Message>> {
+        let at = self.quick_at?;
+        if self.selecting || self.read_mode || self.selected_text().is_none() {
+            return None;
+        }
+        let m = icons::MOD;
+        let mark = |tool: annotate::Tool| {
+            icons::button(
+                tool.icon(),
+                tool.tip(),
+                (!self.saving).then_some(Message::QuickMark(tool)),
+            )
+        };
+        let bar = row![
+            icons::button(Icon::CopyText, format!("Copy ({m}C)"), Some(Message::Copy)),
+            mark(annotate::Tool::Highlight),
+            mark(annotate::Tool::Underline),
+            mark(annotate::Tool::StrikeOut),
+            mark(annotate::Tool::Replace),
+        ]
+        .spacing(2)
+        .align_y(Center);
+        let bar = container(bar).padding(4).style(|theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            container::Style::default()
+                .background(palette.background.base.color)
+                .border(iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                })
+        });
+        // Just below and right of the pointer, or above it near the bottom of the window.
+        const WIDTH: f32 = 170.0;
+        const HEIGHT: f32 = 40.0;
+        let window = self.window_size;
+        let x = (at.x + 8.0).min(window.width - WIDTH - 8.0).max(0.0);
+        let y = if at.y + 16.0 + HEIGHT > window.height {
+            (at.y - HEIGHT - 12.0).max(0.0)
+        } else {
+            at.y + 16.0
+        };
+        Some(
+            pin(opaque(icons::tips_on(
+                iced::widget::tooltip::Position::Bottom,
+                || bar,
+            )))
+            .x(x)
+            .y(y)
+            .into(),
+        )
     }
 
     /// The Output preview panel, for the current page.
@@ -9579,54 +9686,33 @@ impl App {
                     .on_press(Message::PagePress(index))
                     .on_double_click(Message::PageDoubleClick(index))
                     .on_release(Message::PointerReleased)
-                    .interaction(if self.picture_editor.on {
-                        let slop = pictures::HANDLE / self.zoom.max(0.01);
-                        let at_handle = self.hover.is_some_and(|(page, position)| {
-                            page == index
-                                && self.picture_editor.over_handle(
-                                    page,
-                                    self.page_map(page).to_page(position),
-                                    slop,
-                                )
-                        });
-                        if at_handle {
-                            mouse::Interaction::ResizingDiagonallyDown
-                        } else {
-                            mouse::Interaction::Grab
-                        }
-                    } else if let Some(down) = over_handle {
-                        if down {
-                            mouse::Interaction::ResizingDiagonallyDown
-                        } else {
-                            mouse::Interaction::ResizingDiagonallyUp
-                        }
-                    } else if self.hand {
-                        if self.panning.is_some() {
-                            mouse::Interaction::Grabbing
-                        } else {
-                            mouse::Interaction::Grab
-                        }
-                    } else if self.snapping
-                        || self.zoom_box
-                        || self.measure.on
-                        || self.adder.on
-                        || self.redactor.on
-                        || self.preparer.on
-                    {
-                        mouse::Interaction::Crosshair
-                    } else if over_link {
-                        mouse::Interaction::Pointer
-                    } else if self.annotate.is_moving() {
-                        mouse::Interaction::Grabbing
-                    } else if over_comment {
-                        mouse::Interaction::Grab
-                    } else if self.annotate.open && !self.annotate.tool.marks_text() {
-                        mouse::Interaction::Crosshair
-                    } else if over_text || self.selecting {
-                        mouse::Interaction::Text
-                    } else {
-                        mouse::Interaction::Idle
-                    });
+                    .interaction(cursor::pick(&cursor::Context {
+                        adder: self.adder.on.then_some(self.adder.tool),
+                        preparer: self.preparer.on,
+                        picture_editor: self.picture_editor.on.then(|| {
+                            let slop = pictures::HANDLE / self.zoom.max(0.01);
+                            self.hover.is_some_and(|(page, position)| {
+                                page == index
+                                    && self.picture_editor.over_handle(
+                                        page,
+                                        self.page_map(page).to_page(position),
+                                        slop,
+                                    )
+                            })
+                        }),
+                        redactor: self.redactor.on,
+                        measure: self.measure.on,
+                        snapping: self.snapping,
+                        zoom_box: self.zoom_box,
+                        hand: self.hand.then_some(self.panning.is_some()),
+                        over_handle,
+                        comment_tool: self.annotate.open.then_some(self.annotate.tool),
+                        moving_comment: self.annotate.is_moving(),
+                        over_comment,
+                        over_link,
+                        over_text,
+                        selecting: self.selecting,
+                    }));
                 container(content)
                     .width(width)
                     .height(height)

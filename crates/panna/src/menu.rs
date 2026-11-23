@@ -2,12 +2,16 @@
 //! of commands with their icons and shortcuts.
 //!
 //! iced has no menus of its own, so a menu is drawn as a panel pinned under its title. Every
-//! title and row has a fixed size, which is what lets the panel and its submenus be placed
-//! without measuring anything.
+//! row has a fixed height, and each panel is as wide as its longest label and shortcut, measured
+//! with the same text shaping the rows are drawn with, so a translated or long label never runs
+//! past the panel's edge.
 
 use crate::i18n::text;
-use iced::widget::{Column, Row, button, container, mouse_area, opaque, pin, rich_text, row, space, span};
-use iced::{Center, Element, Fill, Point, Size, Theme};
+use iced::advanced::text::{Paragraph as _, Text};
+use iced::widget::{
+    Column, Row, button, container, mouse_area, opaque, pin, rich_text, row, scrollable, space, span,
+};
+use iced::{Center, Element, Fill, Pixels, Point, Size, Theme};
 
 use crate::icons::{self, Icon};
 
@@ -18,8 +22,21 @@ const ROW: f32 = 26.0;
 const SEP: f32 = 9.0;
 /// Padding inside a menu panel.
 const PAD: f32 = 4.0;
-const WIDTH: f32 = 330.0;
-const SUB_WIDTH: f32 = 230.0;
+/// The narrowest a menu or submenu gets, so short menus don't look cramped.
+const MIN_WIDTH: f32 = 200.0;
+const SUB_MIN_WIDTH: f32 = 160.0;
+/// Text sizes of a row's label and shortcut, and of a menu title.
+const LABEL_SIZE: f32 = 13.0;
+const KEYS_SIZE: f32 = 12.0;
+/// Row padding (left and right), the leading icon or tick, the trailing arrow, and the gaps
+/// between them, besides the label and shortcut themselves.
+const ROW_PAD: f32 = 8.0;
+const LEAD: f32 = 18.0;
+const GAP: f32 = 10.0;
+/// Room kept between a label and its shortcut.
+const KEYS_GAP: f32 = 24.0;
+/// Room for the scroll bar of a menu too tall for the window.
+const SCROLLBAR: f32 = 12.0;
 /// Space before the first title.
 const LEFT: f32 = 4.0;
 
@@ -89,7 +106,7 @@ impl Menu {
     }
 
     fn title_width(self) -> f32 {
-        crate::i18n::translate(self.name()).chars().count() as f32 * 7.2 + 20.0
+        text_width(&crate::i18n::translate(self.name()), LABEL_SIZE) + 20.0
     }
 
     /// Left edge of the title, and so of the menu under it.
@@ -133,6 +150,15 @@ impl<M> Entry<M> {
         match self {
             Entry::Separator => SEP,
             _ => ROW,
+        }
+    }
+
+    /// How wide the row needs to be to show its label and shortcut on one line.
+    fn width(&self) -> f32 {
+        match self {
+            Entry::Item { label, keys, .. } => row_width(label, keys, false),
+            Entry::Sub { label, .. } => row_width(label, "", true),
+            Entry::Separator => 0.0,
         }
     }
 
@@ -388,7 +414,13 @@ impl State {
             opaque(mouse_area(container(space()).width(Fill).height(Fill)).on_press(on_event(Event::Close)));
         let mut layers: Vec<Element<'a, M>> = vec![pin(catcher).y(HEIGHT).width(Fill).height(Fill).into()];
 
-        let x = menu.x().min((window.width - WIDTH).max(0.0));
+        let width = panel_width(&entries, MIN_WIDTH, window.width);
+        // Taller than the window (a small screen, or a large text size): the menu scrolls.
+        let room = window.height - HEIGHT - PAD * 4.0;
+        let total: f32 = entries.iter().map(Entry::height).sum();
+        let tall = window.height > 0.0 && total > room;
+        let outer = if tall { width + SCROLLBAR } else { width };
+        let x = menu.x().min((window.width - outer).max(0.0));
         let mut sub_at = None;
         let mut sub_items = None;
         let mut y = HEIGHT + PAD;
@@ -412,7 +444,7 @@ impl State {
                 }
                 Entry::Sub { icon, label, items } => {
                     if self.sub.is_some_and(|(row, _)| row == i) {
-                        sub_at = Some(Point::new(x + WIDTH - PAD, y - PAD));
+                        sub_at = Some(Point::new(x + outer - PAD, y - PAD));
                         sub_items = Some(items);
                     }
                     column = column.push(
@@ -431,10 +463,22 @@ impl State {
             }
             y += height;
         }
-        layers.push(pin(panel(column, WIDTH)).position(Point::new(x, HEIGHT)).into());
+        let menu_panel = if tall {
+            panel(
+                scrollable(column.padding(iced::Padding::ZERO.right(SCROLLBAR)))
+                    .height(room)
+                    .into(),
+                outer,
+            )
+        } else {
+            panel(column.into(), width)
+        };
+        layers.push(pin(menu_panel).position(Point::new(x, HEIGHT)).into());
 
         if let (Some(at), Some(items)) = (sub_at, sub_items) {
             let sub_hi = self.sub.and_then(|(_, hi)| hi);
+            let sub_width = panel_width(&items, SUB_MIN_WIDTH, window.width);
+            let items_height: f32 = items.iter().map(Entry::height).sum();
             let mut column = Column::new();
             for (i, entry) in items.into_iter().enumerate() {
                 match entry {
@@ -463,15 +507,70 @@ impl State {
                 }
             }
             // Open to the left when there's no room on the right.
-            let x = if at.x + SUB_WIDTH > window.width {
-                (x - SUB_WIDTH + PAD).max(0.0)
+            let x = if at.x + sub_width > window.width {
+                (x - sub_width + PAD).max(0.0)
             } else {
                 at.x
             };
-            layers.push(pin(panel(column, SUB_WIDTH)).position(Point::new(x, at.y)).into());
+            // Kept inside the window when it opens low down.
+            let sub_height = items_height + PAD * 2.0;
+            let y = if window.height > 0.0 {
+                at.y.min(window.height - sub_height).max(HEIGHT)
+            } else {
+                at.y
+            };
+            layers.push(
+                pin(panel(column.into(), sub_width))
+                    .position(Point::new(x, y))
+                    .into(),
+            );
         }
         layers
     }
+}
+
+/// How wide `content` is on one line at `size`, as the rows draw it (translated first, as
+/// the rows' own text does).
+fn text_width(content: &str, size: f32) -> f32 {
+    type Paragraph = <iced::Renderer as iced::advanced::text::Renderer>::Paragraph;
+    let paragraph = Paragraph::with_text(Text {
+        content,
+        bounds: Size::INFINITE,
+        size: Pixels(size),
+        line_height: iced::widget::text::LineHeight::default(),
+        font: iced::Font::default(),
+        align_x: iced::widget::text::Alignment::Default,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: iced::widget::text::Shaping::Advanced,
+        wrapping: iced::widget::text::Wrapping::None,
+    });
+    // Never less than a rough guess from the length, in case no font could be measured.
+    paragraph
+        .min_bounds()
+        .width
+        .max(content.chars().count() as f32 * size * 0.45)
+        .ceil()
+}
+
+/// The width a row needs: padding, icon, label, room, then the shortcut or submenu arrow.
+fn row_width(label: &str, keys: &str, submenu: bool) -> f32 {
+    let label = text_width(&crate::i18n::translate(label), LABEL_SIZE);
+    let tail = if submenu {
+        LEAD
+    } else if keys.is_empty() {
+        0.0
+    } else {
+        text_width(&crate::i18n::translate(keys), KEYS_SIZE)
+    };
+    // Gaps between lead, label, the stretch and the tail.
+    ROW_PAD * 2.0 + LEAD + GAP * 3.0 + label + KEYS_GAP + tail
+}
+
+/// A panel just wide enough for its widest row, within the window.
+fn panel_width<M>(entries: &[Entry<M>], min: f32, window: f32) -> f32 {
+    let widest = entries.iter().map(Entry::width).fold(0.0_f32, f32::max);
+    let width = (widest + PAD * 2.0).max(min).ceil();
+    if window > 0.0 { width.min(window) } else { width }
 }
 
 /// The next enabled row after (or before) `from`, wrapping around.
@@ -549,20 +648,29 @@ fn row_view<'a, M: Clone + 'a>(
         icons::glyph(Icon::NextPage, true)
     } else {
         text(keys)
-            .size(12)
+            .size(KEYS_SIZE)
+            .wrapping(iced::widget::text::Wrapping::None)
             .style(|theme: &Theme| text::Style {
                 color: Some(theme.extended_palette().background.strong.text),
             })
             .into()
     };
     button(
-        row![lead, text(label).size(13).style(dim), space::horizontal(), tail]
-            .spacing(10)
-            .align_y(Center),
+        row![
+            lead,
+            text(label)
+                .size(LABEL_SIZE)
+                .wrapping(iced::widget::text::Wrapping::None)
+                .style(dim),
+            space::horizontal(),
+            tail
+        ]
+        .spacing(10)
+        .align_y(Center),
     )
     .width(Fill)
     .height(ROW)
-    .padding([4, 8])
+    .padding([4.0, ROW_PAD])
     .style(move |theme: &Theme, status| row_style(theme, status, hi, enabled))
     .on_press_maybe(on_press)
     .into()
@@ -586,7 +694,7 @@ fn row_style(theme: &Theme, status: button::Status, hi: bool, enabled: bool) -> 
     }
 }
 
-fn panel<'a, M: 'a>(column: Column<'a, M>, width: f32) -> Element<'a, M> {
+fn panel<'a, M: 'a>(column: Element<'a, M>, width: f32) -> Element<'a, M> {
     opaque(
         container(column)
             .width(width)
@@ -637,6 +745,25 @@ mod tests {
     fn titles_sit_side_by_side() {
         assert_eq!(Menu::File.x(), LEFT);
         assert_eq!(Menu::Edit.x(), LEFT + Menu::File.title_width());
+    }
+
+    #[test]
+    fn panels_fit_their_longest_row() {
+        let short: Vec<Entry<u8>> = vec![plain("One", "", Some(1))];
+        assert_eq!(panel_width(&short, MIN_WIDTH, 2000.0), MIN_WIDTH);
+        let long_label = "Export as text, Office, web, e-book or pictures and a little more";
+        let long: Vec<Entry<u8>> = vec![
+            plain("One", "", Some(1)),
+            plain(long_label, "Ctrl+Shift+Alt+E", Some(2)),
+        ];
+        let width = panel_width(&long, MIN_WIDTH, 2000.0);
+        let needed = text_width(long_label, LABEL_SIZE) + text_width("Ctrl+Shift+Alt+E", KEYS_SIZE);
+        assert!(width > needed + LEAD + ROW_PAD * 2.0, "{width} <= {needed}");
+        // Never wider than the window.
+        assert_eq!(panel_width(&long, MIN_WIDTH, 300.0), 300.0);
+        // A submenu row leaves room for its arrow.
+        let subs: Vec<Entry<u8>> = vec![sub(None, "One", vec![])];
+        assert!(subs[0].width() > short[0].width());
     }
 
     #[test]
