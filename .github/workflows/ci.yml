@@ -330,9 +330,20 @@ jobs:
           if [ "$TAG" != "v$VERSION" ]; then
             echo "::error::$TAG doesn't match the version in Cargo.toml ($VERSION). Bump it first."; exit 1
           fi
-          # Publishing a draft made by a manual run creates its tag, which starts CI again.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "A release for $TAG already exists; leaving it as it is."; exit 0
+          # The release may exist already: publishing a draft pushes its tag and starts CI again,
+          # or someone made the release by hand. Add only the files it lacks; never replace one.
+          if have=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null); then
+            missing=()
+            for f in dist/*; do
+              grep -qxF "$(basename "$f")" <<<"$have" || missing+=("$f")
+            done
+            if [ ${#missing[@]} -eq 0 ]; then
+              echo "The $TAG release already has every file."
+            else
+              echo "Adding ${#missing[@]} missing file(s) to the existing $TAG release."
+              gh release upload "$TAG" "${missing[@]}" --repo "$GITHUB_REPOSITORY"
+            fi
+            exit 0
           fi
           # --target makes the tag on the commit just built when it doesn't exist yet.
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --prerelease --target "$GITHUB_SHA" \

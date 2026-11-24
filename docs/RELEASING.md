@@ -10,6 +10,9 @@ If a tag can't be pushed, open **Actions → CI → Run workflow** on `main` and
 (like `v0.2.0`) into the box instead. That run tests and builds the commit, then drafts the
 release; the tag is made on that commit when the draft is published.
 
+If a release for that version already exists (for example one made by hand on GitHub), CI adds the
+files it lacks and leaves everything else on it alone.
+
 Every platform is built, signed where the secrets below exist, and put in a **draft** release
 with a `SHA256SUMS` file. Check the draft, then publish it. People can check a download with
 `sha256sum -c SHA256SUMS --ignore-missing` (`shasum -a 256 -c` on macOS).
